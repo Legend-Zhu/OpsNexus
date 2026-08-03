@@ -588,16 +588,20 @@ Worker/
 
 ## 九、分期实施计划
 
-| 阶段 | 里程碑 | 交付物 |
-|---|---|---|
-| **P0 骨架** | 项目脚手架 + Docker 客户端封装 + config schema | `go.mod`、`internal/docker/*`、`internal/config/*`、单测 |
-| **P1 编排** | POST API + config→spec 映射 + 生命周期轮询 | `internal/orchestrator/*`、本地集成测试（docker-in-docker swarm） |
-| **P2 监控** | 四类 checker + EventStore + webhook | `internal/monitor/*`、监控集成测试 |
-| **P3 MCP** | Tools/Resources + Streamable HTTP + OAuth2.1 | `internal/mcp/*`、MCP 合规自测（对照 2026-07-28） |
-| **P4 HA** | leader 选举 + 写操作代理 + per-node 上报 | `internal/ha/*`、多节点 e2e |
-| **P5 生产化** | 脱敏、mTLS、autolock、部署 stack、文档 | `deploy/*`、运维手册 |
+| 阶段 | 里程碑 | 交付物 | 状态 |
+|---|---|---|---|
+| **P0 骨架** | 项目脚手架 + Docker 客户端封装 + config schema | `go.mod`、`internal/docker/*`、`internal/config/*`、单测 | ✅ |
+| **P1 编排** | POST API + config→spec 映射 + 生命周期轮询 + registry 鉴权/预拉取 | `internal/orchestrator/*`、本地集成测试（swarm） | ✅ |
+| **P2 监控** | 四类 checker + EventStore + 事件 API + 探活修复 | `internal/monitor/*`、监控集成测试 | ✅ |
+| **P3 MCP** | Tools/Resources + Streamable HTTP（go-sdk v1.7.0，协议 2026-07-28） | `internal/mcp/*`、MCP e2e（官方 SDK 客户端） | ✅ |
+| **P4 HA** | 节点身份识别（/info NodeID）+ manager 写守卫 + `/self` + MCP `get_self` | `internal/docker/info`、`orchestrator.Self` | ✅（多节点 per-node 上报未做，记入风险） |
+| **P5 生产化** | 日志脱敏（`internal/logging`）+ TLS（`-tls-cert/-tls-key`）+ 部署 stack + README | `deploy/Dockerfile`、`deploy/stack.yml`、`internal/logging` | ✅（mTLS 双向认证、autolock 未做，记入风险） |
 
 每个阶段配套：单元测试 + `docker testcontainers` 集成测试 + 文档更新。
+
+**实现备注**：
+- Docker 客户端为直接 HTTP（stdlib），非官方 SDK（模块结构损坏，见 §三）；MCP 用官方 go-sdk v1.7.0。
+- P4 复用 swarm manager 的 Raft leader（`ControlAvailable`/`ManagerStatus.Leader`），未自研选举；多节点 per-node stats 上报、写操作跨节点代理未实现（v1 单 manager 部署可覆盖）。
 
 ---
 

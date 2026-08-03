@@ -358,6 +358,22 @@ type versionInfo struct {
 	APIVersion string `json:"ApiVersion,omitempty"`
 }
 
+// Info is the subset of /info Worker uses to identify the local node and its
+// swarm role. Swarm.ControlAvailable is true when this daemon can run swarm
+// control-plane operations (i.e. it is a manager).
+type Info struct {
+	Swarm SwarmInfo `json:"Swarm"`
+}
+
+// SwarmInfo carries the swarm membership of this daemon.
+type SwarmInfo struct {
+	NodeID            string `json:"NodeID"`
+	NodeAddr          string `json:"NodeAddr"`
+	LocalNodeState    string `json:"LocalNodeState"` // inactive | pending | active
+	ControlAvailable  bool   `json:"ControlAvailable"`
+	RemoteManagers    []any  `json:"RemoteManagers"`
+}
+
 type apiError struct {
 	Message string `json:"message"`
 }

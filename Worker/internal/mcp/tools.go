@@ -317,6 +317,18 @@ func (h *Handler) registerTools(s *mcp.Server) {
 		}
 		return nil, nodeOut{}, fmt.Errorf("node %q not found", in.ID)
 	})
+
+	// get_self
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get_self",
+		Description: "Report this Worker's own node identity and swarm role (nodeId, role, leader, swarmManager).",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, orchestrator.SelfInfo, error) {
+		si, err := h.orch.Self(context.Background())
+		if err != nil {
+			return nil, orchestrator.SelfInfo{}, err
+		}
+		return nil, si, nil
+	})
 }
 
 // ---- helpers ----

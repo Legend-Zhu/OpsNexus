@@ -43,6 +43,7 @@ type Client interface {
 	// Nodes
 	ListNodes(ctx context.Context, f Filter) ([]Node, error)
 	SelfNode(ctx context.Context) (Node, error)
+	Info(ctx context.Context) (Info, error)
 
 	// Logs / containers / stats
 	ServiceLogs(ctx context.Context, serviceID string, opts LogsOptions) (io.ReadCloser, error)
@@ -267,15 +268,6 @@ func filtersQuery(f Filter) url.Values {
 		q.Set("filters", string(b))
 	}
 	return q
-}
-
-// localHostname returns the OS hostname (for SelfNode matching).
-func localHostname() (string, error) {
-	hn, err := os.Hostname()
-	if err != nil {
-		return "", fmt.Errorf("read hostname: %w", err)
-	}
-	return hn, nil
 }
 
 // Compile-time assertion.

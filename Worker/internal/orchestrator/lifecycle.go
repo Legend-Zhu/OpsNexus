@@ -56,10 +56,64 @@ func (o *Orchestrator) SetMonitor(m MonitorRegistrar) {
 	o.mon = m
 }
 
+// SelfInfo describes the local node and its swarm role. Used by the HTTP API
+// and MCP to tell agents where this Worker sits in the cluster (HA awareness).
+type SelfInfo struct {
+	NodeID       string `json:"nodeId"`
+	Hostname     string `json:"hostname"`
+	Role         string `json:"role"`       // manager | worker
+	Leader       bool   `json:"leader"`     // manager-only: swarm Raft leader
+	State        string `json:"state"`      // node Status.State
+	SwarmManager bool   `json:"swarmManager"` // this daemon runs swarm control plane
+	Addr         string `json:"addr,omitempty"`
+}
+
+// Self returns the local node's identity and swarm role.
+func (o *Orchestrator) Self(ctx context.Context) (SelfInfo, error) {
+	info, err := o.cli.Info(ctx)
+	if err != nil {
+		return SelfInfo{}, err
+	}
+	si := SelfInfo{
+		NodeID:       info.Swarm.NodeID,
+		SwarmManager: info.Swarm.ControlAvailable,
+	}
+	if info.Swarm.NodeID != "" {
+		node, err := o.cli.SelfNode(ctx)
+		if err == nil {
+			si.Hostname = node.Description.Hostname
+			si.Role = node.Spec.Role
+			si.State = node.Status.State
+			si.Addr = node.Status.Addr
+			if node.ManagerStatus != nil {
+				si.Leader = node.ManagerStatus.Leader
+			}
+		}
+	}
+	return si, nil
+}
+
+// ensureSwarmManager guards swarm control-plane operations: only a daemon with
+// ControlAvailable (a manager) can create/update/scale services. Worker nodes
+// return a clear error instead of the engine's cryptic one.
+func (o *Orchestrator) ensureSwarmManager(ctx context.Context) error {
+	info, err := o.cli.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("engine info: %w", err)
+	}
+	if !info.Swarm.ControlAvailable {
+		return fmt.Errorf("this node is not a swarm manager (state %q); control-plane operations require a manager", info.Swarm.LocalNodeState)
+	}
+	return nil
+}
+
 // Deploy translates a config into a service spec, pulls the image if needed,
 // creates the service, and starts background readiness polling. Returns a
 // pending Operation.
 func (o *Orchestrator) Deploy(ctx context.Context, cfg *config.Config) (*Operation, error) {
+	if err := o.ensureSwarmManager(ctx); err != nil {
+		return nil, err
+	}
 	spec, err := Translate(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("translate: %w", err)
@@ -88,6 +142,9 @@ func (o *Orchestrator) Deploy(ctx context.Context, cfg *config.Config) (*Operati
 
 // Update replaces a service's spec with a new config and polls convergence.
 func (o *Orchestrator) Update(ctx context.Context, name string, cfg *config.Config) (*Operation, error) {
+	if err := o.ensureSwarmManager(ctx); err != nil {
+		return nil, err
+	}
 	spec, err := Translate(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("translate: %w", err)
@@ -119,6 +176,9 @@ func (o *Orchestrator) Update(ctx context.Context, name string, cfg *config.Conf
 
 // Scale adjusts the replica count and polls convergence.
 func (o *Orchestrator) Scale(ctx context.Context, name string, replicas uint64) (*Operation, error) {
+	if err := o.ensureSwarmManager(ctx); err != nil {
+		return nil, err
+	}
 	if err := o.cli.ServiceScale(ctx, name, replicas); err != nil {
 		return nil, fmt.Errorf("service scale: %w", err)
 	}
@@ -139,6 +199,9 @@ func (o *Orchestrator) Scale(ctx context.Context, name string, replicas uint64) 
 // Restart forces swarm to re-create the service's tasks (docker service
 // update --force equivalent) and polls convergence.
 func (o *Orchestrator) Restart(ctx context.Context, name string) (*Operation, error) {
+	if err := o.ensureSwarmManager(ctx); err != nil {
+		return nil, err
+	}
 	if err := o.cli.ServiceRestart(ctx, name); err != nil {
 		return nil, fmt.Errorf("service restart: %w", err)
 	}
@@ -156,6 +219,9 @@ func (o *Orchestrator) Restart(ctx context.Context, name string) (*Operation, er
 
 // Remove deletes a service. Returns a done Operation (no convergence to poll).
 func (o *Orchestrator) Remove(ctx context.Context, name string) (*Operation, error) {
+	if err := o.ensureSwarmManager(ctx); err != nil {
+		return nil, err
+	}
 	if err := o.cli.ServiceRemove(ctx, name); err != nil {
 		return nil, fmt.Errorf("service remove: %w", err)
 	}

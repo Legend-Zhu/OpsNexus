@@ -15,6 +15,7 @@ import (
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/logging"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/mcp"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/monitor"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/orchestrator"
@@ -28,12 +29,16 @@ func main() {
 		logJSON  bool
 		logLevel string
 		stdio    bool // MCP over stdio instead of HTTP
+		tlsCert  string
+		tlsKey   string
 	)
 	flag.StringVar(&addr, "addr", ":8080", "HTTP listen address for the orchestration API")
 	flag.StringVar(&cfgPath, "config", "", "optional worker config (yaml/json) to validate at startup")
 	flag.BoolVar(&logJSON, "log-json", false, "emit JSON logs instead of text")
 	flag.StringVar(&logLevel, "log-level", "info", "log level: debug|info|warn|error")
 	flag.BoolVar(&stdio, "mcp-stdio", false, "serve MCP over stdio (local agents) instead of the HTTP API")
+	flag.StringVar(&tlsCert, "tls-cert", "", "TLS certificate file (PEM); enables HTTPS when set with -tls-key")
+	flag.StringVar(&tlsKey, "tls-key", "", "TLS private key file (PEM)")
 	flag.Parse()
 
 	var level slog.Level
@@ -47,10 +52,15 @@ func main() {
 	default:
 		level = slog.LevelInfo
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	// Logs are redacted: attribute values under sensitive keys (env, auth,
+	// secret, password, token, ...) never reach the output.
+	var base slog.Handler
 	if logJSON {
-		log = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+		base = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	} else {
+		base = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
 	}
+	log := slog.New(logging.NewRedactHandler(base))
 	log.Info("worker starting", "version", version.Version, "addr", addr, "log_level", logLevel)
 
 	if cfgPath != "" {
@@ -131,6 +141,14 @@ func main() {
 	}
 
 	go func() {
+		if tlsCert != "" && tlsKey != "" {
+			log.Info("http server listening (TLS)", "addr", addr)
+			if err := srv.ListenAndServeTLS(tlsCert, tlsKey); err != nil && err != http.ErrServerClosed {
+				log.Error("http server error", "err", err)
+				os.Exit(1)
+			}
+			return
+		}
 		log.Info("http server listening", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("http server error", "err", err)

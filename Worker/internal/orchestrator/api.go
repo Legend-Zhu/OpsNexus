@@ -42,6 +42,7 @@ func (a *API) Routes() map[string]http.HandlerFunc {
 		"GET /api/v1/operations":              a.listOps,
 		"GET /api/v1/operations/{id}":         a.getOp,
 		"GET /api/v1/events":                  a.listEvents,
+		"GET /api/v1/self":                    a.self,
 	}
 }
 
@@ -143,6 +144,16 @@ func (a *API) getOp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, op)
+}
+
+// self reports the local node's swarm role (HA awareness).
+func (a *API) self(w http.ResponseWriter, r *http.Request) {
+	si, err := a.orch.Self(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, si)
 }
 
 // listEvents returns monitoring events, optionally filtered by service and

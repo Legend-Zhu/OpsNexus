@@ -5,6 +5,15 @@ import (
 	"fmt"
 )
 
+// Info fetches the engine /info subset Worker needs.
+func (c *httpClient) Info(ctx context.Context) (Info, error) {
+	var info Info
+	if err := c.getJSON(ctx, "/info", nil, &info); err != nil {
+		return Info{}, err
+	}
+	return info, nil
+}
+
 // ListNodes lists swarm nodes, optionally filtered.
 func (c *httpClient) ListNodes(ctx context.Context, f Filter) ([]Node, error) {
 	q := filtersQuery(f)
@@ -15,23 +24,24 @@ func (c *httpClient) ListNodes(ctx context.Context, f Filter) ([]Node, error) {
 	return nodes, nil
 }
 
-// SelfNode finds the local node by matching the OS hostname against each
-// node's Description.Hostname. Swarm has no "get self" API, so hostname match
-// is the standard approach; the Worker must run with hostname == swarm node
-// hostname (the default when the container joins the swarm).
+// SelfNode identifies the local node via the engine's own Swarm.NodeID
+// (from /info), which is authoritative and does not rely on hostname matching.
 func (c *httpClient) SelfNode(ctx context.Context) (Node, error) {
-	hostname, err := localHostname()
+	info, err := c.Info(ctx)
 	if err != nil {
 		return Node{}, err
+	}
+	if info.Swarm.NodeID == "" {
+		return Node{}, fmt.Errorf("this daemon is not part of a swarm (local node state %q)", info.Swarm.LocalNodeState)
 	}
 	nodes, err := c.ListNodes(ctx, nil)
 	if err != nil {
 		return Node{}, err
 	}
 	for _, n := range nodes {
-		if n.Description.Hostname == hostname {
+		if n.ID == info.Swarm.NodeID {
 			return n, nil
 		}
 	}
-	return Node{}, fmt.Errorf("no swarm node matching local hostname %q (is this host part of the swarm?)", hostname)
+	return Node{}, fmt.Errorf("swarm node %q not found in node list", info.Swarm.NodeID)
 }
