@@ -67,12 +67,15 @@ Worker 以 **Docker Swarm 全局服务（global service）** 形式部署到所�
 
 ```
 Worker 单二进制（Go）
-├── internal/docker/        Docker Engine/Swarm 客户端封装（Go SDK + API 版本协商）
-│   ├── client.go           NewClientWithOpts(FromEnv, WithAPIVersionNegotiation, WithTLSClientConfig)
-│   ├── service.go          Create/Update/Remove/List/Inspect/Logs
-│   ├── task.go             List/Inspect（就绪判定）
-│   ├── node.go             List/Inspect/Self（角色判定）
-│   └── stats.go            容器 stats 聚合（CPU/Mem/Net/Block）
+├── internal/docker/        Docker Engine REST API 客户端（stdlib net/http，直接 HTTP，无 SDK）
+│   ├── client.go           构造（DOCKER_HOST/env）+ do/getJSON/postJSON 等
+│   ├── transport.go        unix socket / tcp+TLS（2376）双 transport
+│   ├── service.go          Create/Update/Remove/Scale/Restart/List/Inspect
+│   ├── task.go             List（就绪判定）
+│   ├── node.go             List/Self（角色判定）
+│   ├── image.go            ImagePull / GetSecret（registry auth）
+│   ├── logs.go / stats.go  ServiceLogs / ContainerList / ContainerStats / ContainerInspect
+│   └── types.go            Engine API 请求/响应结构体（仅子集）
 ├── internal/orchestrator/  模块①：配置驱动编排
 │   ├── api.go              POST/GET/DELETE HTTP handler（chi/gin）
 │   ├── translator.go       Config → swarm.ServiceSpec 双向映射
@@ -112,7 +115,7 @@ Worker 单二进制（Go）
 | 语言 | **Go 1.22+** | .gitignore 已含 Go 模式；Docker/MCP 均 Tier-1 官方 Go SDK；单二进制便于全局服务部署 |
 | Docker 客户端 | **直接 HTTP 调用 Engine REST API**（stdlib `net/http` + 自定义结构体） | 见下方说明 |
 | HTTP 路由 | `github.com/go-chi/chi/v5` | 轻量、中间件友好、与 net/http 兼容 |
-| MCP SDK | `github.com/modelcontextprotocol/go-sdk` | 官方 Tier-1，原生支持 2026-07-28（Streamable HTTP + OAuth2.1） |
+| MCP SDK | `github.com/modelcontextprotocol/go-sdk` v1.7.0 | 官方 Tier-1，**目标协议版本即 2026-07-28**（stateless + `server/discover` + MRTR + subscriptions + Streamable HTTP 全内置） |
 
 > **实现期变更（P0）**：Docker 客户端从官方 Go SDK 改为**直接 HTTP 调用 Engine REST API**（stdlib `net/http` + 自定义请求/响应结构体）。原因：`github.com/docker/docker` SDK 的 Go 模块结构不稳定——新版把 `api`/`client` 拆成路径不匹配的嵌套模块（`github.com/moby/moby/api`），旧版（v24）又触发 `distribution/reference` 传递依赖损坏，跨版本都无法干净构建。直接走 REST API 零该依赖、二进制更小（10MB）、攻击面更少，且与本文档已枚举的 REST 端点一致。代价是自维护 Engine API JSON 结构体（仅子集，未知字段忽略）。transport 支持 `unix:///var/run/docker.sock`（默认/Linux）与 `tcp://host:2376`（+TLS）；Windows 本地开发用 Docker Desktop 的 `tcp://localhost:2375`（npipe 暂不支持，保持 stdlib-only）。
 | 配置校验 | `github.com/santhosh-tekuri/jsonschema/v6` | JSON Schema 2020-12，与 MCP `inputSchema` 同源 |
@@ -529,6 +532,15 @@ task 长期 `pending`（`State` 停在 `pending`/`allocated`）多半是非应�
 - `worker://events?since=...&type=...` — 事件流
 
 通过 `resources/list`、`resources/read` 访问；变更走 `subscriptions/listen`。
+
+> **P3 实现说明（已落地，`internal/mcp/`，基于 go-sdk v1.7.0）**：
+> - **传输**：Streamable HTTP（单 endpoint `POST /mcp`，stateless）；`-mcp-stdio` 模式走 stdio（newline-delimited JSON-RPC 自定义 transport，与 SDK custom-transport 同款）。
+> - **Server**：`mcp.NewServer` + 泛型 `mcp.AddTool[In,Out]`（自动生成 input/output JSON Schema 2020-12、入参校验、`structuredContent` 输出）。
+> - **Tools（12 个，已注册）**：list_services / get_service / deploy_service / update_service / scale_service / restart_service / remove_service / get_service_logs / get_events / get_operation / list_nodes / get_node。危险操作守卫：`remove_service` 与 `scale_service(replicas=0)` 要求 `confirm=true`，否则返回 `isError` 工具错误（e2e 已验证）。
+> - **Resources（3 个）**：`worker://services`、`worker://services/{name}`（template）、`worker://events`。
+> - **协议能力**：go-sdk 自动实现 `server/discover`、版本协商（2026-07-28/2025-11-25）、每请求 `_meta` 能力声明；客户端 e2e 确认 `InitializeResult().ProtocolVersion=2026-07-28`。
+> - **已 e2e 验证**：discover → tools/list（12）→ resources（3）→ deploy_service → get_operation(healthy) → get_service → get_service_logs → get_events → remove_service(confirm)，以及 scale=0 无 confirm 的拒绝。
+> - **未做（记入风险）**：OAuth 2.1（当前无鉴权，生产需在代理层加 mTLS/OAuth）；`subscriptions/listen` 长连接订阅（go-sdk 已内置能力，未启用）；Elicitation MRTR 用户确认（以 confirm 参数代替）。
 
 ---
 

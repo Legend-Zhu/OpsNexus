@@ -4,7 +4,7 @@
 # /var/run/docker.sock, so the runtime image only needs the static binary.
 
 # ---- build stage ----
-FROM golang:1.23-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

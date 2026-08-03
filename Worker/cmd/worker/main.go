@@ -15,6 +15,7 @@ import (
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/mcp"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/monitor"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/orchestrator"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/version"
@@ -26,11 +27,13 @@ func main() {
 		cfgPath  string
 		logJSON  bool
 		logLevel string
+		stdio    bool // MCP over stdio instead of HTTP
 	)
 	flag.StringVar(&addr, "addr", ":8080", "HTTP listen address for the orchestration API")
 	flag.StringVar(&cfgPath, "config", "", "optional worker config (yaml/json) to validate at startup")
 	flag.BoolVar(&logJSON, "log-json", false, "emit JSON logs instead of text")
 	flag.StringVar(&logLevel, "log-level", "info", "log level: debug|info|warn|error")
+	flag.BoolVar(&stdio, "mcp-stdio", false, "serve MCP over stdio (local agents) instead of the HTTP API")
 	flag.Parse()
 
 	var level slog.Level
@@ -90,10 +93,31 @@ func main() {
 	api := orchestrator.NewAPI(orch)
 	api.SetEvents(monMgr.Events)
 
+	// P3 MCP: expose the same capabilities to LLM agents over Streamable HTTP.
+	mcpHandler, err := mcp.New(orch, monMgr, cli, log)
+	if err != nil {
+		log.Error("mcp init failed", "err", err)
+		os.Exit(1)
+	}
+
+	if stdio {
+		// Local mode: MCP over stdin/stdout (protocol 2026-07-28). Logs must
+		// not pollute stdout, which carries the JSON-RPC frames.
+		log.Info("serving MCP over stdio")
+		if err := mcpHandler.ServeStdio(context.Background()); err != nil {
+			log.Error("mcp stdio error", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	mux := http.NewServeMux()
 	for pattern, handler := range api.Routes() {
 		mux.HandleFunc(pattern, handler)
 	}
+	// MCP Streamable HTTP endpoint: SDK handler accepts POST (and GET for
+	// backward-compatible discovery); match all methods on /mcp.
+	mux.Handle("/mcp", mcpHandler.HTTPHandler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
