@@ -1,0 +1,23 @@
+[AiNexus] 2026/08/03 17:44:06 server.go:106:   Model routed: deepseek-v4-flash -> deepseek (openai_compatible)
+[AiNexus] 2026/08/03 17:44:06 server.go:109: Provider registered: deepseek (type=openai_compatible, base_url=https://api.deepseek.com/v1, models=[deepseek-v4-flash])
+[AiNexus] 2026/08/03 17:44:06 server.go:124: Tool registered: command_executor
+[AiNexus] 2026/08/03 17:44:06 server.go:128: Tool registered: http_request
+[AiNexus] 2026/08/03 17:44:06 server.go:132: Tool registered: file_read
+[AiNexus] 2026/08/03 17:44:06 server.go:68: Initialized: 1 providers, 1 models, 3 tools, 0 MCP servers
+[AiNexus] 2026/08/03 17:44:06 server.go:308: Server starting on :8080
+[AiNexus] 2026/08/03 17:44:06 server.go:309:   Chat UI:       http://localhost:8080/
+[AiNexus] 2026/08/03 17:44:06 server.go:310:   OpenAI API:    http://localhost:8080/v1/chat/completions
+[AiNexus] 2026/08/03 17:44:06 server.go:311:   Anthropic API: http://localhost:8080/v1/messages
+[AiNexus] 2026/08/03 17:44:06 server.go:312:   Models:        http://localhost:8080/v1/models
+[AiNexus] 2026/08/03 17:44:06 server.go:313:   Available models: [deepseek-v4-flash]
+2026/08/03 17:44:06 Server error: server error: listen tcp :8080: bind: Only one usage of each socket [GIN] 2026/08/03 - 17:44:21 | 200 |    1.2802621s |       127.0.0.1 | POST     "/v1/chat/completions"
+[GIN] 2026/08/03 - 17:44:45 | 200 |   12.2289879s |       127.0.0.1 | POST     "/v1/chat/completions"
+[GIN] 2026/08/03 - 17:44:57 | 200 |            0s |             ::1 | GET      "/v1/models"
+[GIN] 2026/08/03 - 17:44:57 | 404 |            0s |             ::1 | GET      "/favicon.ico"
+[GIN] 2026/08/03 - 17:45:34 | 200 |     1.329189s |             ::1 | POST     "/v1/chat/completions"
+[GIN] 2026/08/03 - 17:47:07 | 200 |       535.9µs |             ::1 | GET      "/v1/models"
+[GIN] 2026/08/03 - 17:47:49 | 200 |    2.1603863s |             ::1 | POST     "/v1/chat/completions"
+[GIN] 2026/08/03 - 17:48:41 | 200 |            0s |             ::1 | GET      "/v1/models"
+[GIN] 2026/08/03 - 17:49:15 | 200 |    823.3529ms |             ::1 | POST     "/v1/chat/completions"
+[GIN] 2026/08/03 - 17:49:31 | 200 |            0s |             ::1 | GET      "/v1/models"
+[GIN] 2026/08/03 - 17:50:02 | 200 |    2.2419736s |             ::1 | POST     "/v1/chat/completions"
