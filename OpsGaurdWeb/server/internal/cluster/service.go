@@ -147,6 +147,18 @@ func (s *Service) Remove(ctx context.Context, name string) error {
 	return s.store.DeleteCluster(name)
 }
 
+// WorkerClient 按集群名构造 Worker HTTP 客户端（带注册的 token）。
+func (s *Service) WorkerClient(name string) (*workerproxy.Client, error) {
+	c, err := s.store.GetCluster(name)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, ErrNotFound{Name: name}
+	}
+	return workerproxy.New(c.WorkerURL, c.Token), nil
+}
+
 // probe 探测单个集群并就地更新其 status/lastSeen/err（不写库，读时快照）。
 func (s *Service) probe(ctx context.Context, c *store.Cluster) {
 	probeCtx, cancel := context.WithTimeout(ctx, s.probeTimeout)

@@ -1,5 +1,15 @@
 import { get, post, del } from './http'
-import type { AddClusterPayload, Cluster, ClusterSummary, Workload, EventItem, AuditItem, AINexusModel } from '@/types'
+import type {
+  AddClusterPayload,
+  Cluster,
+  ClusterSummary,
+  Workload,
+  WorkloadDetail,
+  Operation,
+  EventItem,
+  AuditItem,
+  AINexusModel,
+} from '@/types'
 
 /**
  * API 模块骨架：函数签名已按后端路由定义，业务实现待迭代。
@@ -15,9 +25,21 @@ export const clusterApi = {
 
 // ---- 工作负载（经 Worker） ----
 export const workloadApi = {
-  list: (cluster: string) => get<Workload[]>(`/v1/clusters/${cluster}/workloads`),
+  list: (cluster: string) => get<{ items: Workload[] }>(`/v1/clusters/${cluster}/workloads`),
   get: (cluster: string, service: string) =>
-    get<Workload>(`/v1/clusters/${cluster}/workloads/${service}`),
+    get<WorkloadDetail>(`/v1/clusters/${cluster}/workloads/${service}`),
+  deploy: (cluster: string, body: { config: string }) =>
+    post<Operation>(`/v1/clusters/${cluster}/workloads`, body),
+  scale: (cluster: string, service: string, replicas: number) =>
+    post<Operation>(`/v1/clusters/${cluster}/workloads/${service}/scale`, { replicas }),
+  restart: (cluster: string, service: string) =>
+    post<Operation>(`/v1/clusters/${cluster}/workloads/${service}/restart`),
+  remove: (cluster: string, service: string) =>
+    del<Operation>(`/v1/clusters/${cluster}/workloads/${service}`),
+  operation: (cluster: string, id: string) =>
+    get<Operation>(`/v1/clusters/${cluster}/workloads/ops/${id}`),
+  logsUrl: (cluster: string, service: string, follow = false) =>
+    `/api/v1/clusters/${cluster}/workloads/${service}/logs?follow=${follow}`,
 }
 
 // ---- 监控事件 / 审计 ----

@@ -26,14 +26,66 @@ export interface AddClusterPayload {
   desc?: string
 }
 
-/** 工作负载（swarm service 视图） */
+/** 工作负载（swarm service 视图，与后端 workerproxy.Workload 对应） */
 export interface Workload {
+  id: string
   name: string
-  cluster: string
   image?: string
-  replicas?: string
-  status?: string
-  ports?: string
+  mode?: 'replicated' | 'global'
+  replica?: string
+  running?: number
+  desired?: number
+  ports?: PortMapping[]
+  labels?: Record<string, string>
+}
+
+/** 端口映射 */
+export interface PortMapping {
+  publishedPort: number
+  targetPort: number
+  protocol?: string
+  mode?: string
+}
+
+/** 工作负载详情（服务 + tasks + 健康） */
+export interface WorkloadDetail extends Workload {
+  tasks: WorkloadTask[]
+  healthy: number
+}
+
+/** 任务视图 */
+export interface WorkloadTask {
+  id: string
+  slot?: number
+  nodeId?: string
+  state: string
+  desiredState: string
+  message?: string
+  err?: string
+  containerId?: string
+  exitCode?: number
+}
+
+/** 异步编排操作（部署/缩放/重启/删除，对应 Worker Operation） */
+export interface Operation {
+  id: string
+  type: string
+  service: string
+  status: 'pending' | 'running' | 'healthy' | 'done' | 'failed' | 'partial' | 'canceled'
+  startedAt: string
+  finishedAt?: string
+  serviceId?: string
+  error?: string
+  steps?: string[]
+  replicas?: number
+  mode?: string
+}
+
+/** 日志行（SSE 事件体） */
+export interface LogLine {
+  ts: string
+  stream: 'stdout' | 'stderr'
+  line: string
 }
 
 /** 监控事件（来自 Worker /api/v1/events） */

@@ -50,7 +50,13 @@ func New(h *api.Handlers) *gin.Engine {
 
 		// 工作负载（经 Worker）
 		clusters.GET("/:name/workloads", h.ListWorkloads)
+		clusters.POST("/:name/workloads", h.DeployWorkload)
 		clusters.GET("/:name/workloads/:service", h.GetWorkload)
+		clusters.DELETE("/:name/workloads/:service", h.RemoveWorkload)
+		clusters.POST("/:name/workloads/:service/scale", h.ScaleWorkload)
+		clusters.POST("/:name/workloads/:service/restart", h.RestartWorkload)
+		clusters.GET("/:name/workloads/:service/logs", h.StreamWorkloadLogs)
+		clusters.GET("/:name/workloads/ops/:id", h.GetWorkloadOperation)
 
 		// 监控事件 / 审计
 		clusters.GET("/:name/events", h.ListEvents)

@@ -146,7 +146,7 @@ server/internal/
 ├── ainexus/        # 【内嵌】AiNexus 网关代码（从仓库 ./AiNexus vendor 进本模块，
 │                   #        providers/tools/mcp/agent/handler/server 全套，单进程运行）
 ├── cluster/        # 集群管理：注册表 CRUD + Worker 连接状态探测（✅ P1）
-├── workerproxy/    # Worker HTTP 代理客户端：healthz/self/services/events/audit/local/stats（✅ P1）
+├── workerproxy/    # Worker HTTP 代理客户端：healthz/self/services(+编排操作)/events/audit/local/stats/logs(SSE)（✅ P1/P2）
 ├── patrol/         # 巡检：YAML 流程定义存储 + 内置调度引擎（新增）
 ├── notify/         # 通知：渠道/策略/发送记录（新增）
 └── store/          # 持久化（LevelDB/goleveldb 嵌入式 KV，✅ P1：集群表 + 版本迁移 + 序列）
@@ -310,7 +310,7 @@ seq/<kind>                        -> 自增序列（告警 id、事件 seq 等�
 |---|---|---|
 | **P0 骨架** ✅ | 前后端骨架 + 路由占位 | `OpsGaurdWeb/web` + `server`（已提交 f2900f2） |
 | **P1 集群接入** ✅ | 集群注册表 CRUD + Worker 健康探测 + Worker 代理客户端 + **LevelDB 存储层** | `cluster/`、`workerproxy/`、`store/`、前端集群页接真数据（已提交，双节点 swarm 联调待做） |
-| **P2 工作负载** | 服务列表/详情/部署/缩放/回滚 + SSE 日志 | 前端 workloads 页 + 后端代理 |
+| **P2 工作负载** ✅ | 服务列表/详情/部署/缩放/重启/移除 + 异步操作轮询 + SSE 日志 | 前端 workloads 页 + 后端代理（已提交，双节点 swarm 联调待做） |
 | **P3 监控告警** | webhook ingest 端点 + 告警落库/列表/认领 + 节点资源视图 + 告警规则（管理 Worker monitoring config） | `ingest`、`Alert`、前端 alerts/monitor 页 |
 | **P4 AiNexus 整合** | **vendor AiNexus 进后端**（`internal/ainexus/`）+ `/ainexus/*` 原生端点挂载 + /ainexus/chat 进程内 SSE + 模型选择 + 深度排查（上下文注入 + MCP 闭环） | `ainexus/` 内嵌网关、前端 troubleshoot 页 |
 | **P5 智能巡检** | YAML 流程 CRUD + 内置调度引擎（单实例 Go cron）+ 执行记录 + AI 报告 | `patrol/`、前端 patrol/schedule/report 页 |
