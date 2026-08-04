@@ -13,6 +13,8 @@ import (
 // Config is the management-plane server configuration.
 type Config struct {
 	Server ServerConfig `yaml:"server" json:"server"`
+	// Auth 认证：本地用户 token 签名密钥 + SSO(OIDC) 配置（决策⑤）。
+	Auth AuthConfig `yaml:"auth" json:"auth"`
 	// Store 持久化配置（LevelDB 数据目录）。
 	Store StoreConfig `yaml:"store" json:"store"`
 	// AINexus embeds the AiNexus AI 网关 into this process (vendored under
@@ -23,6 +25,29 @@ type Config struct {
 	// Clusters registry: name -> management-plane reachable Worker base URL.
 	// Each cluster is managed via its Worker's HTTP API + MCP endpoint.
 	Clusters map[string]ClusterConfig `yaml:"clusters" json:"clusters"`
+}
+
+// AuthConfig 认证配置。
+type AuthConfig struct {
+	// TokenSecret 本地 token 签名密钥（生产经环境变量注入）。
+	TokenSecret string `yaml:"token_secret" json:"-"`
+	// TokenTTL 会话有效期（如 24h）。
+	TokenTTL string `yaml:"token_ttl" json:"tokenTtl"`
+	// SSO OIDC 配置（未配置 = 仅本地用户 fallback）。
+	SSO *SSOConfig `yaml:"sso,omitempty" json:"sso,omitempty"`
+}
+
+// SSOConfig 企业 SSO（OIDC）配置。
+type SSOConfig struct {
+	OIDC *SSOOIDC `yaml:"oidc,omitempty" json:"oidc,omitempty"`
+}
+
+// SSOOIDC OIDC 网关参数。
+type SSOOIDC struct {
+	Issuer       string `yaml:"issuer" json:"issuer"`
+	ClientID     string `yaml:"client_id" json:"clientId"`
+	ClientSecret string `yaml:"client_secret" json:"-"`
+	RedirectURL  string `yaml:"redirect_url" json:"redirectUrl"`
 }
 
 // StoreConfig holds the LevelDB data directory.

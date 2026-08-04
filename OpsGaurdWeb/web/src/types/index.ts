@@ -166,6 +166,61 @@ export interface PatrolReport {
   created_at: string
 }
 
+/** 通知渠道（P6） */
+export interface NotifyChannel {
+  id: string
+  type: 'feishu' | 'sms' | 'webhook'
+  name: string
+  config: Record<string, unknown>
+  via_proxy: boolean
+  proxy_url?: string
+  enabled: boolean
+  created_at: string
+}
+
+/** 通知策略（P6） */
+export interface NotifyPolicy {
+  level: string
+  channel_ids: string[]
+  receivers?: string[]
+}
+
+/** 发送记录 */
+export interface NotifyRecord {
+  id: string
+  seq: number
+  ts: string
+  channel_id: string
+  alert_id?: string
+  title?: string
+  target?: string
+  status: 'success' | 'failed'
+  error?: string
+}
+
+/** 告警规则（P6：管理 Worker monitoring config） */
+export interface AlertRule {
+  cluster: string
+  service: string
+  monitoring: {
+    enabled?: boolean
+    portChecks?: { port: string; protocol?: string; interval?: string; timeout?: string; retries?: number }[]
+    httpChecks?: { url: string; method?: string; expectedStatus?: number[]; expectedBody?: string; interval?: string; timeout?: string }[]
+    logChecks?: { pattern: string; level?: string; ignore?: string[]; action?: string }[]
+    resourceThresholds?: { metric: 'cpu' | 'memory'; threshold: number; action?: string }[]
+  }
+  updated_at: string
+}
+
+/** 用户（P6） */
+export interface User {
+  id: string
+  username: string
+  role: string
+  enabled: boolean
+  created_at: string
+}
+
 /** 监控事件（来自 Worker /api/v1/events） */
 export interface EventItem {
   id: string

@@ -6,6 +6,18 @@ server:
   api_key: ""                # 网关鉴权 key，空则不启用
   ingest_token: ""           # Worker webhook 推送校验 token（配到 Worker agent-config.webhooks）
 
+# 认证（P6）：本地用户 + SSO/OIDC。配置了 token_secret 或 sso 即启用认证中间件
+#（健康检查 / webhook ingest / 登录 放行）；都不配 = 内网 bootstrap 不启用。
+auth:
+  token_secret: ""           # 本地 token 签名密钥（生产经环境变量注入，如 $OPSGUARD_TOKEN_SECRET）
+  token_ttl: "24h"
+  # sso:                      # 企业 SSO（OIDC，决策⑤）
+  #   oidc:
+  #     issuer: "https://sso.example.com"
+  #     client_id: "opsguard"
+  #     client_secret: ""
+  #     redirect_url: "http://localhost:8090/api/v1/auth/callback"
+
 # 持久化：LevelDB 数据目录（嵌入式 KV，拷贝目录即备份）
 store:
   path: "./data"

@@ -3,6 +3,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -53,7 +54,23 @@ func (h *Handlers) IngestEvent(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "ingest: "+err.Error())
 		return
 	}
+	// P6 告警联动：新事件/聚合后按级别策略发通知（无策略静默）
+	h.notifyAlert(c, cluster, e.Service, string(e.Type), string(e.Level), e.Msg)
 	ok(c, http.StatusOK, gin.H{"accepted": "event", "id": e.ID})
+}
+
+// notifyAlert 告警事件联动通知（经 notify 服务；服务未初始化静默跳过）。
+func (h *Handlers) notifyAlert(c *gin.Context, clusterName, service, typ, level, msg string) {
+	if h.notifySvc == nil || h.clusters == nil {
+		return
+	}
+	// 查询聚合后的告警（按 id）
+	alert, err := h.clusters.Alert(store.AlertID(clusterName, service, store.EventType(typ)))
+	if err != nil || alert == nil {
+		return
+	}
+	subject := fmt.Sprintf("[%s/%s] %s: %s", clusterName, service, typ, msg)
+	_ = h.notifySvc.NotifyAlert(c.Request.Context(), alert, subject)
 }
 
 // --- 告警列表 / 认领 / 恢复 ---
@@ -97,6 +114,10 @@ func (h *Handlers) AckAlert(c *gin.Context) {
 	if a == nil {
 		fail(c, http.StatusNotFound, "alert not found")
 		return
+	}
+	// P6 联动：ack 通知
+	if h.notifySvc != nil {
+		_ = h.notifySvc.NotifyAlert(c.Request.Context(), a, fmt.Sprintf("[%s/%s] 告警已认领（%s）", a.Cluster, a.Service, actor))
 	}
 	ok(c, http.StatusOK, a)
 }

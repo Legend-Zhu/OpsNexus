@@ -37,6 +37,14 @@
           <el-icon><MagicStick /></el-icon>
           <span>异常排查</span>
         </el-menu-item>
+        <el-menu-item index="/notify">
+          <el-icon><Promotion /></el-icon>
+          <span>通知中心</span>
+        </el-menu-item>
+        <el-menu-item index="/system">
+          <el-icon><Setting /></el-icon>
+          <span>系统设置</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -64,7 +72,7 @@
 </template>
 
 <script setup lang="ts">
-import { Bell, Box, Calendar, MagicStick, Monitor, Odometer, Platform } from '@element-plus/icons-vue'
+import { Bell, Box, Calendar, MagicStick, Monitor, Odometer, Platform, Promotion, Setting } from '@element-plus/icons-vue'
 // 主布局：左侧导航 + 顶部栏 + 内容区。
 </script>
 

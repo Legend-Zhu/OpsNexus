@@ -80,4 +80,4 @@ npm run build      # 产物 dist/
 | 后端 | Go + Gin |
 | AI 排查 | AiNexus（**内嵌进后端**，vendor 自仓库根 `./AiNexus`，单进程运行） |
 
-> 当前进度：**P1–P5 ✅** —— 集群注册表 + Worker 健康探测 + 工作负载（部署/缩放/重启/移除 + SSE 日志）+ 告警中心（webhook ingest/聚合/认领/恢复）+ 集群监控（节点资源）+ 异常排查闭环（告警→上下文注入→内嵌 AiNexus Agent→Worker MCP 采证→SSE 结论）+ **智能巡检**（YAML 流程 + 内置 cron 调度 + 检查异常 + AI 报告）。通知·SSO（P6）待迭代。
+> 当前进度：**P1–P6 全部完成 ✅** —— 集群注册表 + Worker 健康探测 + 工作负载（部署/缩放/重启/移除 + SSE 日志）+ 告警中心（webhook ingest/聚合/认领/恢复 + **告警联动通知**）+ 集群监控 + 异常排查闭环（告警→上下文注入→内嵌 AiNexus Agent→Worker MCP 采证）+ 智能巡检（YAML 流程 + cron 调度 + AI 报告）+ **通知中心**（渠道/策略/发送记录 + 互联网代理）+ **认证**（本地用户 + OIDC/SSO）+ **告警规则**（管理 Worker monitoring config）。双节点真机联调待做。

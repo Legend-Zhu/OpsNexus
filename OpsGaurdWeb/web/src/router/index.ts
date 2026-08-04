@@ -9,6 +9,8 @@ import MainLayout from '@/layout/MainLayout.vue'
  *  - /alerts         告警中心（Worker webhook 汇聚）
  *  - /patrol         智能巡检（YAML 流程 + 内置调度 + AI 报告）
  *  - /troubleshoot   异常排查（AiNexus 集成）
+ *  - /notify         通知中心（渠道/策略/记录）
+ *  - /system         系统设置（告警规则/用户/SSO）
  * 后续业务迭代时按模块拆 views 子路由。
  */
 const routes: RouteRecordRaw[] = [
@@ -58,6 +60,18 @@ const routes: RouteRecordRaw[] = [
         name: 'troubleshoot',
         component: () => import('@/views/troubleshoot/Index.vue'),
         meta: { title: '异常排查' },
+      },
+      {
+        path: 'notify',
+        name: 'notify',
+        component: () => import('@/views/notify/Index.vue'),
+        meta: { title: '通知中心' },
+      },
+      {
+        path: 'system',
+        name: 'system',
+        component: () => import('@/views/system/Index.vue'),
+        meta: { title: '系统设置' },
       },
     ],
   },

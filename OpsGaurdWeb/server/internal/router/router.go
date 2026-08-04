@@ -36,9 +36,23 @@ func New(h *api.Handlers) *gin.Engine {
 		ainx.POST("/v1/messages", h.EmbedAnthropicHandler)
 	}
 
+	// 认证中间件（P6）：Bearer token 校验；放行健康检查、webhook ingest、
+	// 登录与 AiNexus 原生端点（内嵌网关自身无鉴权，统一由管理端覆盖）。
+	var authMW gin.HandlerFunc
+	if h.AuthMiddleware != nil {
+		authMW = h.AuthMiddleware
+	}
+
 	// API v1
 	v1 := r.Group("/api/v1")
 	{
+		// 登录（放行）
+		v1.POST("/auth/login", h.Login)
+
+		if authMW != nil {
+			v1.Use(authMW)
+		}
+
 		// 集群管理（多集群，类 Rancher）
 		clusters := v1.Group("/clusters")
 		{
@@ -87,6 +101,32 @@ func New(h *api.Handlers) *gin.Engine {
 			patrols.GET("/:id/runs/:runId", h.GetPatrolRun)
 			patrols.GET("/:id/reports", h.ListPatrolReports)
 		}
+
+		// 通知中心（P6：渠道/策略/记录）
+		notify := v1.Group("/notify")
+		{
+			notify.GET("/channels", h.ListChannels)
+			notify.POST("/channels", h.CreateChannel)
+			notify.PUT("/channels/:id", h.UpdateChannel)
+			notify.DELETE("/channels/:id", h.DeleteChannel)
+			notify.GET("/policies", h.ListPolicies)
+			notify.PUT("/policies/:level", h.UpsertPolicy)
+			notify.GET("/records", h.ListNotifyRecords)
+		}
+
+		// 告警规则（P6：管理 Worker monitoring config，决策⑦）
+		rules := v1.Group("/alertrules")
+		{
+			rules.GET("", h.ListAlertRules)
+			rules.PUT("", h.UpsertAlertRule)
+			rules.POST("/apply", h.ApplyAlertRule)
+			rules.DELETE("/:cluster/:service", h.DeleteAlertRule)
+		}
+
+		// 认证 / 用户（P6）
+		v1.GET("/auth/me", h.Me)
+		v1.GET("/users", h.ListUsers)
+		v1.POST("/users", h.CreateUser)
 
 		// AiNexus 异常排查（内嵌网关，进程内直调）
 		ainexus := v1.Group("/ainexus")

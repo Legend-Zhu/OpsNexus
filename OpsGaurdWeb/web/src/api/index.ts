@@ -3,15 +3,20 @@ import type {
   AddClusterPayload,
   AINexusModelInfo,
   Alert,
+  AlertRule,
   AuditItem,
   Cluster,
   ClusterSummary,
   EventItem,
   NodeStats,
+  NotifyChannel,
+  NotifyPolicy,
+  NotifyRecord,
   Operation,
   Patrol,
   PatrolReport,
   PatrolRun,
+  User,
   Workload,
   WorkloadDetail,
 } from '@/types'
@@ -78,6 +83,33 @@ export const patrolApi = {
   run: (id: string) => post<PatrolRun>(`/v1/patrols/${id}/run`),
   runs: (id: string, limit = 20) => get<{ items: PatrolRun[] }>(`/v1/patrols/${id}/runs`, { params: { limit } }),
   reports: (id: string, limit = 20) => get<{ items: PatrolReport[] }>(`/v1/patrols/${id}/reports`, { params: { limit } }),
+}
+
+// ---- 通知中心（P6） ----
+export const notifyApi = {
+  channels: () => get<{ items: NotifyChannel[] }>('/v1/notify/channels'),
+  createChannel: (body: Partial<NotifyChannel>) => post<NotifyChannel>('/v1/notify/channels', body),
+  updateChannel: (id: string, body: Partial<NotifyChannel>) => put<NotifyChannel>(`/v1/notify/channels/${id}`, body),
+  removeChannel: (id: string) => del<{ deleted: string }>(`/v1/notify/channels/${id}`),
+  policies: () => get<{ items: NotifyPolicy[] }>('/v1/notify/policies'),
+  upsertPolicy: (level: string, body: Partial<NotifyPolicy>) => put<NotifyPolicy>(`/v1/notify/policies/${level}`, { level, ...body }),
+  records: (limit = 50) => get<{ items: NotifyRecord[] }>('/v1/notify/records', { params: { limit } }),
+}
+
+// ---- 告警规则（P6） ----
+export const alertRuleApi = {
+  list: () => get<{ items: AlertRule[] }>('/v1/alertrules'),
+  upsert: (body: Partial<AlertRule>) => put<AlertRule>('/v1/alertrules', body),
+  apply: (body: Partial<AlertRule>) => post<AlertRule>('/v1/alertrules/apply', body),
+  remove: (cluster: string, service: string) => del<{ deleted: string }>(`/v1/alertrules/${cluster}/${service}`),
+}
+
+// ---- 认证 / 用户（P6） ----
+export const authApi = {
+  login: (username: string, password: string) => post<{ token: string }>('/v1/auth/login', { username, password }),
+  me: () => get<{ username: string; role: string }>('/v1/auth/me'),
+  users: () => get<{ items: User[] }>('/v1/users'),
+  createUser: (body: { username: string; password: string; role?: string }) => post<User>('/v1/users', body),
 }
 
 // ---- AiNexus 异常排查 ----

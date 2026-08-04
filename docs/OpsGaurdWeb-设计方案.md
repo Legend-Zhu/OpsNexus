@@ -150,7 +150,9 @@ server/internal/
 ├── ingest/         # Worker webhook 入口：事件落库 + 事件→告警聚合（✅ P3）
 ├── workerproxy/    # Worker HTTP 代理客户端：healthz/self/services(+编排操作)/events/audit/local/stats/logs(SSE)（✅ P1/P2/P3）
 ├── patrol/         # 巡检：YAML 流程定义/校验 + 执行（resource/health 检查→异常→AI 报告）+ 内置调度（✅ P5）
-├── notify/         # 通知：渠道/策略/发送记录（新增）
+├── notify/         # 通知：渠道（可配置不预设）/策略/记录 + 互联网代理转发（✅ P6）
+├── alertrule/      # 告警规则：管理 Worker monitoring config（决策⑦）+ 下发（✅ P6）
+├── auth/           # 认证：本地用户（加盐哈希 + HMAC token）+ OIDC/SSO 抽象 + 中间件（✅ P6）
 └── store/          # 持久化（LevelDB/goleveldb 嵌入式 KV，✅ P1/P3：集群表 + 事件/告警 + 索引 + 序列 + 迁移）
 ```
 
@@ -317,7 +319,7 @@ seq/<kind>                        -> 自增序列（告警 id、事件 seq 等�
 | **P3 监控告警** ✅ | webhook ingest 端点 + 告警落库/列表/认领/恢复（事件驱动）+ 节点资源视图 + 告警规则（管理 Worker monitoring config，**P6 待做**） | `ingest`、`Alert`、前端 alerts/monitor 页（已提交，双节点 swarm 联调待做） |
 | **P4 AiNexus 整合** ✅ | **vendor AiNexus 进后端** + `/ainexus/*` 原生端点 + /ainexus/chat 进程内 SSE + **深度排查闭环**（告警 → 事件/日志/审计上下文注入 → 内嵌 Agent + **动态连接集群 Worker MCP 采证**） | `ainexus/` 内嵌网关、前端 troubleshoot 页（已提交，真机 LLM 联调待做） |
 | **P5 智能巡检** ✅ | YAML 流程 CRUD + 内置调度引擎（单实例 Go cron）+ 执行记录 + AI 报告 | `patrol/`、前端 patrol/schedule/report 页（已提交，真机联调待做） |
-| **P6 通知/系统** | 渠道（可配置）+ 互联网代理对接 + 策略/记录 + **SSO 认证** + 用户管理 | `notify/`、`sso/`、`users`、前端 notify/system 页 |
+| **P6 通知/系统** ✅ | 渠道（可配置）+ 互联网代理对接 + 策略/记录 + **SSO 认证**（OIDC + 本地 fallback）+ 用户管理 + 告警规则（管理 Worker monitoring config） | `notify/`、`alertrule/`、`auth/`、`users`、前端 notify/system 页（已提交，真机联调待做） |
 
 每阶段：单元测试 + 真机（双节点 swarm）联调 + 文档更新。
 

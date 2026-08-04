@@ -6,8 +6,11 @@ import (
 	"github.com/gin-gonic/gin"
 
 	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/alertrule"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/auth"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
 )
 
@@ -29,14 +32,19 @@ func fail(c *gin.Context, status int, message string) {
 }
 
 // Handlers groups the HTTP handlers. Cluster registry + Worker proxying are
-// wired in P1/P2; alert ingest (P3), patrol (P5) and the embedded AiNexus
-// gateway (nil when disabled) follow.
+// wired in P1/P2; alert ingest (P3), patrol (P5), notify/alertrule/auth (P6)
+// and the embedded AiNexus gateway (nil when disabled) follow.
 type Handlers struct {
 	clusters    *cluster.Service
 	ingestSvc   *ingest.Service
 	ingestToken string
 	patrolSvc   *patrol.Service
+	notifySvc   *notify.Service
+	ruleSvc     *alertrule.Service
+	authSvc     *auth.Service
 	AINexus     *ainexusserver.Server // 内嵌 AiNexus 网关（config 未启用时为 nil）
+	// AuthMiddleware 认证中间件（P6；nil = 未启用认证）。
+	AuthMiddleware gin.HandlerFunc
 }
 
 // NewHandlers constructs the handler set.
@@ -55,6 +63,18 @@ func (h *Handlers) SetIngestService(s *ingest.Service, token string) {
 
 // SetPatrolService wires the patrol service (P5).
 func (h *Handlers) SetPatrolService(s *patrol.Service) { h.patrolSvc = s }
+
+// SetNotifyService wires the notification service (P6).
+func (h *Handlers) SetNotifyService(s *notify.Service) { h.notifySvc = s }
+
+// SetAlertRuleService wires the alert-rule service (P6).
+func (h *Handlers) SetAlertRuleService(s *alertrule.Service) { h.ruleSvc = s }
+
+// SetAuthService wires the auth service (P6).
+func (h *Handlers) SetAuthService(s *auth.Service) { h.authSvc = s }
+
+// SetAuthMiddleware wires the auth middleware (P6; nil disables auth).
+func (h *Handlers) SetAuthMiddleware(m gin.HandlerFunc) { h.AuthMiddleware = m }
 
 // Health godoc: GET /healthz
 func (h *Handlers) Health(c *gin.Context) {
