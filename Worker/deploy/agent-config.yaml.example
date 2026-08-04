@@ -1,0 +1,44 @@
+# OpsGaurd Worker agent configuration — safe-by-default.
+# Copy to /etc/opsguard/agent-config.yaml on every swarm node and mount it into
+# the worker container (see deploy/stack.yml).
+
+worker:
+  # auto: derive role from the swarm node (manager -> orchestration+MCP,
+  #        worker -> local-only). Pin to manager/node to override.
+  role: auto
+  # Listen address of the node's local API (and, on managers, the orchestration API).
+  listen: ":8080"
+  # (node-role only) manager-role worker base URL for reporting.
+  # managerURL: http://10.0.0.1:8080
+
+commandPolicy:
+  # blacklist: reject commands matching `blacklist` substrings, allow the rest.
+  # whitelist: allow only commands starting with a `whitelist` entry.
+  mode: blacklist
+
+  # Host command execution (exec_host_command, via nsenter). Requires the
+  # worker to run privileged + pid=host. Default OFF — enable explicitly.
+  allowHostExec: false
+
+  # Container command execution (exec_in_container).
+  allowContainerExec: true
+
+  # Per-command timeout.
+  timeout: 30s
+
+  # Blacklist substrings (merged with the built-in dangerous set: rm -rf /,
+  # shutdown, reboot, mkfs, dd to /dev/sd*, fork bombs, ...).
+  blacklist:
+    - "curl http://|sh"
+    - "wget http://|sh"
+
+  # Whitelist prefixes (used when mode: whitelist), e.g.:
+  # whitelist:
+  #   - "cat"
+  #   - "ls"
+  #   - "ps"
+  #   - "df"
+  #   - "free"
+  #   - "docker ps"
+  #   - "docker logs"
+  #   - "systemctl status"

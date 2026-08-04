@@ -53,18 +53,20 @@ func New(orch *orchestrator.Orchestrator, mon *monitor.Manager, cli docker.Clien
 
 	h.registerTools(srv)
 	h.registerResources(srv)
+	h.registerToolsMetrics(srv)
 	h.srv = srv
 	return h, nil
 }
 
 // HTTPHandler returns a net/http handler implementing MCP Streamable HTTP
 // (single POST endpoint, per-request stateless handling, SSE responses).
+// Stateless is required for the 2026-07-28 protocol version (no sessions).
 func (h *Handler) HTTPHandler() http.Handler {
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		// Stateless: every request gets a fresh server instance (schema cache
 		// optional; P3 keeps it simple).
 		return h.srv
-	}, &mcp.StreamableHTTPOptions{})
+	}, &mcp.StreamableHTTPOptions{Stateless: true})
 }
 
 // ServeStdio runs the MCP server over stdin/stdout (newline-delimited

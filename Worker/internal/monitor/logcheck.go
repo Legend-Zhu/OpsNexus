@@ -102,8 +102,7 @@ func (l *logCheck) streamOnce(ctx context.Context) error {
 	}
 	defer rc.Close()
 
-	dec := newLogStreamDecoder(rc)
-	return dec.scanLines(func(line string) {
+	return docker.DecodeLogLines(rc, func(line string) {
 		// fast path: quick check before regexes
 		if len(l.patterns) == 0 {
 			return

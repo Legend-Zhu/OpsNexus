@@ -1,15 +1,17 @@
-# Deploy the OpsGaurd Worker to a Docker Swarm.
+# Deploy the OpsGaurd Worker to every node of a Docker Swarm (global service).
 #
-# The Worker runs as a global service on every swarm node so each node can
-# report its local containers' stats and logs to the manager-role Worker
-# (P4 multi-node wiring is the operator's responsibility: only run the
-# orchestration API / MCP on manager nodes, e.g. via placement constraints).
+# Each node runs a Worker:
+#   - manager nodes: orchestration API + MCP + per-node local API
+#   - worker nodes:  per-node local API (stats / container exec / host exec)
+# The manager aggregates/proxies cross-node calls to the node workers.
+#
+# Host command execution (exec_host_command) requires the privileged +
+# pid=host runtime so the Worker can nsenter into the host's PID 1 namespaces.
 #
 # Deploy:
 #   docker build -t opsguard-worker:1.0.0 -f Dockerfile .
 #   docker stack deploy -c stack.yml opsguard
-#
-# Required: the swarm must be initialized (`docker swarm init`).
+# Required: swarm initialized; agent-config mounted on every node.
 
 version: "3.8"
 
@@ -17,29 +19,32 @@ services:
   worker:
     image: opsguard-worker:1.0.0
     hostname: "{{.Node.Hostname}}"
+    # privileged + pid=host: allow nsenter host-command execution and stats
+    # collection across the whole host. Remove for a reduced-security mode
+    # (host exec disabled; node stats limited to swarm containers).
+    privileged: true
+    pid: host
     deploy:
       mode: global
-      placement:
-        constraints:
-          # Run on manager nodes only (control-plane + aggregation).
-          # Remove this constraint to run on all nodes (per-node monitoring).
-          - node.role == manager
       restart_policy:
         condition: any
         delay: 5s
         max_attempts: 3
       resources:
         limits:
-          memory: 128M
+          memory: 256M
     environment:
-      # Docker daemon access: unix socket mount below is the default; for a
-      # remote manager use DOCKER_HOST=tcp://manager:2376 with TLS.
       - DOCKER_HOST=unix:///var/run/docker.sock
+      # Every worker listens on the same port; the manager proxies to node
+      # workers on this port via the node's swarm address.
+      - WORKER_PORT=8080
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Agent config (command policy / role). Mount the same file on all
+      # nodes; the sample in deploy/agent-config.yaml.example is safe-by-default.
+      - /etc/opsguard/agent-config.yaml:/etc/opsguard/agent-config.yaml:ro
+    command: ["-agent-config", "/etc/opsguard/agent-config.yaml"]
     ports:
-      # Orchestration API + MCP Streamable HTTP. Put a TLS-terminating proxy
-      # in front for production (self-hosted mTLS/TLS or OAuth).
       - "8080:8080"
     logging:
       driver: json-file

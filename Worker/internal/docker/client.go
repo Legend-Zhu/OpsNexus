@@ -50,6 +50,9 @@ type Client interface {
 	ListContainers(ctx context.Context, f Filter) ([]Container, error)
 	ContainerStats(ctx context.Context, containerID string) (Stats, error)
 	ContainerInspect(ctx context.Context, containerID string) (ContainerInspect, error)
+	ContainerExecCreate(ctx context.Context, containerID string, cmd []string) (string, error)
+	ExecStart(ctx context.Context, execID string) (io.ReadCloser, error)
+	ExecInspect(ctx context.Context, execID string) (ExecInspect, error)
 }
 
 // Filter is a map of filter key → list of values, encoded as the Engine API
@@ -175,6 +178,31 @@ func (c *httpClient) postJSON(ctx context.Context, path string, query url.Values
 		return err
 	}
 	return decodeOrError(data, code, out)
+}
+
+// postJSONStream issues a POST with a JSON body and returns the raw response
+// body as a stream (for endpoints whose response is a byte stream, e.g.
+// /exec/{id}/start). The caller closes the reader.
+func (c *httpClient) postJSONStream(ctx context.Context, path string, body any) (io.ReadCloser, error) {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+c.path(path), bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, apiErrorFrom(resp.StatusCode, data)
+	}
+	return resp.Body, nil
 }
 
 // delete issues a DELETE and expects 2xx/404.

@@ -55,13 +55,14 @@ Worker 以 **Docker Swarm 全局服务（global service）** 形式部署到所�
         └───────────────────┘
 ```
 
-**角色判定**：Worker 启动时调用 `docker node inspect self`（通过 `node-self` 标签或本机 hostname 匹配 `NodeID`），读取 `Spec.Role`（`manager`/`worker`）与 `ManagerStatus.Leader`。
+**角色判定**：Worker 通过 `/info` 的 `Swarm.NodeID`（权威，非 hostname 匹配）读取自身节点，结合 `Spec.Role` 判定；agent config `worker.role` 可显式指定 `manager`/`node` 覆盖 auto 推导。
 
-- **manager-role Worker**：独占编排能力；承担**服务级**监控（service logs、routing-mesh 端口/HTTP 探活）；聚合所有节点上报的本地指标；是事件总线中心。
-- **worker-role Worker**：承担**本地**监控（本节点容器的 `stats`、本地 task 的日志 tail）；将本地指标/事件**上报**给 manager-role Worker（HTTP push，带退避重试）；其 HTTP API 与 MCP 工具中"写操作"**代理转发**到 leader manager。
+- **manager-role Worker**：独占编排能力（`ensureSwarmManager` 守卫写操作）；承担**服务级**监控（service logs、routing-mesh 端口/HTTP 探活）；聚合所有节点上报的本地指标；是事件总线中心；MCP Server 端点。
+- **node-role Worker**（每台纳管服务器都部署）：提供**本地接口** `GET /api/v1/local/stats`、`POST /api/v1/local/exec`、`POST /api/v1/local/host`、`GET /api/v1/local/logs`（SSE 流式日志），供 manager 跨节点代理采集。
+- **跨节点代理（manager→node）**：manager 的 MCP 工具（`get_resource_usage`/`exec_in_container`/`exec_host_command`）按任务所在节点路由到对应 node worker 的本地接口，实现**跨节点指标聚合与命令执行**。
 - **Leader 选举**：swarm manager 集群本身有 Raft leader。manager-role Worker 中仅 `ManagerStatus.Leader==true` 者执行"写"编排与全局事件汇聚；其余 manager 实例做热备（API 代理到 leader）。
 
-> **简化部署（小集群可选）**：仅在单台 manager 节点部署一个 Worker 实例，集中编排+监控+MCP，跳过 per-node agent。资源监控通过遍历 task→node 后远程 `tcp://node:2376`（TLS）拉 `stats`，节点数多时开销大，不推荐用于 >5 节点。
+> **简化部署（小集群可选）**：仅部署 manager 节点一个 Worker 实例，跳过 per-node agent；但跨节点 stats/exec 会受限（只能覆盖 manager 本机副本），不推荐用于 >1 节点。
 
 ### 2.2 组件分层
 
@@ -128,9 +129,11 @@ Worker 单二进制（Go）
 
 ## 四、模块①：配置驱动的容器编排
 
-### 4.1 POST API
+### 4.1 HTTP API
 
-管理端通过 HTTP 推送 config，Worker 调用 swarm API 落地。
+管理端通过 HTTP 推送 config，Worker 调用 swarm API 落地。编排接口（manager-role）与每节点本地接口（所有节点）分列：
+
+**编排接口（manager-role Worker，`/api/v1/...`）**
 
 | Method | Path | 说明 |
 |---|---|---|
@@ -142,8 +145,20 @@ Worker 单二进制（Go）
 | `POST` | `/api/v1/services/{name}/scale` | 调整副本数 `{replicas:N}` |
 | `POST` | `/api/v1/services/{name}/rollback` | 回滚到上一版本 |
 | `POST` | `/api/v1/services/{name}/restart` | 强制重调度（`--force` 等价） |
+| `GET` | `/api/v1/operations[/{id}]` | 操作跟踪 |
+| `GET` | `/api/v1/events` | 监控事件（`?service=&type=&limit=`） |
+| `GET` | `/api/v1/self` | 本节点 swarm 角色 |
 
-**鉴权**：管理端→Worker 用 **mTLS**（Worker 侧加载 ca/cert/key，与 swarm manager 2376 同套体系）或共享 token；跨集群走 HTTPS。
+**本地节点接口（每台纳管服务器，`/api/v1/local/...`，供 manager 跨节点代理）**
+
+| Method | Path | 说明 |
+|---|---|---|
+| `GET` | `/api/v1/local/stats` | 本节点 swarm 容器实时 CPU%/Mem%（快照差值） |
+| `POST` | `/api/v1/local/exec` | 容器内执行命令（`{container|service+slot, command}`，走命令策略） |
+| `POST` | `/api/v1/local/host` | 宿主机执行命令（nsenter，走命令策略） |
+| `GET` | `/api/v1/local/logs` | **SSE 流式日志**：`?service=&follow=true|false&tail=N&since=`，等价 `docker service logs -f` |
+
+**鉴权**：管理端→Worker 用 **mTLS**（Worker 侧加载 ca/cert/key，与 swarm manager 2376 同套体系）或共享 token；跨集群走 HTTPS。`/local/*` 含命令执行能力，生产须置于仅内网/带鉴权代理后。
 
 **幂等**：`POST /services` 若同名已存在 → 返回 `409` 并提示用 `POST /services/{name}` 更新；`scale`/`rollback` 可重试。
 
@@ -384,6 +399,35 @@ task 长期 `pending`（`State` 停在 `pending`/`allocated`）多半是非应�
 - `placement.constraints` 无匹配节点；
 - 镜像拉取失败（`preparing` 阶段卡住，取 `Task.Status.Err`）。
 
+### 4.7 命令执行入口与安全策略（agent config 下发）
+
+Worker 提供 **SSH 类命令执行入口**：容器内（`exec_in_container`）与宿主机（`exec_host_command`）。命令策略（黑白名单/超时/开关）由 **agent config** 下发（区别于编排用的 service config），每节点挂载 `/etc/opsguard/agent-config.yaml`（模板 `deploy/agent-config.yaml.example`）：
+
+```yaml
+worker:
+  role: auto            # auto | manager | node（auto 按 swarm 节点类型推导）
+  listen: ":8080"
+commandPolicy:
+  mode: blacklist       # blacklist | whitelist
+  allowHostExec: false  # 宿主机命令执行开关，默认关（需显式开启）
+  allowContainerExec: true
+  timeout: 30s
+  blacklist:            # blacklist 模式：命中即拒（与内置 21 条危险命令合并）
+    - "curl http://|sh"
+  # whitelist:          # whitelist 模式：仅允许前缀命中 + 禁止 shell 链（; && | $( ）绕过
+```
+
+**策略语义**：
+- **blacklist 模式**（默认）：内置危险命令（`rm -rf /`、`shutdown`、`reboot`、`mkfs`、`dd of=/dev/sd*`、fork bomb 等）+ 用户追加子串，`strings.Contains` 命中即拒。
+- **whitelist 模式**：命令须以白名单前缀开头（如 `cat`/`ls`/`ps`/`df`/`docker ps`），且**禁止 shell 链接符**（`;` `&&` `||` `|` 反引号 `$(`），防 `cat x; rm -rf /` 绕过。
+- **超时**：单条命令默认 30s，超时终止。
+- **执行路径**：
+  - 容器内：Engine API `POST /containers/{id}/exec`（经任务所在节点的 worker）；
+  - 宿主机：worker 容器以 **privileged + pid=host** 运行，`nsenter -t 1 -m -u -i -n -p` 进宿主机 PID1 命名空间执行（完整宿主机环境）。
+- **确认守卫**：MCP 层 `exec_host_command`/`exec_in_container` 与 `remove_service`/`scale=0` 一样需 `confirm=true`。
+
+**真机验证（双节点集群）**：`exec_host_command hostname` 在两台宿主机返回各自主机名；`exec_host_command "shutdown -h now"` 被黑名单拦截（`matches blacklist pattern "shutdown"`）；`exec_in_container` 跨节点路由到任务所在节点执行成功。
+
 ---
 
 ## 五、模块②：监控体系
@@ -490,11 +534,13 @@ task 长期 `pending`（`State` 停在 `pending`/`allocated`）多半是非应�
 | `restart_service` | `name` | `operationId` | 写 |
 | `remove_service` | `name` | `result` | 写（**必须 elicitation 确认**） |
 | `get_service_logs` | `name`,`?tail`,`?since`,`?follow` | 日志行/订阅 | 读 |
-| `check_port` | `name`,`port`（或自动取 service ports） | `reachable`, latency | 读 |
-| `get_resource_usage` | `name`,`?metric`,`?percentile` | per-node + 聚合 CPU/Mem/Net | 读 |
+| `get_resource_usage` | `name` | **跨节点** per-container + 聚合 CPU/Mem | 读 |
 | `get_operation` | `operationId` | operation 状态 | 读 |
 | `list_nodes` / `get_node` | `?id` | 节点状态/角色/可达性 | 读 |
+| `get_self` | — | 本 worker 节点角色（nodeId/role/leader/swarmManager） | 读 |
 | `get_events` | `?service`,`?type`,`?since`,`?limit` | 事件列表 | 读 |
+| `exec_in_container` | `service`,`command[]`,`?slot`,`confirm` | exitCode + output（**跨节点路由**到任务所在节点） | 写（**confirm 确认**） |
+| `exec_host_command` | `command`,`?node`,`confirm` | per-node exitCode + output（nsenter，**跨节点**，默认全部节点） | 写（**confirm 确认** + 黑白名单） |
 
 **Tool 定义示例**（遵循规范字段）：
 ```json
@@ -534,12 +580,12 @@ task 长期 `pending`（`State` 停在 `pending`/`allocated`）多半是非应�
 通过 `resources/list`、`resources/read` 访问；变更走 `subscriptions/listen`。
 
 > **P3 实现说明（已落地，`internal/mcp/`，基于 go-sdk v1.7.0）**：
-> - **传输**：Streamable HTTP（单 endpoint `POST /mcp`，stateless）；`-mcp-stdio` 模式走 stdio（newline-delimited JSON-RPC 自定义 transport，与 SDK custom-transport 同款）。
+> - **传输**：Streamable HTTP（单 endpoint `POST /mcp`，**stateless**，`StreamableHTTPOptions.Stateless=true`，2026-07-28 无状态协议必需；真机发现并修复）；`-mcp-stdio` 模式走 stdio（newline-delimited JSON-RPC 自定义 transport，与 SDK custom-transport 同款）。
 > - **Server**：`mcp.NewServer` + 泛型 `mcp.AddTool[In,Out]`（自动生成 input/output JSON Schema 2020-12、入参校验、`structuredContent` 输出）。
-> - **Tools（12 个，已注册）**：list_services / get_service / deploy_service / update_service / scale_service / restart_service / remove_service / get_service_logs / get_events / get_operation / list_nodes / get_node。危险操作守卫：`remove_service` 与 `scale_service(replicas=0)` 要求 `confirm=true`，否则返回 `isError` 工具错误（e2e 已验证）。
+> - **Tools（16 个，已注册）**：编排类 list/get/deploy/update/scale/restart/remove_service、get_service_logs、get_events、get_operation、list/get_node、get_self；命令执行类 **exec_in_container**（跨节点路由）、**exec_host_command**（nsenter 宿主机，跨节点，黑白名单）；指标类 **get_resource_usage**（跨节点聚合）。危险操作（remove/scale=0/两类 exec）要求 `confirm=true`，否则返回 `isError` 工具错误（e2e 已验证，含 `rm -rf /` 被黑名单拦截）。
 > - **Resources（3 个）**：`worker://services`、`worker://services/{name}`（template）、`worker://events`。
-> - **协议能力**：go-sdk 自动实现 `server/discover`、版本协商（2026-07-28/2025-11-25）、每请求 `_meta` 能力声明；客户端 e2e 确认 `InitializeResult().ProtocolVersion=2026-07-28`。
-> - **已 e2e 验证**：discover → tools/list（12）→ resources（3）→ deploy_service → get_operation(healthy) → get_service → get_service_logs → get_events → remove_service(confirm)，以及 scale=0 无 confirm 的拒绝。
+> - **协议能力**：go-sdk 自动实现 `server/discover`、版本协商（2026-07-28/2025-11-25）、每请求 `_meta` 能力声明；客户端 e2e 确认 `InitializeResult().ProtocolVersion=2026-07-28`。2026-07-28 要求请求体 `_meta` 携带 `io.modelcontextprotocol/protocolVersion`（手写 JSON-RPC 需显式带，SDK 客户端自动带）。
+> - **跨节点**：manager 按任务所在节点路由到 node worker 的 `/api/v1/local/*`，聚合 stats、代理 exec、广播 host 命令（真机双节点验证）。
 > - **未做（记入风险）**：OAuth 2.1（当前无鉴权，生产需在代理层加 mTLS/OAuth）；`subscriptions/listen` 长连接订阅（go-sdk 已内置能力，未启用）；Elicitation MRTR 用户确认（以 confirm 参数代替）。
 
 ---
@@ -550,11 +596,16 @@ task 长期 `pending`（`State` 停在 `pending`/`allocated`）多半是非应�
    - Worker 容器以只读 root 挂载 + `--cap-drop=ALL` + 仅 `SETFCAP` 等最小能力；
    - 宿主机仅 root + docker 组可访问 socket；
    - 生产建议改 `tcp://manager:2376` + TLS 双向认证，避免每节点暴露 socket。
-2. **mTLS**（管理端↔Worker、Worker↔Docker daemon）：复用 swarm 2376 体系，`ca.pem`/`cert.pem`/`key.pem` 权限 `0444`/`0400`，证书 `extKeyUsage` 区分 `serverAuth`/`clientAuth`，`subjectAltName` 含所有节点。
-3. **Swarm 端口**：2377/TCP（manager 间）、7946/TCP+UDP（节点发现）、4789/UDP（VXLAN，仅可信网络，必要时 `--opt encrypted` 启用 IPsec ESP）。daemon 远程 API 走 2376/TLS，**禁用 2375 明文**。
-4. **autolock**：`docker swarm update --autolock=true` 保护 Raft 密钥，manager 重启需 `swarm unlock`，防密钥落盘泄露。
-5. **MCP OAuth 2.1**：Worker 作 OAuth 2.1 资源服务器；token 走 `Authorization: Bearer`，按 RFC8707 校验 `resource` 受众；scope 细化 `worker:read` / `worker:write`。高危工具额外要 elicitation 确认。
-6. **配置脱敏**：config 中的 `env`/`secrets` 值、`registryAuth` 凭证不得进日志/事件；`slog` 统一脱敏过滤器。
+2. **宿主机命令执行（privileged + pid=host）**：`exec_host_command` 经 nsenter 进宿主机 PID1 命名空间执行，**必须**以 privileged + pid=host 运行（见 `deploy/stack.yml`）。这是整个系统攻击面最大的一环，安全基线：
+   - 默认 `allowHostExec=false`（需 config 显式开启，见 `deploy/agent-config.yaml.example`）；
+   - 命令黑白名单由 agent config 下发（见 §4.7）；
+   - 高风险动作（`exec_host_command`/`exec_in_container`/`remove_service`/`scale=0`）在 MCP 层强制 `confirm=true`；
+   - 生产应将该 API 置于仅内网/带鉴权的反向代理后，避免未授权访问特权 Worker。
+3. **mTLS**（管理端↔Worker、Worker↔Docker daemon）：复用 swarm 2376 体系，`ca.pem`/`cert.pem`/`key.pem` 权限 `0444`/`0400`，证书 `extKeyUsage` 区分 `serverAuth`/`clientAuth`，`subjectAltName` 含所有节点。
+4. **Swarm 端口**：2377/TCP（manager 间）、7946/TCP+UDP（节点发现）、4789/UDP（VXLAN，仅可信网络，必要时 `--opt encrypted` 启用 IPsec ESP）。daemon 远程 API 走 2376/TLS，**禁用 2375 明文**。
+5. **autolock**：`docker swarm update --autolock=true` 保护 Raft 密钥，manager 重启需 `swarm unlock`，防密钥落盘泄露。
+6. **MCP OAuth 2.1**：Worker 作 OAuth 2.1 资源服务器；token 走 `Authorization: Bearer`，按 RFC8707 校验 `resource` 受众；scope 细化 `worker:read` / `worker:write`。高危工具额外要 elicitation 确认。
+7. **配置脱敏**：config 中的 `env`/`secrets` 值、`registryAuth` 凭证不得进日志/事件；`slog` 统一脱敏过滤器（`internal/logging`）。
 
 ---
 
@@ -562,22 +613,22 @@ task 长期 `pending`（`State` 停在 `pending`/`allocated`）多半是非应�
 
 ```
 Worker/
-├── cmd/worker/main.go                 # 入口：加载 config、启动 HTTP+MCP+Monitor
+├── cmd/worker/main.go                 # 入口：agent 配置 + 角色判断 + HTTP+MCP+Monitor+nodeagent
 ├── internal/
-│   ├── config/        schema.go, validator.go, defaults.go
-│   ├── docker/        client.go, service.go, task.go, node.go, stats.go, logs.go
-│   ├── orchestrator/  api.go, translator.go, lifecycle.go, registry.go, operation.go
-│   ├── monitor/       manager.go, portcheck.go, httpcheck.go, logcheck.go,
-│   │                  rescheck.go, reporter.go, eventstore.go, webhook.go
-│   ├── mcp/           server.go, transport.go, auth.go, subscriptions.go
-│   │   └── tools/     list_services.go, deploy_service.go, scale_service.go,
-│   │                  get_service.go, get_logs.go, check_port.go,
-│   │                  get_resource_usage.go, get_events.go, ...
-│   ├── ha/            leader.go, proxy.go
+│   ├── config/        schema.go, validator.go, defaults.go, quantity.go（服务 config）
+│   ├── agent/         agent.go, policy.go, hostexec.go（worker 自身 config：命令黑白名单/超时/开关）
+│   ├── docker/        client.go, service.go, task.go, node.go, stats.go, logs.go,
+│   │                  exec.go, image.go, transport.go, types.go, logdecoder.go
+│   ├── orchestrator/  api.go, translator.go, lifecycle.go, operation.go, proxy.go（跨节点代理）
+│   ├── monitor/       manager.go, portcheck.go, httpcheck.go, logcheck.go, rescheck.go, event.go
+│   ├── nodeagent/     api.go, logs.go, util.go（每节点本地接口 /local/stats /local/exec /local/host /local/logs）
+│   ├── mcp/           server.go, tools.go, resources.go, metrics.go（exec_host_command / 跨节点聚合）
+│   ├── logging/       redact.go（slog 脱敏）
 │   └── version/       version.go
 ├── deploy/
 │   ├── Dockerfile
-│   ├── stack.yml                      # Worker 自身用 swarm stack 部署（自举）
+│   ├── stack.yml                      # global 部署 + privileged + pid=host
+│   ├── agent-config.yaml.example      # 命令策略配置模板（黑白名单）
 │   └── worker.service                 # 或 systemd unit（非 swarm 单机）
 ├── docs/                              # 已存在（本文件所在）
 ├── go.mod / go.sum
@@ -593,27 +644,30 @@ Worker/
 | **P0 骨架** | 项目脚手架 + Docker 客户端封装 + config schema | `go.mod`、`internal/docker/*`、`internal/config/*`、单测 | ✅ |
 | **P1 编排** | POST API + config→spec 映射 + 生命周期轮询 + registry 鉴权/预拉取 | `internal/orchestrator/*`、本地集成测试（swarm） | ✅ |
 | **P2 监控** | 四类 checker + EventStore + 事件 API + 探活修复 | `internal/monitor/*`、监控集成测试 | ✅ |
-| **P3 MCP** | Tools/Resources + Streamable HTTP（go-sdk v1.7.0，协议 2026-07-28） | `internal/mcp/*`、MCP e2e（官方 SDK 客户端） | ✅ |
-| **P4 HA** | 节点身份识别（/info NodeID）+ manager 写守卫 + `/self` + MCP `get_self` | `internal/docker/info`、`orchestrator.Self` | ✅（多节点 per-node 上报未做，记入风险） |
-| **P5 生产化** | 日志脱敏（`internal/logging`）+ TLS（`-tls-cert/-tls-key`）+ 部署 stack + README | `deploy/Dockerfile`、`deploy/stack.yml`、`internal/logging` | ✅（mTLS 双向认证、autolock 未做，记入风险） |
+| **P3 MCP** | Tools/Resources + Streamable HTTP（go-sdk v1.7.0，协议 2026-07-28，stateless） | `internal/mcp/*`、MCP e2e（官方 SDK 客户端 + 真机双节点） | ✅ |
+| **P4 HA** | 节点身份识别（/info NodeID）+ manager 写守卫 + `/self` + get_self + **per-node worker（global）** + **跨节点代理**（stats 聚合/exec 路由/host 广播） | `internal/nodeagent`、`orchestrator/proxy`、真机双节点验证 | ✅ |
+| **P5 生产化** | 日志脱敏（`internal/logging`）+ TLS（`-tls-cert/-tls-key`）+ 部署 stack + README + **命令执行入口 + 黑白名单策略（agent config）** + **SSE 流式日志** | `internal/agent`、`deploy/*`、真机验证 | ✅（OAuth 2.1、mTLS 双向、autolock 未做，记入风险） |
 
 每个阶段配套：单元测试 + `docker testcontainers` 集成测试 + 文档更新。
 
 **实现备注**：
 - Docker 客户端为直接 HTTP（stdlib），非官方 SDK（模块结构损坏，见 §三）；MCP 用官方 go-sdk v1.7.0。
-- P4 复用 swarm manager 的 Raft leader（`ControlAvailable`/`ManagerStatus.Leader`），未自研选举；多节点 per-node stats 上报、写操作跨节点代理未实现（v1 单 manager 部署可覆盖）。
+- P4 复用 swarm manager 的 Raft leader（`ControlAvailable`/`ManagerStatus.Leader`），未自研选举；每节点部署 node-role worker（global 服务），manager 经 `/api/v1/local/*` 跨节点代理，无需自研上报通道。
+- 真机验证（双节点 swarm，服务器无外网，镜像离线传输）：跨节点多副本部署 healthy、任务分布两节点、routing mesh 跨节点 200、跨节点 stats 聚合（replicas=2）、宿主机命令执行（nsenter）+ 黑名单拦截、SSE 流式日志实时追加。
 
 ---
 
 ## 十、风险与待确认事项
 
 1. **Docker Engine API 版本差异**：`WithAPIVersionNegotiation()` 自动协商，但 `StartInterval`（1.44+）、部分 log 字段依赖版本；translator 需做版本探测降级。
-2. **日志驱动限制**：`ServiceLogs` 仅 `json-file`/`journald`；若集群用 `fluentd`/`gelf` 等远端驱动，logCheck 不可用，需提示用户或改接集中日志（ELK）做 logCheck——v1 不做，记为已知限制。
-3. **资源监控跨节点**：`stats` 是容器级，swarm 跨节点。v1 用 per-node agent 上报；若节点多（>20）考虑 cAdvisor sidecar，记为 v2 优化项。
-4. **MCP 规范时效**：`2026-07-28` 为截至 2026-08-03 的最新版本；官方 SDK 对该版本的支持度需在 P3 启动时复核 `github.com/modelcontextprotocol/go-sdk` 的 `CHANGELOG`，必要时降级到 `2025-11-25`（有状态 initialize 模型）并按规范实现兼容探测。
-5. **Leader 选举复杂度**：复用 swarm manager 的 Raft leader（`ManagerStatus.Leader`）而非自研选举，简化实现；但需处理 leader 切换时在途 operation 的接管（operation 状态落盘 + 新 leader 重放）。
+2. **日志驱动限制**：`ServiceLogs` 仅 `json-file`/`journald`；若集群用 `fluentd`/`gelf` 等远端驱动，logCheck 与流式日志接口不可用，需提示用户或改接集中日志（ELK）——v1 不做，记为已知限制。
+3. **宿主机命令执行的安全暴露面**：`exec_host_command` 要求 worker 以 privileged + pid=host 运行（nsenter 进宿主机 PID1 命名空间），容器逃逸即宿主 root。缓解：`allowHostExec` 默认关、黑白名单、MCP `confirm`、生产置于仅内网/鉴权代理后；`/api/v1/local/*` 目前无鉴权（记入风险）。
+4. **MCP 规范时效**：`2026-07-28` 为截至 2026-08-03 的最新版本；官方 SDK v1.7.0 已原生支持（stateless 需显式 `StreamableHTTPOptions.Stateless=true`，真机发现并修复）。后续版本升级需复核 SDK `CHANGELOG`。
+5. **Leader 选举复杂度**：复用 swarm manager 的 Raft leader（`ManagerStatus.Leader`）而非自研选举，简化实现；但需处理 leader 切换时在途 operation 的接管（operation 状态落盘 + 新 leader 重放）。多 manager 部署时仅 leader 执行写编排，其余热备（当前未实现热备代理）。
 6. **config 兼容性**：config 是自定义 schema，未来若要兼容 Compose 文件或 K8s manifest，需在 `translator` 上加适配层，不污染核心模型。
 7. **私有仓库凭证**：`registryAuth` 用 swarm secret 还是 `AuthConfig` 内联？默认 secret 引用（更安全），但 create 时需先 `secret create`；提供 `registryAuth.inline`（base64）作为便捷模式，标注不推荐用于生产。
+8. **agent config 同步**：命令策略经每节点挂载的 `agent-config.yaml` 下发；配置变更需全节点重新挂载/重启 worker（尚无集中分发），生产可用配置中心或 swarm config 分发。
+9. **跨节点 stats 采样时序**：`get_resource_usage` 的 CPU% 依赖两节点各自两次快照差值（1s 间隔），manager 聚合时各节点采样起点不一致，聚合值含 ±1s 偏差（读路径可接受）。
 
 ---
 

@@ -1,4 +1,4 @@
-package monitor
+package docker
 
 import (
 	"bytes"
@@ -23,7 +23,7 @@ func TestLogStreamDecoderLines(t *testing.T) {
 	buf.Write(frame(1, []byte("-part\n"))) // continued
 	buf.Write(frame(1, []byte("no trailing newline")))
 
-	dec := newLogStreamDecoder(&buf)
+	dec := &logStreamDecoder{r: &buf}
 	var got []string
 	if err := dec.scanLines(func(line string) { got = append(got, line) }); err != nil {
 		t.Fatalf("scanLines: %v", err)
@@ -42,7 +42,7 @@ func TestLogStreamDecoderLines(t *testing.T) {
 func TestLogStreamDecoderCarriageReturn(t *testing.T) {
 	var buf bytes.Buffer
 	buf.Write(frame(1, []byte("line1\r\n")))
-	dec := newLogStreamDecoder(&buf)
+	dec := &logStreamDecoder{r: &buf}
 	var got string
 	_ = dec.scanLines(func(line string) { got = line })
 	if got != "line1" {
@@ -53,7 +53,7 @@ func TestLogStreamDecoderCarriageReturn(t *testing.T) {
 func TestLogStreamDecoderTruncated(t *testing.T) {
 	b := frame(1, []byte("short"))
 	b = b[:8+3] // cut payload
-	dec := newLogStreamDecoder(bytes.NewReader(b))
+	dec := &logStreamDecoder{r: bytes.NewReader(b)}
 	err := dec.scanLines(func(string) {})
 	if err == nil {
 		t.Fatal("expected error for truncated frame")
@@ -61,7 +61,7 @@ func TestLogStreamDecoderTruncated(t *testing.T) {
 }
 
 func TestLogStreamDecoderEmpty(t *testing.T) {
-	dec := newLogStreamDecoder(bytes.NewReader(nil))
+	dec := &logStreamDecoder{r: bytes.NewReader(nil)}
 	err := dec.scanLines(func(string) {})
 	if err != nil {
 		t.Fatalf("empty stream should yield nil error, got %v", err)
