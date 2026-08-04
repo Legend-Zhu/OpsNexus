@@ -1,0 +1,22 @@
+# OpsGaurdWeb 管理端配置示例
+# 复制为 config.local.yaml 使用
+
+server:
+  addr: ":8090"
+  api_key: ""                # 网关鉴权 key，空则不启用
+
+# AiNexus 异常排查服务（整合为独立服务，见仓库根 ./AiNexus）
+ainexus:
+  enabled: true
+  base_url: "http://localhost:8080"   # AiNexus 网关地址
+  api_key: ""
+
+# 纳管的集群：name -> Worker 端点
+# 每个集群由部署在 swarm manager 上的 Worker 提供编排/监控/MCP 能力
+clusters:
+  # dev-cluster:
+  #   name: "dev-cluster"
+  #   worker_url: "http://10.60.189.30:8080"
+  #   mcp_url: "http://10.60.189.30:8080/mcp"
+  #   token: ""
+  #   desc: "开发集群"
