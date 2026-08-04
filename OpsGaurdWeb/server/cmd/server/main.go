@@ -15,6 +15,7 @@ import (
 	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/config"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/router"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 )
@@ -51,6 +52,9 @@ func main() {
 
 	// 集群注册表服务（P1：CRUD + Worker 健康探测）
 	h.SetClusterService(cluster.New(st))
+
+	// 告警 ingest 服务（P3：Worker webhook → 事件落库 + 告警聚合）
+	h.SetIngestService(ingest.New(st), cfg.Server.IngestToken)
 
 	// 内嵌 AiNexus 网关（与管理端同进程，无独立服务/端口）
 	if cfg.AINexus.Enabled {

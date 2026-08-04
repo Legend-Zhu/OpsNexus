@@ -4,6 +4,7 @@
 server:
   addr: ":8090"
   api_key: ""                # 网关鉴权 key，空则不启用
+  ingest_token: ""           # Worker webhook 推送校验 token（配到 Worker agent-config.webhooks）
 
 # 持久化：LevelDB 数据目录（嵌入式 KV，拷贝目录即备份）
 store:

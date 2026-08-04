@@ -61,6 +61,18 @@ func New(h *api.Handlers) *gin.Engine {
 		// 监控事件 / 审计
 		clusters.GET("/:name/events", h.ListEvents)
 		clusters.GET("/:name/audit", h.ListAudit)
+		clusters.GET("/:name/metrics", h.ClusterMetrics)
+
+		// 告警 ingest（Worker webhook 入口）
+		v1.POST("/ingest/events", h.IngestEvent)
+
+		// 告警中心
+		alerts := v1.Group("/alerts")
+		{
+			alerts.GET("", h.ListAlerts)
+			alerts.POST("/:id/ack", h.AckAlert)
+			alerts.POST("/:id/recover", h.RecoverAlert)
+		}
 
 		// AiNexus 异常排查（内嵌网关，进程内直调）
 		ainexus := v1.Group("/ainexus")

@@ -5,6 +5,8 @@ import MainLayout from '@/layout/MainLayout.vue'
  * 路由骨架：
  *  - /dashboard      仪表盘（多集群总览）
  *  - /clusters       集群管理（类 Rancher：集群列表/详情/工作负载/事件）
+ *  - /monitor        集群监控（节点/容器资源，经 Worker /local/stats）
+ *  - /alerts         告警中心（Worker webhook 汇聚）
  *  - /troubleshoot   异常排查（AiNexus 集成）
  * 后续业务迭代时按模块拆 views 子路由。
  */
@@ -31,6 +33,18 @@ const routes: RouteRecordRaw[] = [
         name: 'workloads',
         component: () => import('@/views/workloads/Index.vue'),
         meta: { title: '工作负载' },
+      },
+      {
+        path: 'monitor',
+        name: 'monitor',
+        component: () => import('@/views/monitor/Index.vue'),
+        meta: { title: '集群监控' },
+      },
+      {
+        path: 'alerts',
+        name: 'alerts',
+        component: () => import('@/views/alerts/Index.vue'),
+        meta: { title: '告警中心' },
       },
       {
         path: 'troubleshoot',

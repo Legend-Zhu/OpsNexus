@@ -159,6 +159,23 @@ func (s *Service) WorkerClient(name string) (*workerproxy.Client, error) {
 	return workerproxy.New(c.WorkerURL, c.Token), nil
 }
 
+// --- 告警（P3，经 store.Alert） ---
+
+// Alerts 列出告警（按状态+集群过滤，最新在前）。
+func (s *Service) Alerts(status store.AlertStatus, clusterName string) ([]*store.Alert, error) {
+	return s.store.ListAlerts(status, clusterName)
+}
+
+// AckAlert 认领告警（active → acked）。
+func (s *Service) AckAlert(id, by string) (*store.Alert, error) {
+	return s.store.SetAlertStatus(id, store.AlertAcked, by)
+}
+
+// RecoverAlert 人工恢复告警（active/acked → recovered）。
+func (s *Service) RecoverAlert(id string) (*store.Alert, error) {
+	return s.store.SetAlertStatus(id, store.AlertRecovered, "admin")
+}
+
 // probe 探测单个集群并就地更新其 status/lastSeen/err（不写库，读时快照）。
 func (s *Service) probe(ctx context.Context, c *store.Cluster) {
 	probeCtx, cancel := context.WithTimeout(ctx, s.probeTimeout)

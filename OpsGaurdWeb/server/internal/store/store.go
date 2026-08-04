@@ -21,6 +21,8 @@ import (
 const (
 	BucketMeta    = "meta"
 	BucketCluster = "cluster"
+	BucketEvent   = "event"
+	BucketAlert   = "alert"
 	BucketSeq     = "seq"
 )
 

@@ -7,6 +7,7 @@ import (
 
 	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
 )
 
 // Response is the standard envelope for all management-plane endpoints.
@@ -27,10 +28,13 @@ func fail(c *gin.Context, status int, message string) {
 }
 
 // Handlers groups the HTTP handlers. Cluster registry + Worker proxying are
-// wired in P1; AINexus holds the embedded AI gateway (nil when disabled).
+// wired in P1/P2; alert ingest (P3) and the embedded AiNexus gateway
+// (nil when disabled) follow.
 type Handlers struct {
-	clusters *cluster.Service
-	AINexus  *ainexusserver.Server // 内嵌 AiNexus 网关（config 未启用时为 nil）
+	clusters    *cluster.Service
+	ingestSvc   *ingest.Service
+	ingestToken string
+	AINexus     *ainexusserver.Server // 内嵌 AiNexus 网关（config 未启用时为 nil）
 }
 
 // NewHandlers constructs the handler set.
@@ -40,6 +44,12 @@ func NewHandlers() *Handlers {
 
 // SetClusterService wires the cluster registry service (P1).
 func (h *Handlers) SetClusterService(s *cluster.Service) { h.clusters = s }
+
+// SetIngestService wires the webhook ingest service (P3) and its token.
+func (h *Handlers) SetIngestService(s *ingest.Service, token string) {
+	h.ingestSvc = s
+	h.ingestToken = token
+}
 
 // Health godoc: GET /healthz
 func (h *Handlers) Health(c *gin.Context) {

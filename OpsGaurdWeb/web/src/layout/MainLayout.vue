@@ -21,6 +21,14 @@
           <el-icon><Box /></el-icon>
           <span>工作负载</span>
         </el-menu-item>
+        <el-menu-item index="/monitor">
+          <el-icon><Monitor /></el-icon>
+          <span>集群监控</span>
+        </el-menu-item>
+        <el-menu-item index="/alerts">
+          <el-icon><Bell /></el-icon>
+          <span>告警中心</span>
+        </el-menu-item>
         <el-menu-item index="/troubleshoot">
           <el-icon><MagicStick /></el-icon>
           <span>异常排查</span>
@@ -52,7 +60,8 @@
 </template>
 
 <script setup lang="ts">
-// 主布局：左侧导航 + 顶部栏 + 内容区。骨架期无业务逻辑。
+import { Bell, Box, MagicStick, Monitor, Odometer, Platform } from '@element-plus/icons-vue'
+// 主布局：左侧导航 + 顶部栏 + 内容区。
 </script>
 
 <style scoped>

@@ -1,14 +1,16 @@
 import { get, post, del } from './http'
 import type {
   AddClusterPayload,
+  Alert,
+  AINexusModel,
+  AuditItem,
   Cluster,
   ClusterSummary,
+  EventItem,
+  NodeStats,
+  Operation,
   Workload,
   WorkloadDetail,
-  Operation,
-  EventItem,
-  AuditItem,
-  AINexusModel,
 } from '@/types'
 
 /**
@@ -48,6 +50,19 @@ export const eventApi = {
     get<EventItem[]>(`/v1/clusters/${cluster}/events`, { params }),
   audit: (cluster: string, params?: { action?: string; limit?: number }) =>
     get<AuditItem[]>(`/v1/clusters/${cluster}/audit`, { params }),
+}
+
+// ---- 告警中心（P3） ----
+export const alertApi = {
+  list: (params?: { cluster?: string; status?: string }) =>
+    get<{ items: Alert[] }>('/v1/alerts', { params }),
+  ack: (id: string) => post<Alert>(`/v1/alerts/${id}/ack`),
+  recover: (id: string) => post<Alert>(`/v1/alerts/${id}/recover`),
+}
+
+// ---- 集群监控（节点资源，P3） ----
+export const monitorApi = {
+  metrics: (cluster: string) => get<NodeStats>(`/v1/clusters/${cluster}/metrics`),
 }
 
 // ---- AiNexus 异常排查 ----

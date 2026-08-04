@@ -1,0 +1,322 @@
+// Ingested monitoring events and aggregated alerts (P3).
+//
+// Key layout (mirrors 设计方案 §七):
+//
+//	event/<seq>                       -> IngestEvent（来自 Worker webhook，追加时序）
+//	alert/<id>                        -> Alert（按 service+type 聚合）
+//	alert/idx/<status>/<cluster>/<ts>/<id> -> "" （列表过滤/排序索引）
+//
+// Writes that touch alert + its index go through one WriteBatch so they
+// commit atomically; read-modify-write (alert count/first/last ts) is
+// serialised by the store-wide mutex (single instance).
+package store
+
+import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/util"
+)
+
+// EventType 监控事件类型（与 Worker monitor.Event 对齐）。
+type EventType string
+
+// 事件类型常量。
+const (
+	EventPortDown        EventType = "port_down"
+	EventHTTPUnhealthy   EventType = "http_unhealthy"
+	EventLogMatch        EventType = "log_match"
+	EventResourceOver    EventType = "resource_over"
+	EventResourceRecover EventType = "resource_recovered"
+)
+
+// Level 事件级别。
+type Level string
+
+// 级别常量。
+const (
+	LevelInfo  Level = "info"
+	LevelWarn  Level = "warn"
+	LevelError Level = "error"
+)
+
+// IngestEvent 是来自 Worker webhook 的原始监控事件。
+type IngestEvent struct {
+	ID      string    `json:"id"`
+	Cluster string    `json:"cluster,omitempty"` // webhook query 参数注入
+	TS      time.Time `json:"ts"`
+	Service string    `json:"service"`
+	Type    EventType `json:"type"`
+	Level   Level     `json:"level"`
+	Msg     string    `json:"msg"`
+	Detail  string    `json:"detail,omitempty"`
+}
+
+// AlertStatus 告警生命周期状态。
+type AlertStatus string
+
+// 告警状态常量。
+const (
+	AlertActive    AlertStatus = "active"    // 存在未处理事件
+	AlertAcked     AlertStatus = "acked"     // 人工认领
+	AlertRecovered AlertStatus = "recovered" // 已恢复（事件驱动或人工）
+)
+
+// Alert 是按 (cluster, service, type) 聚合后的告警。
+type Alert struct {
+	ID       string      `json:"id"`
+	Cluster  string      `json:"cluster"`
+	Service  string      `json:"service"`
+	Type     EventType   `json:"type"`
+	Level    Level       `json:"level"`
+	Title    string      `json:"title"`
+	Status   AlertStatus `json:"status"`
+	Count    int         `json:"count"`
+	FirstTS  time.Time   `json:"first_ts"`
+	LastTS   time.Time   `json:"last_ts"`
+	AckedBy  string      `json:"acked_by,omitempty"`
+	AckedAt  *time.Time  `json:"acked_at,omitempty"`
+	RecoverAt *time.Time `json:"recovered_at,omitempty"`
+	// LastEventID 最近一次归并事件的 id（webhook 幂等去重用，不对外返回）。
+	LastEventID string `json:"-"`
+}
+
+func eventKey(seq uint64) string {
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], seq)
+	return BucketEvent + "/" + string(b[:])
+}
+
+func alertKey(id string) string { return BucketAlert + "/" + id }
+
+// alertIdxKey 告警索引 key（倒序：大 ts 在前，便于"最新在前"遍历）。
+func alertIdxKey(status AlertStatus, cluster string, ts time.Time, id string) string {
+	// 用最大 uint64 - unixnano 实现降序；ts 为 0 时用 0。
+	var v uint64
+	if !ts.IsZero() {
+		v = ^uint64(ts.UnixNano()) // 大时间 → 小 key
+	}
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], v)
+	return fmt.Sprintf("%s/%s/%s/%s/%s", BucketAlert+"/idx", status, cluster, string(b[:]), id)
+}
+
+// SaveEvent 追加一条原始事件，返回分配的事件 key 序（seq）。
+func (s *Store) SaveEvent(e *IngestEvent) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	seq, err := s.nextSeqLocked("event")
+	if err != nil {
+		return 0, err
+	}
+	data, err := json.Marshal(e)
+	if err != nil {
+		return 0, fmt.Errorf("marshal event: %w", err)
+	}
+	if err := s.db.Put([]byte(eventKey(seq)), data, nil); err != nil {
+		return 0, err
+	}
+	return seq, nil
+}
+
+// nextSeqLocked 递增序列（调用方持锁）。
+func (s *Store) nextSeqLocked(kind string) (uint64, error) {
+	key := BucketSeq + "/" + kind
+	raw, err := s.db.Get([]byte(key), nil)
+	var cur uint64
+	if err == nil {
+		cur = binary.BigEndian.Uint64(raw)
+	} else if err != leveldb.ErrNotFound {
+		return 0, err
+	}
+	cur++
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], cur)
+	if err := s.db.Put([]byte(key), b[:], nil); err != nil {
+		return 0, err
+	}
+	return cur, nil
+}
+
+// PutAlert 原子写入告警 + 索引（调用方持锁）。
+func (s *Store) putAlertLocked(a *Alert) error {
+	data, err := json.Marshal(a)
+	if err != nil {
+		return fmt.Errorf("marshal alert: %w", err)
+	}
+	batch := new(leveldb.Batch)
+	batch.Put([]byte(alertKey(a.ID)), data)
+	// 索引：只索引 active/acked（recovered 保留最近一条供审计，不参与列表主路径可再加）
+	// 为简单起见：全部状态都写索引，状态变化时删除旧索引。
+	if err := s.writeAlertIndexLocked(batch, a); err != nil {
+		return err
+	}
+	return s.db.Write(batch, nil)
+}
+
+func (s *Store) writeAlertIndexLocked(batch *leveldb.Batch, a *Alert) error {
+	// 删除该告警在所有状态下的旧索引（状态可能变迁）
+	for _, st := range []AlertStatus{AlertActive, AlertAcked, AlertRecovered} {
+		// 旧索引无法精确枚举（ts 变化），直接按 id 前缀扫描删除
+		prefix := fmt.Sprintf("%s/%s/%s/", BucketAlert+"/idx", st, a.Cluster)
+		iter := s.db.NewIterator(util.BytesPrefix([]byte(prefix)), nil)
+		var dels [][]byte
+		for iter.Next() {
+			key := append([]byte(nil), iter.Key()...)
+			if strings.HasSuffix(string(key), "/"+a.ID) {
+				dels = append(dels, key)
+			}
+		}
+		iter.Release()
+		for _, k := range dels {
+			batch.Delete(k)
+		}
+	}
+	batch.Put([]byte(alertIdxKey(a.Status, a.Cluster, a.LastTS, a.ID)), nil)
+	return nil
+}
+
+// GetAlert 读取单个告警；不存在返回 (nil, nil)。
+func (s *Store) GetAlert(id string) (*Alert, error) {
+	raw, err := s.get(alertKey(id))
+	if err == leveldb.ErrNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var a Alert
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return nil, fmt.Errorf("decode alert %q: %w", id, err)
+	}
+	return &a, nil
+}
+
+// ListAlerts 按状态+集群过滤列出告警，最新在前。status 为空则全部状态；
+// cluster 非空时无论 status 是否为空都按集群过滤。
+func (s *Store) ListAlerts(status AlertStatus, cluster string) ([]*Alert, error) {
+	prefix := BucketAlert + "/idx"
+	if status != "" {
+		prefix += "/" + string(status)
+		if cluster != "" {
+			prefix += "/" + cluster
+		}
+	}
+	var out []*Alert
+	err := s.iterate(prefix, func(key string, _ []byte) error {
+		// 提取 id（key 尾段）
+		segs := strings.Split(key, "/")
+		id := segs[len(segs)-1]
+		if id == "" {
+			return nil
+		}
+		a, err := s.GetAlert(id)
+		if err != nil {
+			return err
+		}
+		if a != nil {
+			// status 为空 + cluster 过滤：这里无法用前缀表达，读取后过滤
+			if cluster != "" && a.Cluster != cluster {
+				return nil
+			}
+			out = append(out, a)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SaveEvent + upsert alert 的原子入口：ingest 服务用。
+// UpsertAlert 不存在则创建，存在则累加 count/更新 last_ts/合并事件。
+func (s *Store) UpsertAlert(a *Alert) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, err := s.get(alertKey(a.ID))
+	if err != nil && err != leveldb.ErrNotFound {
+		return err
+	}
+	if err == leveldb.ErrNotFound || len(existing) == 0 {
+		return s.putAlertLocked(a)
+	}
+	var old Alert
+	if err := json.Unmarshal(existing, &old); err != nil {
+		return fmt.Errorf("decode existing alert: %w", err)
+	}
+	// 合并：保留旧状态，累加计数，更新时间与最近事件
+	if old.Status == AlertActive || old.Status == AlertAcked {
+		old.Count++
+		if old.FirstTS.IsZero() {
+			old.FirstTS = a.FirstTS
+		}
+		old.LastTS = a.LastTS
+		if a.Level != "" {
+			old.Level = a.Level
+		}
+		old.Title = a.Title
+		old.LastEventID = a.LastEventID
+		return s.putAlertLocked(&old)
+	}
+	// recovered 的告警再收到新事件 → 重新激活（新 id）
+	a.ID = newAlertID()
+	a.Status = AlertActive
+	a.Count = 1
+	return s.putAlertLocked(a)
+}
+
+// SetAlertStatus 原子更新告警状态（认领/恢复/重激活），维护索引。
+func (s *Store) SetAlertStatus(id string, status AlertStatus, by string) (*Alert, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, err := s.GetAlert(id)
+	if err != nil {
+		return nil, err
+	}
+	if a == nil {
+		return nil, nil
+	}
+	now := time.Now().UTC()
+	a.Status = status
+	switch status {
+	case AlertAcked:
+		a.AckedBy = by
+		a.AckedAt = &now
+	case AlertRecovered:
+		a.RecoverAt = &now
+	case AlertActive:
+		// 重激活
+		a.AckedBy = ""
+		a.AckedAt = nil
+		a.RecoverAt = nil
+	}
+	if err := s.putAlertLocked(a); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+// AlertID 由 (cluster, service, type) 派生确定性的斜杠安全 ID。
+// 复合键含 "/"，直接用作 key 会破坏 alert/<id> 与索引的段结构，故哈希之。
+func AlertID(cluster, service string, typ EventType) string {
+	h := sha256.Sum256([]byte(cluster + "|" + service + "|" + string(typ)))
+	return "al-" + hex.EncodeToString(h[:6])
+}
+
+// newAlertID 生成随机告警 id（recovered 后重激活用）。
+func newAlertID() string {
+	var b [6]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("al-%d", time.Now().UnixNano())
+	}
+	return "al-" + hex.EncodeToString(b[:])
+}

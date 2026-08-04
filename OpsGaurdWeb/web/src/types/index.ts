@@ -88,6 +88,49 @@ export interface LogLine {
   line: string
 }
 
+/** 监控事件（来自 Worker webhook ingest，P3） */
+export interface IngestEvent {
+  id: string
+  cluster?: string
+  ts: string
+  service: string
+  type: string
+  level: 'info' | 'warn' | 'error'
+  msg: string
+  detail?: string
+}
+
+/** 告警（按 cluster+service+type 聚合，P3） */
+export interface Alert {
+  id: string
+  cluster: string
+  service: string
+  type: string
+  level: 'info' | 'warn' | 'error'
+  title: string
+  status: 'active' | 'acked' | 'recovered'
+  count: number
+  first_ts: string
+  last_ts: string
+  acked_by?: string
+  acked_at?: string
+  recovered_at?: string
+}
+
+/** 节点资源统计（Worker /local/stats） */
+export interface NodeStats {
+  node: string
+  containers: {
+    containerId: string
+    service?: string
+    taskId?: string
+    cpuPercent: number
+    memPercent: number
+    memUsageBytes: number
+    memLimitBytes: number
+  }[]
+}
+
 /** 监控事件（来自 Worker /api/v1/events） */
 export interface EventItem {
   id: string
