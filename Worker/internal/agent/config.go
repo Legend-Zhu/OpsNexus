@@ -29,6 +29,7 @@ const (
 type Config struct {
 	Worker        WorkerConfig  `yaml:"worker" json:"worker"`
 	CommandPolicy CommandPolicy `yaml:"commandPolicy" json:"commandPolicy"`
+	Webhooks      []string      `yaml:"webhooks" json:"webhooks,omitempty"`
 }
 
 // WorkerConfig identifies this instance's role and connectivity.

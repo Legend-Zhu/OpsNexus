@@ -11,6 +11,12 @@ worker:
   # (node-role only) manager-role worker base URL for reporting.
   # managerURL: http://10.0.0.1:8080
 
+# Monitoring events are POSTed to these URLs (manager-role worker only).
+# Payload is the event JSON: {id, ts, service, type, level, msg, detail}.
+# Fire-and-forget with exponential backoff retries; dedupe by id on the receiver.
+webhooks:
+  # - "http://opsguard-web:8080/api/v1/events"
+
 commandPolicy:
   # blacklist: reject commands matching `blacklist` substrings, allow the rest.
   # whitelist: allow only commands starting with a `whitelist` entry.

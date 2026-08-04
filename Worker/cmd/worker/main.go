@@ -144,6 +144,13 @@ func main() {
 		})
 		orch.SetMonitor(monMgr)
 
+		// Webhook event forwarding (agent config `webhooks` list).
+		if len(agCfg.Webhooks) > 0 {
+			pusher := monitor.NewWebhookPusher(agCfg.Webhooks, log)
+			evStore.AddSink(pusher.Sink())
+			log.Info("webhook forwarding enabled", "urls", len(agCfg.Webhooks))
+		}
+
 		api = orchestrator.NewAPI(orch)
 		api.SetEvents(monMgr.Events)
 

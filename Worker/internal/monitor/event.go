@@ -50,6 +50,11 @@ type EventStore struct {
 	next  int
 	count int
 	cap   int
+
+	// sinks receive a copy of every added event (used by the webhook pusher).
+	// They are invoked synchronously in Add; push implementations must not
+	// block (spawn their own goroutines / queues).
+	sinks []func(Event)
 }
 
 // NewEventStore creates a store holding up to cap events (oldest evicted).
@@ -60,7 +65,14 @@ func NewEventStore(cap int) *EventStore {
 	return &EventStore{evs: make([]Event, cap), cap: cap}
 }
 
-// Add appends an event, assigning id and timestamp if empty.
+// AddSink registers a callback invoked with every added event.
+func (s *EventStore) AddSink(fn func(Event)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sinks = append(s.sinks, fn)
+}
+
+// Add appends an event, assigning id and timestamp if empty, and notifies sinks.
 func (s *EventStore) Add(e Event) Event {
 	if e.ID == "" {
 		e.ID = newEventID()
@@ -69,11 +81,17 @@ func (s *EventStore) Add(e Event) Event {
 		e.TS = time.Now().UTC()
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.evs[s.next] = e
 	s.next = (s.next + 1) % s.cap
 	if s.count < s.cap {
 		s.count++
+	}
+	sinks := make([]func(Event), len(s.sinks))
+	copy(sinks, s.sinks)
+	s.mu.Unlock()
+
+	for _, fn := range sinks {
+		fn(e)
 	}
 	return e
 }
