@@ -50,4 +50,9 @@ export async function del<T>(url: string, config?: AxiosRequestConfig): Promise<
   return resp.data.data as T
 }
 
+export async function put<T>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<T> {
+  const resp = await http.put<ApiResponse<T>>(url, body, config)
+  return resp.data.data as T
+}
+
 export default http

@@ -16,6 +16,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/router"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 )
@@ -51,14 +52,16 @@ func main() {
 	h := api.NewHandlers()
 
 	// 集群注册表服务（P1：CRUD + Worker 健康探测）
-	h.SetClusterService(cluster.New(st))
+	clusterSvc := cluster.New(st)
+	h.SetClusterService(clusterSvc)
 
 	// 告警 ingest 服务（P3：Worker webhook → 事件落库 + 告警聚合）
 	h.SetIngestService(ingest.New(st), cfg.Server.IngestToken)
 
 	// 内嵌 AiNexus 网关（与管理端同进程，无独立服务/端口）
+	var ainx *ainexusserver.Server
 	if cfg.AINexus.Enabled {
-		ainx := ainexusserver.New(&cfg.AINexus)
+		ainx = ainexusserver.New(&cfg.AINexus)
 		if err := ainx.Initialize(context.Background()); err != nil {
 			log.Error("ainexus embed init failed", "err", err)
 			os.Exit(1)
@@ -66,6 +69,12 @@ func main() {
 		h.AINexus = ainx
 		defer ainx.Close()
 	}
+
+	// 智能巡检服务（P5：YAML 流程 + 单实例 cron 调度 + AI 报告）
+	patrolSvc := patrol.New(st, clusterSvc, ainx)
+	h.SetPatrolService(patrolSvc)
+	patrolSvc.Start()
+	defer patrolSvc.Stop()
 
 	log.Info("server starting",
 		"addr", cfg.Server.Addr,

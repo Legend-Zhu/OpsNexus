@@ -35,7 +35,7 @@ ainexus:
       enabled: true
       max_size: 1048576
   agent:
-    max_tool_rounds: 10
+    max_tool_rounds: 200           # 工具调用轮次上限（1M 上下文 + 摘要压缩兜底，长排查给足）
     parallel_tool_calls: true
     max_context_tokens: 800000    # 对齐深度排查模型 1M 窗口；超预算时摘要压缩旧轮次（类 Trae Memory），非硬删
     keep_tool_rounds: 5           # 压缩时完整保留最近多少个工具轮次（更早的走摘要）

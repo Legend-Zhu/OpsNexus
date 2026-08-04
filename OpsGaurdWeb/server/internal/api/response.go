@@ -8,6 +8,7 @@ import (
 	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
 )
 
 // Response is the standard envelope for all management-plane endpoints.
@@ -28,12 +29,13 @@ func fail(c *gin.Context, status int, message string) {
 }
 
 // Handlers groups the HTTP handlers. Cluster registry + Worker proxying are
-// wired in P1/P2; alert ingest (P3) and the embedded AiNexus gateway
-// (nil when disabled) follow.
+// wired in P1/P2; alert ingest (P3), patrol (P5) and the embedded AiNexus
+// gateway (nil when disabled) follow.
 type Handlers struct {
 	clusters    *cluster.Service
 	ingestSvc   *ingest.Service
 	ingestToken string
+	patrolSvc   *patrol.Service
 	AINexus     *ainexusserver.Server // 内嵌 AiNexus 网关（config 未启用时为 nil）
 }
 
@@ -50,6 +52,9 @@ func (h *Handlers) SetIngestService(s *ingest.Service, token string) {
 	h.ingestSvc = s
 	h.ingestToken = token
 }
+
+// SetPatrolService wires the patrol service (P5).
+func (h *Handlers) SetPatrolService(s *patrol.Service) { h.patrolSvc = s }
 
 // Health godoc: GET /healthz
 func (h *Handlers) Health(c *gin.Context) {

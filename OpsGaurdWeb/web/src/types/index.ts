@@ -131,6 +131,41 @@ export interface NodeStats {
   }[]
 }
 
+/** 巡检流程（P5） */
+export interface Patrol {
+  id: string
+  name: string
+  description?: string
+  cron: string
+  enabled: boolean
+  yaml: string
+  created_at: string
+  updated_at: string
+}
+
+/** 巡检执行记录 */
+export interface PatrolRun {
+  id: string
+  patrol_id: string
+  seq: number
+  started_at: string
+  finished_at?: string
+  status: 'running' | 'success' | 'failed'
+  error?: string
+  anomalies?: { check: string; cluster?: string; service?: string; ok: boolean; message?: string; data?: string }[]
+  report_id?: string
+}
+
+/** 巡检 AI 报告 */
+export interface PatrolReport {
+  id: string
+  patrol_run_id: string
+  patrol_id?: string
+  ai_summary: string
+  model?: string
+  created_at: string
+}
+
 /** 监控事件（来自 Worker /api/v1/events） */
 export interface EventItem {
   id: string

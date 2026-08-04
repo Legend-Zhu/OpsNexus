@@ -29,6 +29,10 @@
           <el-icon><Bell /></el-icon>
           <span>告警中心</span>
         </el-menu-item>
+        <el-menu-item index="/patrol">
+          <el-icon><Calendar /></el-icon>
+          <span>智能巡检</span>
+        </el-menu-item>
         <el-menu-item index="/troubleshoot">
           <el-icon><MagicStick /></el-icon>
           <span>异常排查</span>
@@ -60,7 +64,7 @@
 </template>
 
 <script setup lang="ts">
-import { Bell, Box, MagicStick, Monitor, Odometer, Platform } from '@element-plus/icons-vue'
+import { Bell, Box, Calendar, MagicStick, Monitor, Odometer, Platform } from '@element-plus/icons-vue'
 // 主布局：左侧导航 + 顶部栏 + 内容区。
 </script>
 

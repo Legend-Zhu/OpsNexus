@@ -19,11 +19,14 @@ import (
 
 // Key prefixes (buckets). Each maps to a Go type in this package.
 const (
-	BucketMeta    = "meta"
-	BucketCluster = "cluster"
-	BucketEvent   = "event"
-	BucketAlert   = "alert"
-	BucketSeq     = "seq"
+	BucketMeta      = "meta"
+	BucketCluster   = "cluster"
+	BucketEvent     = "event"
+	BucketAlert     = "alert"
+	BucketPatrol    = "patrol"
+	BucketPatrolRun = "patrolrun"
+	BucketReport    = "report"
+	BucketSeq       = "seq"
 )
 
 // schemaVersion 当前数据版本；每次不兼容变更 +1 并追加 migrate 函数。

@@ -74,6 +74,20 @@ func New(h *api.Handlers) *gin.Engine {
 			alerts.POST("/:id/recover", h.RecoverAlert)
 		}
 
+		// 智能巡检（YAML 流程 + 内置调度 + AI 报告）
+		patrols := v1.Group("/patrols")
+		{
+			patrols.GET("", h.ListPatrols)
+			patrols.POST("", h.CreatePatrol)
+			patrols.GET("/:id", h.GetPatrol)
+			patrols.PUT("/:id", h.UpdatePatrol)
+			patrols.DELETE("/:id", h.DeletePatrol)
+			patrols.POST("/:id/run", h.RunPatrol)
+			patrols.GET("/:id/runs", h.ListPatrolRuns)
+			patrols.GET("/:id/runs/:runId", h.GetPatrolRun)
+			patrols.GET("/:id/reports", h.ListPatrolReports)
+		}
+
 		// AiNexus 异常排查（内嵌网关，进程内直调）
 		ainexus := v1.Group("/ainexus")
 		{

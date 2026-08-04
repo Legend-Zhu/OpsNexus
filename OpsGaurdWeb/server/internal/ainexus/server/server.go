@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/agent"
 	ainexuscfg "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/handler"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/mcp"
@@ -150,6 +151,40 @@ func (s *Server) Models() []string {
 
 // MCPNames 返回已连接的 MCP Server 名称
 func (s *Server) MCPNames() []string { return s.mcpMgr.ServerNames() }
+
+// Summarize 非流式生成一段文本（巡检报告/摘要）。model 为空用第一个可用
+// 模型。复用 ReAct Agent（含上下文预算/摘要压缩）与工具注册中心，供 patrol
+// 等业务进程内调用；失败返回错误，不阻塞调用方。
+func (s *Server) Summarize(model, prompt string) (string, error) {
+	if s.openaiH == nil {
+		return "", fmt.Errorf("ainexus gateway not initialized")
+	}
+	if model == "" {
+		if len(s.modelRoutes) == 0 {
+			return "", fmt.Errorf("no models configured")
+		}
+		for m := range s.modelRoutes {
+			model = m
+			break
+		}
+	}
+	p, ok := s.modelRoutes[model]
+	if !ok {
+		return "", fmt.Errorf("model %q not found", model)
+	}
+	ag := agent.New(p, s.registry, s.config.Agent, s.logger)
+	conv := agent.NewConversation(model)
+	conv.AddSystemMessage("你是智能运维巡检报告助手。基于巡检检查结果，给出简明、结构化的报告：异常概况、逐项说明、处置建议。不要编造数据。")
+	conv.AddUserMessage(prompt)
+	resp, err := ag.Run(context.Background(), conv)
+	if err != nil {
+		return "", fmt.Errorf("summarize: %w", err)
+	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("summarize: no response")
+	}
+	return resp.Choices[0].Message.Content, nil
+}
 
 // AddMCPCluster 动态连接一个集群的 Worker MCP（streamable-http + Bearer
 // token），使 ReAct Agent 在排查时可调用该集群 Worker 的 16 工具采集证据。

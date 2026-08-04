@@ -1,4 +1,4 @@
-import { get, post, del } from './http'
+import { get, post, del, put } from './http'
 import type {
   AddClusterPayload,
   AINexusModelInfo,
@@ -9,6 +9,9 @@ import type {
   EventItem,
   NodeStats,
   Operation,
+  Patrol,
+  PatrolReport,
+  PatrolRun,
   Workload,
   WorkloadDetail,
 } from '@/types'
@@ -63,6 +66,18 @@ export const alertApi = {
 // ---- 集群监控（节点资源，P3） ----
 export const monitorApi = {
   metrics: (cluster: string) => get<NodeStats>(`/v1/clusters/${cluster}/metrics`),
+}
+
+// ---- 智能巡检（P5） ----
+export const patrolApi = {
+  list: () => get<{ items: Patrol[] }>('/v1/patrols'),
+  get: (id: string) => get<Patrol>(`/v1/patrols/${id}`),
+  create: (body: Partial<Patrol>) => post<Patrol>('/v1/patrols', body),
+  update: (id: string, body: Partial<Patrol>) => put<Patrol>(`/v1/patrols/${id}`, body),
+  remove: (id: string) => del<{ deleted: string }>(`/v1/patrols/${id}`),
+  run: (id: string) => post<PatrolRun>(`/v1/patrols/${id}/run`),
+  runs: (id: string, limit = 20) => get<{ items: PatrolRun[] }>(`/v1/patrols/${id}/runs`, { params: { limit } }),
+  reports: (id: string, limit = 20) => get<{ items: PatrolReport[] }>(`/v1/patrols/${id}/reports`, { params: { limit } }),
 }
 
 // ---- AiNexus 异常排查 ----

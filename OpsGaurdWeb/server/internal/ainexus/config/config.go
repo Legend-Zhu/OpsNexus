@@ -126,9 +126,11 @@ func DefaultConfig() *Config {
 			},
 		},
 		Agent: AgentConfig{
-			MaxToolRounds:     10,
+			// 深度排查/巡检可能执行大量工具调用采集证据；1M 上下文 + 摘要
+			// 压缩兜底，工具轮次上限给足 200。
+			MaxToolRounds:     200,
 			ParallelToolCalls: true,
-			// 深度排查模型上下文 1M：预算对齐窗口（预留工具定义/系统提示余量）。
+			// 对齐深度排查模型 1M 窗口（预留工具定义/系统提示余量）。
 			// 超预算时优先摘要压缩旧轮次（类 Trae Memory），非硬删。
 			MaxContextTokens: 800000,
 			KeepToolRounds:   5,

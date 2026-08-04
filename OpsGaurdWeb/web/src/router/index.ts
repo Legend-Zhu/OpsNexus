@@ -7,6 +7,7 @@ import MainLayout from '@/layout/MainLayout.vue'
  *  - /clusters       集群管理（类 Rancher：集群列表/详情/工作负载/事件）
  *  - /monitor        集群监控（节点/容器资源，经 Worker /local/stats）
  *  - /alerts         告警中心（Worker webhook 汇聚）
+ *  - /patrol         智能巡检（YAML 流程 + 内置调度 + AI 报告）
  *  - /troubleshoot   异常排查（AiNexus 集成）
  * 后续业务迭代时按模块拆 views 子路由。
  */
@@ -45,6 +46,12 @@ const routes: RouteRecordRaw[] = [
         name: 'alerts',
         component: () => import('@/views/alerts/Index.vue'),
         meta: { title: '告警中心' },
+      },
+      {
+        path: 'patrol',
+        name: 'patrol',
+        component: () => import('@/views/patrol/Index.vue'),
+        meta: { title: '智能巡检' },
       },
       {
         path: 'troubleshoot',
