@@ -6,14 +6,18 @@ import (
 	"os"
 
 	"gopkg.in/yaml.v3"
+
+	ainexuscfg "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
 )
 
 // Config is the management-plane server configuration.
 type Config struct {
 	Server ServerConfig `yaml:"server" json:"server"`
-	// AINexus is the AI 排查网关 (AiNexus) upstream, integrated as a service.
-	// The management plane proxies chat/排查 requests to it.
-	AINexus AINexusConfig `yaml:"ainexus" json:"ainexus"`
+	// AINexus embeds the AiNexus AI 网关 into this process (vendored under
+	// internal/ainexus). No standalone service, no separate port — providers,
+	// tools, MCP clients and the ReAct agent run in-process; the /ainexus/*
+	// native endpoints are mounted on the management router.
+	AINexus ainexuscfg.Config `yaml:"ainexus" json:"ainexus"`
 	// Clusters registry: name -> management-plane reachable Worker base URL.
 	// Each cluster is managed via its Worker's HTTP API + MCP endpoint.
 	Clusters map[string]ClusterConfig `yaml:"clusters" json:"clusters"`
@@ -23,13 +27,6 @@ type Config struct {
 type ServerConfig struct {
 	Addr   string `yaml:"addr" json:"addr"`
 	APIKey string `yaml:"api_key" json:"apiKey"` // 网关鉴权，空则不启用
-}
-
-// AINexusConfig describes how to reach the integrated AiNexus service.
-type AINexusConfig struct {
-	BaseURL string `yaml:"base_url" json:"baseUrl"` // e.g. http://localhost:8080
-	APIKey  string `yaml:"api_key" json:"apiKey"`
-	Enabled bool   `yaml:"enabled" json:"enabled"`
 }
 
 // ClusterConfig binds a cluster name to its Worker endpoints.
@@ -68,6 +65,11 @@ func (c *Config) applyDefaults() {
 func (c *Config) Validate() error {
 	if c.Server.Addr == "" {
 		return fmt.Errorf("server.addr is required")
+	}
+	if c.AINexus.Enabled {
+		if err := c.AINexus.Validate(); err != nil {
+			return fmt.Errorf("ainexus: %w", err)
+		}
 	}
 	return nil
 }

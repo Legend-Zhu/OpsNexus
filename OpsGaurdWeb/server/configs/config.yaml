@@ -5,11 +5,41 @@ server:
   addr: ":8090"
   api_key: ""                # 网关鉴权 key，空则不启用
 
-# AiNexus 异常排查服务（整合为独立服务，见仓库根 ./AiNexus）
+# AiNexus 异常排查网关（内嵌进后端，非独立服务）
+# providers/tools/MCP 客户端/ReAct Agent 与管理端同进程，原生端点挂载 /ainexus/*
 ainexus:
-  enabled: true
-  base_url: "http://localhost:8080"   # AiNexus 网关地址
-  api_key: ""
+  enabled: true              # false 则完全不加载网关（/ainexus/* 返回 503）
+  providers:
+    - name: "deepseek"
+      type: "openai_compatible"   # openai_compatible | anthropic_compatible
+      base_url: "https://api.deepseek.com/v1"
+      api_key: ""
+      models:
+        - { name: "deepseek-chat", display_name: "DeepSeek Chat" }
+        - { name: "deepseek-reasoner", display_name: "DeepSeek Reasoner" }
+  tools:
+    command:
+      enabled: false         # 内嵌网关自身的命令执行工具（建议关闭，改用 Worker 的受控 exec）
+      allowed_commands: []
+      timeout: 30s
+      work_dir: "/tmp"
+    http_request:
+      enabled: true
+      timeout: 15s
+    file_read:
+      enabled: true
+      max_size: 1048576
+  agent:
+    max_tool_rounds: 10
+    parallel_tool_calls: true
+  # MCP 客户端：连接各集群 Worker 的 /mcp（streamable-http），AI 排查时采集证据
+  # 每个集群一条，transport=streamable-http，url 指向该集群 Worker
+  mcp_servers:
+    # - name: "dev-cluster"
+    #   transport: "streamable-http"
+    #   url: "http://10.60.189.30:8080/mcp"
+    #   headers:
+    #     Authorization: "Bearer <worker-token>"
 
 # 纳管的集群：name -> Worker 端点
 # 每个集群由部署在 swarm manager 上的 Worker 提供编排/监控/MCP 能力

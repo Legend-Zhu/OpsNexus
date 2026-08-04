@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpsGuard - 智能运维监控平台 原型图</title>
+<style>
+:root{--p:#4f6ef7;--pl:#6b85f9;--pd:#3a54d4;--ok:#22c55e;--wn:#f59e0b;--er:#ef4444;--if:#3b82f6;--bg:#0f172a;--bg2:#1e293b;--bg3:#334155;--t1:#f1f5f9;--t2:#94a3b8;--t3:#64748b;--bd:#334155;--bd2:#475569}
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif;background:var(--bg);color:var(--t1);overflow:hidden;height:100vh}
+.app{display:flex;height:100vh}.sb{width:240px;background:var(--bg2);border-right:1px solid var(--bd);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
+.logo{padding:14px 18px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--bd)}.logo-i{width:34px;height:34px;background:linear-gradient(135deg,var(--p),#8b5cf6);border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:15px;color:#fff}.logo-t{font-size:16px;font-weight:700}.logo-s{font-size:10px;color:var(--t3);margin-top:1px}
+.nav{flex:1;overflow-y:auto;padding:6px 0}.ng{margin-bottom:1px}.ng-t{padding:7px 18px;font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;font-weight:600}
+.ni{display:flex;align-items:center;gap:8px;padding:8px 18px;cursor:pointer;transition:all .2s;color:var(--t2);font-size:12px;position:relative}.ni:hover{background:rgba(79,110,247,.1);color:var(--t1)}.ni.on{background:rgba(79,110,247,.15);color:var(--pl)}.ni.on::before{content:'';position:absolute;left:0;top:3px;bottom:3px;width:3px;background:var(--p);border-radius:0 2px 2px 0}
+.ni-i{width:18px;text-align:center;font-size:14px}.nb{margin-left:auto;background:var(--er);color:#fff;font-size:9px;padding:1px 5px;border-radius:8px;font-weight:600}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.hd{height:48px;background:var(--bg2);border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;padding:0 18px;flex-shrink:0}
+.bc{font-size:12px;color:var(--t2)}.bc b{color:var(--t1);font-weight:600}.bclk{color:var(--pl);cursor:pointer}.bclk:hover{text-decoration:underline}
+.av{width:28px;height:28px;background:var(--p);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;cursor:pointer}
+.ct{flex:1;overflow-y:auto;padding:18px}.ps{display:none}.ps.on{display:block}
+.c{background:var(--bg2);border:1px solid var(--bd);border-radius:10px;overflow:hidden;margin-bottom:14px}.ch{padding:12px 16px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between}.cb{padding:16px}
+.sr{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.sc{background:var(--bg2);border:1px solid var(--bd);border-radius:10px;padding:16px;cursor:pointer;transition:.2s}.sc:hover{border-color:var(--p)}.sc-l{font-size:11px;color:var(--t3);margin-bottom:4px}.sc-v{font-size:26px;font-weight:700}.sc-d{font-size:10px;color:var(--t3);margin-top:2px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px}
+.tw{overflow-x:auto}table{width:100%;border-collapse:collapse}th{text-align:left;padding:8px 12px;font-size:10px;color:var(--t3);font-weight:600;background:rgba(51,65,85,.5);border-bottom:1px solid var(--bd);white-space:nowrap}td{padding:9px 12px;font-size:11px;border-bottom:1px solid var(--bd);white-space:nowrap}tr:hover td{background:rgba(79,110,247,.04)}
+.tg{display:inline-flex;align-items:center;padding:1px 7px;border-radius:3px;font-size:10px;font-weight:500}.tg-e{background:rgba(239,68,68,.15);color:#f87171}.tg-w{background:rgba(245,158,11,.15);color:#fbbf24}.tg-s{background:rgba(34,197,94,.15);color:#4ade80}.tg-i{background:rgba(59,130,246,.15);color:#60a5fa}.tg-p{background:rgba(139,92,246,.15);color:#a78bfa}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:3px}.dot-ok{background:var(--ok);box-shadow:0 0 5px rgba(34,197,94,.4)}.dot-er{background:var(--er);box-shadow:0 0 5px rgba(239,68,68,.4)}.dot-wn{background:var(--wn);box-shadow:0 0 5px rgba(245,158,11,.4)}.dot-off{background:var(--t3)}
+.btn{display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border-radius:5px;font-size:11px;cursor:pointer;border:none;transition:all .2s;font-weight:500}.btn-p{background:var(--p);color:#fff}.btn-p:hover{background:var(--pd)}.btn-g{background:transparent;color:var(--t2);border:1px solid var(--bd)}.btn-g:hover{background:var(--bg3);color:var(--t1)}.btn-d{background:rgba(239,68,68,.15);color:#f87171}.btn-s{background:rgba(34,197,94,.15);color:#4ade80}.btn-sm{padding:3px 8px;font-size:10px}
+.pb{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;display:inline-block;width:50px;vertical-align:middle}.pf{height:100%;border-radius:2px}.pf-g{background:linear-gradient(90deg,#22c55e,#4ade80)}.pf-r{background:linear-gradient(90deg,#ef4444,#f87171)}.pf-y{background:linear-gradient(90deg,#f59e0b,#fbbf24)}
+.tl{position:relative;padding-left:20px}.tl::before{content:'';position:absolute;left:5px;top:3px;bottom:3px;width:2px;background:var(--bd)}.tl-i{position:relative;padding-bottom:14px}.tl-i:last-child{padding-bottom:0}.tl-d{position:absolute;left:-17px;top:3px;width:9px;height:9px;border-radius:50%;border:2px solid}.tl-d.er{border-color:var(--er);background:rgba(239,68,68,.3)}.tl-d.wn{border-color:var(--wn);background:rgba(245,158,11,.3)}.tl-d.ok{border-color:var(--ok);background:rgba(34,197,94,.3)}.tl-d.if{border-color:var(--if);background:rgba(59,130,246,.3)}.tl-t{font-size:10px;color:var(--t3)}.tl-c{font-size:11px;margin-top:1px;line-height:1.4}
+.ym{background:#0d1117;border:1px solid var(--bd);border-radius:7px;font-family:'Fira Code',Consolas,monospace;font-size:11px;line-height:1.5;padding:12px;color:#e6edf3;overflow-x:auto;white-space:pre}.yk{color:#7ee787}.ys{color:#a5d6ff}.yc{color:#8b949e}.yn{color:#79c0ff}.yb{color:#ff7b72}
+.modal-bg{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:1000;align-items:center;justify-content:center}.modal-bg.on{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--bd);border-radius:10px;width:520px;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.5)}.modal.w700{width:700px}.mh{padding:14px 18px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between}.mh h3{font-size:14px;font-weight:600}.mb{padding:18px}.mf{padding:12px 18px;border-top:1px solid var(--bd);display:flex;justify-content:flex-end;gap:6px}
+.fg{margin-bottom:12px}.fg label{display:block;font-size:11px;color:var(--t2);margin-bottom:3px;font-weight:500}.fi{width:100%;background:var(--bg3);border:1px solid var(--bd);border-radius:5px;padding:7px 10px;color:var(--t1);font-size:12px;outline:none}.fi:focus{border-color:var(--p)}select.fi{cursor:pointer}.fr{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--bd);margin-bottom:14px}.tab{padding:7px 16px;font-size:12px;color:var(--t3);cursor:pointer;border-bottom:2px solid transparent;transition:.2s}.tab:hover{color:var(--t1)}.tab.on{color:var(--pl);border-bottom-color:var(--p)}
+.tgl{width:34px;height:18px;border-radius:9px;background:var(--bd2);position:relative;cursor:pointer;display:inline-block;transition:.2s}.tgl.on{background:var(--p)}.tgl::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:.2s}.tgl.on::after{left:18px}
+.nch{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--bg3);border-radius:7px;margin-bottom:6px}.nch-i{width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:14px}.nch-n{font-size:12px;font-weight:500}.nch-d{font-size:10px;color:var(--t3)}
+.dd{border:1px solid rgba(239,68,68,.3);background:rgba(239,68,68,.05);border-radius:8px;padding:16px}.dd-t{font-size:14px;font-weight:600;color:#f87171;display:flex;align-items:center;gap:5px;margin-bottom:12px}
+.ir{border-left:3px solid var(--p);background:rgba(79,110,247,.05);padding:8px 12px;border-radius:0 5px 5px 0;margin-bottom:5px;font-size:11px}.ir.fail{border-left-color:var(--er);background:rgba(239,68,68,.05)}.ir.pass{border-left-color:var(--ok);background:rgba(34,197,94,.05)}
+.chat-m{height:320px;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}.chat-msg{max-width:80%;padding:8px 11px;border-radius:9px;font-size:11px;line-height:1.5}.chat-msg.u{align-self:flex-end;background:var(--p);color:#fff;border-bottom-right-radius:2px}.chat-msg.b{align-self:flex-start;background:var(--bg3);color:var(--t1);border-bottom-left-radius:2px}.chat-in{display:flex;gap:6px;padding-top:8px;border-top:1px solid var(--bd)}.chat-in input{flex:1;background:var(--bg3);border:1px solid var(--bd);border-radius:5px;padding:7px 10px;color:var(--t1);font-size:11px;outline:none}.chat-in input:focus{border-color:var(--p)}
+.lk{color:var(--pl);cursor:pointer}.lk:hover{text-decoration:underline}
+.toast{position:fixed;top:16px;right:16px;background:var(--bg2);border:1px solid var(--ok);border-radius:7px;padding:10px 16px;z-index:2000;display:none;font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.3)}.toast.on{display:block}.toast.err{border-color:var(--er)}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
+.mc{text-align:center;padding:14px}.mc-ic{font-size:28px;margin-bottom:4px}.mc-nm{font-size:13px;font-weight:600;margin-bottom:2px}.mc-addr{font-size:10px;color:var(--t3);margin-bottom:8px}.mc-row{display:flex;gap:8px;justify-content:center;margin-bottom:8px}.mc-k{font-size:14px;font-weight:700}.mc-kl{font-size:9px;color:var(--t3)}
+.search-bar{display:flex;gap:8px;margin-bottom:12px}.search-bar input{flex:1;background:var(--bg3);border:1px solid var(--bd);border-radius:5px;padding:6px 10px;color:var(--t1);font-size:11px;outline:none}.search-bar input:focus{border-color:var(--p)}.search-bar select{background:var(--bg3);border:1px solid var(--bd);border-radius:5px;padding:6px 10px;color:var(--t2);font-size:11px;cursor:pointer}
+/* login page */
+.login-page{display:flex;height:100vh;width:100vw;position:fixed;top:0;left:0;z-index:9999;background:var(--bg)}
+.login-left{flex:1;display:flex;flex-direction:column;justify-content:center;padding:60px 80px;background:linear-gradient(135deg,#0f172a 0%,#1e293b 50%,#0f172a 100%);position:relative;overflow:hidden}
+.login-left::before{content:'';position:absolute;top:-100px;right:-100px;width:400px;height:400px;border-radius:50%;background:rgba(79,110,247,.08)}
+.login-left::after{content:'';position:absolute;bottom:-80px;left:-80px;width:300px;height:300px;border-radius:50%;background:rgba(139,92,246,.06)}
+.login-right{width:440px;display:flex;align-items:center;justify-content:center;background:var(--bg2);border-left:1px solid var(--bd)}
+.login-logo{display:flex;align-items:center;gap:12px;margin-bottom:24px}
+.login-logo-i{width:48px;height:48px;background:linear-gradient(135deg,var(--p),#8b5cf6);border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:22px;color:#fff}
+.login-logo-t{font-size:28px;font-weight:700;color:var(--t1)}
+.login-logo-s{font-size:14px;color:var(--t3);margin-top:2px}
+.login-slogan{font-size:24px;font-weight:700;line-height:1.5;margin-bottom:16px;background:linear-gradient(90deg,var(--pl),#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.login-desc{font-size:14px;color:var(--t3);line-height:1.8;margin-bottom:40px}
+.login-features{display:flex;flex-direction:column;gap:16px}
+.login-feat{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--t2)}
+.login-feat-ic{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px}
+.login-feat-ic.f1{background:rgba(79,110,247,.15)}.login-feat-ic.f2{background:rgba(34,197,94,.15)}.login-feat-ic.f3{background:rgba(245,158,11,.15)}.login-feat-ic.f4{background:rgba(239,68,68,.15)}
+.login-form{width:320px}
+.login-form h2{font-size:22px;font-weight:700;margin-bottom:6px;text-align:center}
+.login-form p{font-size:12px;color:var(--t3);margin-bottom:24px;text-align:center}
+.login-field{margin-bottom:16px}
+.login-field label{display:block;font-size:12px;color:var(--t2);margin-bottom:5px;font-weight:500}
+.login-field input{width:100%;background:var(--bg3);border:1px solid var(--bd);border-radius:8px;padding:11px 14px;color:var(--t1);font-size:14px;outline:none;transition:.2s}
+.login-field input:focus{border-color:var(--p);box-shadow:0 0 0 3px rgba(79,110,247,.15)}
+.login-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;font-size:12px;color:var(--t2)}
+.login-row label{display:flex;align-items:center;gap:4px;cursor:pointer}
+.login-row input[type=checkbox]{accent-color:var(--p)}
+.login-btn{width:100%;padding:12px;border:none;border-radius:8px;background:linear-gradient(135deg,var(--p),#7c6ef7);color:#fff;font-size:15px;font-weight:600;cursor:pointer;transition:.2s}
+.login-btn:hover{opacity:.9;transform:translateY(-1px)}
+.login-btn:active{transform:translateY(0)}
+.login-error{color:var(--er);font-size:12px;margin-top:6px;display:none}
+.login-error.show{display:block}
+.login-hint{font-size:11px;color:var(--t3);text-align:center;margin-top:16px}
+/* agent install */
+.agent-steps{margin:16px 0}
+.agent-step{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--bd);align-items:flex-start}
+.agent-step:last-child{border-bottom:none}
+.agent-step-num{width:28px;height:28px;border-radius:50%;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--t3);flex-shrink:0}
+.agent-step-num.done{background:rgba(34,197,94,.15);color:var(--ok)}
+.agent-step-num.active{background:rgba(79,110,247,.15);color:var(--p)}
+.agent-step-num.fail{background:rgba(239,68,68,.15);color:var(--er)}
+.agent-step-title{font-size:13px;font-weight:600;margin-bottom:3px}
+.agent-step-desc{font-size:11px;color:var(--t3);line-height:1.5}
+.agent-step-status{margin-left:auto;font-size:11px;flex-shrink:0}
+.agent-info-box{background:var(--bg3);border:1px solid var(--bd);border-radius:8px;padding:14px;margin-top:12px}
+.agent-info-box h4{font-size:12px;font-weight:600;margin-bottom:8px;color:var(--pl)}
+.agent-info-box ul{padding-left:16px;font-size:11px;color:var(--t2);line-height:1.8}
+.agent-cmd{background:#0d1117;border:1px solid var(--bd);border-radius:6px;padding:10px 14px;font-family:'Fira Code',Consolas,monospace;font-size:11px;color:#e6edf3;margin:8px 0;position:relative}
+.agent-cmd-copy{position:absolute;top:6px;right:8px;background:var(--bg3);border:1px solid var(--bd);border-radius:4px;padding:2px 8px;color:var(--t2);font-size:10px;cursor:pointer}
+.agent-cmd-copy:hover{color:var(--t1)}
+</style>
+</head>
+<body>
+<div id="toast" class="toast"></div>
+<div id="app"></div>
+<div id="modal-root"></div>
+<script>
+
+// ===== DATA =====
+const D={projects:[{id:1,name:"应急厅-门户系统",desc:"应急厅门户网站及统一认证",envs:["生产","测试"],owner:"张三"},{id:2,name:"应急厅-自然灾害系统",desc:"自然灾害监测预警与应急响应",envs:["生产"],owner:"李四"},{id:3,name:"应急厅-安责险系统",desc:"安全生产责任保险综合管理",envs:["生产","预发"],owner:"王五"}],servers:[{id:1,name:"app-server-01",ip:"192.168.1.10",type:"应用服务器",status:"online",cpu:23,mem:67,disk:45,pid:1,agent:true},{id:2,name:"app-server-02",ip:"192.168.1.11",type:"应用服务器",status:"warning",cpu:89,mem:91,disk:72,pid:1,agent:true},{id:3,name:"db-server-01",ip:"192.168.1.20",type:"数据库服务器",status:"online",cpu:56,mem:78,disk:85,pid:1,agent:true},{id:4,name:"cache-server-01",ip:"192.168.1.30",type:"缓存服务器",status:"online",cpu:12,mem:65,disk:30,pid:1,agent:true},{id:5,name:"mq-server-01",ip:"192.168.1.40",type:"消息队列",status:"online",cpu:34,mem:55,disk:40,pid:2,agent:true},{id:6,name:"mq-server-02",ip:"192.168.1.41",type:"消息队列",status:"offline",cpu:0,mem:0,disk:0,pid:2,agent:false},{id:7,name:"app-server-03",ip:"192.168.2.10",type:"应用服务器",status:"online",cpu:45,mem:60,disk:55,pid:2,agent:true},{id:8,name:"bi-server-01",ip:"192.168.3.10",type:"应用服务器",status:"online",cpu:30,mem:50,disk:65,pid:3,agent:true},{id:9,name:"bi-db-01",ip:"192.168.3.11",type:"数据库服务器",status:"online",cpu:40,mem:70,disk:50,pid:3,agent:true}],apps:[{id:1,name:"api-gateway",type:"JAR",sid:1,port:8080,status:"running",path:"/opt/apps/api-gateway.jar",pid:12345,heap:"512MB/2GB",gc:128,thr:45,h5:0},{id:2,name:"order-service",type:"JAR",sid:2,port:8081,status:"error",path:"/opt/apps/order-service.jar",pid:12346,heap:"1.8GB/2GB",gc:2456,thr:198,h5:23},{id:3,name:"user-service",type:"JAR",sid:1,port:8082,status:"running",path:"/opt/apps/user-service.jar",pid:12347,heap:"380MB/1GB",gc:56,thr:32,h5:0},{id:4,name:"inventory-service",type:"JAR",sid:2,port:8083,status:"running",path:"/opt/apps/inventory-service.jar",pid:12348,heap:"620MB/1GB",gc:89,thr:55,h5:0},{id:5,name:"report-service",type:"JAR",sid:7,port:8084,status:"stopped",path:"/opt/apps/report-service.jar",pid:0,heap:"-",gc:0,thr:0,h5:0},{id:6,name:"supply-chain-api",type:"JAR",sid:7,port:9080,status:"running",path:"/opt/apps/supply-chain-api.jar",pid:23456,heap:"800MB/2GB",gc:200,thr:80,h5:2},{id:7,name:"bi-etl-service",type:"JAR",sid:8,port:7080,status:"running",path:"/opt/apps/bi-etl.jar",pid:34567,heap:"1.2GB/2GB",gc:150,thr:60,h5:0},{id:8,name:"bi-query-service",type:"JAR",sid:8,port:7081,status:"running",path:"/opt/apps/bi-query.jar",pid:34568,heap:"600MB/1GB",gc:45,thr:30,h5:1}],mw:[{id:1,name:"Redis-01",type:"Redis",sid:4,port:6379,status:"running",m1:"80%",m1l:"连接数",m2:"4.2GB",m2l:"内存",m3:"99.9%",m3l:"可用率",alert:"warn"},{id:2,name:"Redis-02",type:"Redis",sid:4,port:6380,status:"running",m1:"45%",m1l:"连接数",m2:"2.1GB",m2l:"内存",m3:"99.9%",m3l:"可用率",alert:null},{id:3,name:"MySQL-01",type:"MySQL",sid:3,port:3306,status:"running",m1:"120",m1l:"连接数",m2:"85%",m2l:"磁盘",m3:"99.8%",m3l:"可用率",alert:null},{id:4,name:"MySQL-02",type:"MySQL",sid:9,port:3306,status:"running",m1:"80",m1l:"连接数",m2:"55%",m2l:"磁盘",m3:"99.9%",m3l:"可用率",alert:null},{id:5,name:"Kafka-01",type:"Kafka",sid:5,port:9092,status:"running",m1:"1.2K/s",m1l:"吞吐",m2:"3",m2l:"Lag",m3:"99.9%",m3l:"可用率",alert:null},{id:6,name:"Nginx-01",type:"Nginx",sid:1,port:80,status:"running",m1:"256",m1l:"连接数",m2:"5K/s",m2l:"RPS",m3:"99.99%",m3l:"可用率",alert:null}],alerts:[{id:632,title:"app-server-02 CPU 使用率超过 85%",level:"critical",src:"Agent",sid:2,status:"active",cnt:8,time:"2分钟前"},{id:630,title:"app-server-02 内存使用率超过 90%",level:"critical",src:"Agent",sid:2,status:"active",cnt:5,time:"5分钟前"},{id:631,title:"order-service 进程无响应",level:"warning",src:"Agent",sid:2,status:"active",cnt:3,time:"12分钟前"},{id:628,title:"Redis-01 连接数达到上限 80%",level:"warning",src:"Agent",sid:4,status:"active",cnt:2,time:"18分钟前"},{id:629,title:"db-server-01 磁盘使用率超过 80%",level:"info",src:"Agent",sid:3,status:"active",cnt:1,time:"30分钟前"},{id:625,title:"api-gateway HTTP 5xx 率已恢复",level:"info",src:"Agent",sid:1,status:"recovered",cnt:0,time:"1小时前"},{id:620,title:"supply-chain-api HTTP 5xx 偶发",level:"warning",src:"Agent",sid:7,status:"recovered",cnt:0,time:"3小时前"},{id:615,title:"Kafka-01 消费延迟突增",level:"warning",src:"Agent",sid:5,status:"recovered",cnt:0,time:"6小时前"}],users:[{id:1,un:"admin",name:"管理员",role:"超级管理员",phone:"138xxxx1234",fs:"ou_001",ch:"飞书+短信",on:true},{id:2,un:"zhangsan",name:"张三",role:"运维",phone:"138xxxx5678",fs:"ou_002",ch:"飞书+短信",on:true},{id:3,un:"lisi",name:"李四",role:"研发负责人",phone:"139xxxx9012",fs:"ou_003",ch:"飞书+短信",on:true},{id:4,un:"wangwu",name:"王五",role:"运维",phone:"137xxxx3456",fs:"ou_004",ch:"飞书",on:true}],scheds:[{id:1,name:"server-daily-patrol",cron:"0 */30 * * * ?",freq:"每30分钟",nx:"14:30",ls:"14:00",rs:"3异常",on:true},{id:2,name:"jar-health-patrol",cron:"0 */10 * * * ?",freq:"每10分钟",nx:"14:20",ls:"14:10",rs:"全量通过",on:true},{id:3,name:"middleware-check",cron:"0 0 * * * ?",freq:"每小时",nx:"15:00",ls:"14:00",rs:"1异常",on:true},{id:4,name:"daily-report",cron:"0 0 8 * * ?",freq:"每日08:00",nx:"明日08:00",ls:"今日08:00",rs:"已生成",on:false}]};
+let curP='dashboard',curD=null;
+const getS=id=>D.servers.find(s=>s.id===id);
+const getP=id=>D.projects.find(p=>p.id===id);
+const tg=(c,t)=>'<span class="tg tg-'+c+'">'+t+'</span>';
+const dt=c=>'<span class="dot dot-'+c+'"></span>';
+const pb=(v)=>{const c=v>80?'r':v>60?'y':'g';return '<span class="pb"><span class="pf pf-'+c+'" style="width:'+v+'%"></span></span> <span style="font-size:10px">'+v+'%</span>'};
+function toast(m,e){const t=document.getElementById('toast');t.textContent=m;t.className='toast on'+(e?' err':'');setTimeout(()=>t.className='toast',2200)}
+function nav(p,d){curP=p;curD=d||null;render()}
+function showModal(title,body,w){document.getElementById('modal-root').innerHTML='<div class="modal-bg on" onclick="if(event.target===this)closeModal()"><div class="modal'+(w?' w700':'')+'"><div class="mh"><h3>'+title+'</h3><button class="btn btn-g btn-sm" onclick="closeModal()">✕</button></div><div class="mb">'+body+'</div></div></div>'}
+function closeModal(){document.getElementById('modal-root').innerHTML=''}
+function formField(label,name,val,type,opts){if(type==='select'){let o='<select class="fi" name="'+name+'">';(opts||[]).forEach(v=>o+='<option'+(v===val?' selected':'')+'>'+v+'</option>');return o+'</select>'}return '<input class="fi" name="'+name+'" value="'+(val||'')+'" type="'+(type||'text')+'">'}
+function statusT(s){return s==='running'?tg('s','运行中'):s==='error'?tg('e','异常'):s==='stopped'?tg('i','已停止'):s==='active'?tg('e','活跃'):s==='recovered'?tg('s','已恢复'):tg('i',s)}
+function sDot(s){return s==='online'?dt('ok')+'在线':s==='warning'?dt('wn')+'告警':dt('off')+'离线'}
+function levelT(l){return l==='critical'?tg('e','严重'):l==='warning'?tg('w','警告'):tg('i','信息')}
+
+function render(){document.getElementById('app').innerHTML=layout();document.querySelectorAll('.ni').forEach(n=>n.classList.toggle('on',n.dataset.p===curP))}
+function layout(){return '<div class="app">'+sidebar()+'<div class="main">'+header()+content()+'</div></div>'}
+function sidebar(){const g=[{g:'概览',i:[{p:'dashboard',i:'📊',t:'运维态势'}]},{g:'资源管理',i:[{p:'projects',i:'📁',t:'项目管理'},{p:'servers',i:'🖥️',t:'服务器管理'},{p:'apps',i:'📦',t:'应用服务管理'},{p:'middleware',i:'⚙️',t:'中间件管理'}]},{g:'监控告警',i:[{p:'monitor',i:'📡',t:'实时监控'},{p:'alerts',i:'🚨',t:'告警中心',b:D.alerts.filter(a=>a.status==='active').length}]},{g:'智能巡检',i:[{p:'patrol',i:'🔍',t:'巡检编排'},{p:'schedule',i:'⏰',t:'定时调度'},{p:'report',i:'📋',t:'巡检报告'}]},{g:'AI 智能体',i:[{p:'aichat',i:'🤖',t:'智能助手'},{p:'llm',i:'🧠',t:'LLM 策略'}]},{g:'通知&系统',i:[{p:'notify',i:'📤',t:'通知管理'},{p:'system',i:'🔧',t:'系统设置'}]}];let h='<aside class="sb"><div class="logo"><div class="logo-i">OG</div><div><div class="logo-t">OpsGuard</div><div class="logo-s">智能运维监控平台</div></div></div><nav class="nav">';g.forEach(gr=>{h+='<div class="ng"><div class="ng-t">'+gr.g+'</div>';gr.i.forEach(it=>{h+='<div class="ni" data-p="'+it.p+'" onclick="nav(\''+it.p+'\')"><span class="ni-i">'+it.i+'</span>'+it.t+(it.b?'<span class="nb">'+it.b+'</span>':'')+'</div>'});h+='</div>'});return h+'</nav></aside>'}
+function header(){const nm={dashboard:'运维态势',projects:'项目管理','pservers':'项目服务器',servers:'服务器管理','sdetail':'服务器详情',apps:'应用服务',middleware:'中间件管理',monitor:'实时监控',alerts:'告警中心',patrol:'巡检编排',schedule:'定时调度',report:'巡检报告',aichat:'智能助手',llm:'LLM策略',notify:'通知管理',system:'系统设置'};let bc='<span class="bclk" onclick="nav(\'dashboard\')">OpsGuard</span>';if(curP==='pservers'){const p=getP(curD);bc+=' / <span class="bclk" onclick="nav(\'projects\')">项目管理</span> / <b>'+p.name+'</b>'}else if(curP==='sdetail'){const s=getS(curD);bc+=' / <span class="bclk" onclick="nav(\'servers\')">服务器管理</span> / <b>'+s.name+'</b>'}else bc+=' / <b>'+(nm[curP]||curP)+'</b>';return '<header class="hd"><div class="bc">'+bc+'</div><div class="av">管</div></header>'}
+function content(){switch(curP){case'dashboard':return pgDash();case'projects':return pgProj();case'pservers':return pgPServers();case'servers':return pgSrv();case'sdetail':return pgSDetail();case'apps':return pgApps();case'middleware':return pgMW();case'monitor':return pgMon();case'alerts':return pgAlert();case'patrol':return pgPatrol();case'schedule':return pgSch();case'report':return pgRpt();case'aichat':return pgAI();case'llm':return pgLLM();case'notify':return pgNotify();case'system':return pgSys();default:return''}}
+
+// ===== PAGE: Dashboard =====
+function pgDash(){const ac=D.alerts.filter(a=>a.status==='active').length;const on=D.servers.filter(s=>s.status!=='offline').length;return `
+<div class="sr">
+  <div class="sc" onclick="nav('projects')"><div class="sc-l">📁 纳管项目</div><div class="sc-v" style="color:var(--if)">${D.projects.length}</div><div class="sc-d">含服务器 ${D.servers.length} 台</div></div>
+  <div class="sc" onclick="nav('servers')"><div class="sc-l">🖥️ 在线服务器</div><div class="sc-v" style="color:var(--ok)">${on}</div><div class="sc-d">离线 ${D.servers.length-on} 台</div></div>
+  <div class="sc" onclick="nav('apps')"><div class="sc-l">📦 应用服务</div><div class="sc-v" style="color:var(--wn)">${D.apps.length}</div><div class="sc-d">JAR 包 ${D.apps.filter(a=>a.type==='JAR').length} 个</div></div>
+  <div class="sc" onclick="nav('alerts')"><div class="sc-l">🚨 活跃告警</div><div class="sc-v" style="color:var(--er)">${ac}</div><div class="sc-d">严重 ${D.alerts.filter(a=>a.status==='active'&&a.level==='critical').length} · 警告 ${D.alerts.filter(a=>a.status==='active'&&a.level==='warning').length}</div></div>
+</div>
+<div class="g2">
+  <div class="c"><div class="ch"><h3>🖥️ 服务器健康概览</h3><button class="btn btn-g btn-sm" onclick="nav('servers')">查看全部 →</button></div><div class="cb">
+    ${D.servers.slice(0,5).map(s=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--bd)">
+      <div style="display:flex;align-items:center;gap:8px"><span style="font-size:14px">🖥️</span><div><div class="lk" onclick="nav('sdetail',${s.id})">${s.name}</div><div style="font-size:10px;color:var(--t3)">${s.ip} · ${s.type}</div></div></div>
+      <div style="display:flex;gap:12px"><div style="text-align:right"><div style="font-size:9px;color:var(--t3)">CPU</div><div style="font-size:12px;font-weight:600;color:${s.cpu>80?'var(--er)':s.cpu>60?'var(--wn)':'var(--ok)'}">${s.cpu}%</div></div><div style="text-align:right"><div style="font-size:9px;color:var(--t3)">内存</div><div style="font-size:12px;font-weight:600;color:${s.mem>80?'var(--er)':s.mem>60?'var(--wn)':'var(--ok)'}">${s.mem}%</div></div><div style="text-align:right"><div style="font-size:9px;color:var(--t3)">磁盘</div><div style="font-size:12px;font-weight:600;color:${s.disk>80?'var(--er)':s.disk>60?'var(--wn)':'var(--ok)'}">${s.disk}%</div></div></div>
+    </div>`).join('')}
+  </div></div>
+  <div class="c"><div class="ch"><h3>🚨 最近告警</h3><button class="btn btn-g btn-sm" onclick="nav('alerts')">查看全部 →</button></div><div class="cb"><div class="tl">
+    ${D.alerts.slice(0,6).map(a=>`<div class="tl-i"><div class="tl-d ${a.level==='critical'?'er':a.level==='warning'?'wn':'if'}"></div><div class="tl-t">${a.time}</div><div class="tl-c"><span class="lk" onclick="nav('sdetail',${a.sid})">${getS(a.sid).name}</span> ${a.title} ${levelT(a.level)}</div></div>`).join('')}
+  </div></div></div>
+</div>
+<div class="c"><div class="ch"><h3>🔍 今日巡检概览</h3><button class="btn btn-p btn-sm" onclick="nav('patrol')">立即执行全量巡检</button></div><div class="cb"><div class="g3" style="margin:0">
+  <div style="text-align:center;padding:12px"><div style="font-size:32px;font-weight:700;color:var(--ok)">24</div><div style="font-size:11px;color:var(--t3)">检查项通过</div></div>
+  <div style="text-align:center;padding:12px"><div style="font-size:32px;font-weight:700;color:var(--er)">3</div><div style="font-size:11px;color:var(--t3)">检查项异常</div></div>
+  <div style="text-align:center;padding:12px"><div style="font-size:32px;font-weight:700;color:var(--t3)">4</div><div style="font-size:11px;color:var(--t3)">巡检流程已编排</div></div>
+</div></div></div>`}
+
+// ===== PAGE: Projects =====
+function pgProj(){return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">📁 项目管理</h2><button class="btn btn-p" onclick="addProject()">+ 新增项目</button></div>
+<div class="c"><div class="ch"><h3>项目列表</h3></div><div class="tw"><table><thead><tr><th>项目名称</th><th>描述</th><th>环境</th><th>服务器数</th><th>应用服务</th><th>中间件</th><th>负责人</th><th>操作</th></tr></thead><tbody>
+${D.projects.map(p=>{const ss=D.servers.filter(s=>s.pid===p.id);const as=D.apps.filter(a=>ss.some(s=>s.id===a.sid));const ms=D.mw.filter(m=>ss.some(s=>s.id===m.sid));return `<tr>
+  <td><b class="lk" onclick="nav('pservers',${p.id})">${p.name}</b></td>
+  <td style="color:var(--t3)">${p.desc}</td>
+  <td>${p.envs.map(e=>tg('i',e)).join(' ')}</td>
+  <td><span class="lk" onclick="nav('pservers',${p.id})">${ss.length} 台</span></td>
+  <td><span class="lk" onclick="nav('apps')">${as.length} 个</span></td>
+  <td><span class="lk" onclick="nav('middleware')">${ms.length} 个</span></td>
+  <td>${p.owner}</td>
+  <td><button class="btn btn-p btn-sm" onclick="nav('pservers',${p.id})">查看服务器</button> <button class="btn btn-g btn-sm" onclick="editProject(${p.id})">编辑</button> <button class="btn btn-d btn-sm" onclick="delProject(${p.id})">删除</button></td>
+</tr>`}).join('')}
+</tbody></table></div></div>`}
+
+function addProject(){showModal('新增项目',`<div class="fg"><label>项目名称</label>${formField('','pname','','text')}</div><div class="fg"><label>描述</label>${formField('','pdesc','','text')}</div><div class="fg"><label>环境</label>${formField('','penv','','text')}</div><div class="fg"><label>负责人</label>${formField('','powner','','text')}</div><div class="mf"><button class="btn btn-p" onclick="saveProject()">保存</button><button class="btn btn-g" onclick="closeModal()">取消</button></div>`)}
+function editProject(id){const p=getP(id);showModal('编辑项目',`<div class="fg"><label>项目名称</label>${formField('','pname',p.name,'text')}</div><div class="fg"><label>描述</label>${formField('','pdesc',p.desc,'text')}</div><div class="fg"><label>环境</label>${formField('','penv',p.envs.join(','),'text')}</div><div class="fg"><label>负责人</label>${formField('','powner',p.owner,'text')}</div><div class="mf"><button class="btn btn-p" onclick="closeModal();toast('项目已更新')">保存</button><button class="btn btn-g" onclick="closeModal()">取消</button></div>`)}
+function delProject(id){if(confirm('确认删除此项目？')){D.projects=D.projects.filter(p=>p.id!==id);toast('项目已删除');render()}}
+function saveProject(){const n=document.querySelector('[name=pname]').value;if(!n){toast('请填写项目名称',1);return}D.projects.push({id:Date.now(),name:n,desc:document.querySelector('[name=pdesc]').value,envs:document.querySelector('[name=penv]').value.split(','),owner:document.querySelector('[name=powner]').value||'待分配'});closeModal();toast('项目创建成功');render()}
+
+// ===== PAGE: Project Servers =====
+function pgPServers(){const p=getP(curD);if(!p)return'<div>项目不存在</div>';const ss=D.servers.filter(s=>s.pid===p.id);const as=D.apps.filter(a=>ss.some(s=>s.id===a.sid));const ms=D.mw.filter(m=>ss.some(s=>s.id===m.sid));return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">📁 ${p.name} — 服务器列表</h2><div><button class="btn btn-p" onclick="addServer(${p.id})">+ 添加服务器</button> <button class="btn btn-g" onclick="nav('projects')">← 返回项目列表</button></div></div>
+<div class="sr">
+  <div class="sc"><div class="sc-l">服务器总数</div><div class="sc-v" style="color:var(--if)">${ss.length}</div><div class="sc-d">在线 ${ss.filter(s=>s.status!=='offline').length} · 离线 ${ss.filter(s=>s.status==='offline').length}</div></div>
+  <div class="sc"><div class="sc-l">应用服务</div><div class="sc-v" style="color:var(--wn)">${as.length}</div><div class="sc-d">运行中 ${as.filter(a=>a.status==='running').length} · 异常 ${as.filter(a=>a.status==='error').length}</div></div>
+  <div class="sc"><div class="sc-l">中间件</div><div class="sc-v" style="color:var(--ok)">${ms.length}</div><div class="sc-d">运行中 ${ms.filter(m=>m.status==='running').length}</div></div>
+  <div class="sc"><div class="sc-l">活跃告警</div><div class="sc-v" style="color:var(--er)">${D.alerts.filter(a=>a.status==='active'&&ss.some(s=>s.id===a.sid)).length}</div><div class="sc-d">涉及本项目的告警</div></div>
+</div>
+<div class="c"><div class="ch"><h3>🖥️ 服务器列表</h3></div><div class="tw"><table><thead><tr><th>状态</th><th>主机名</th><th>IP</th><th>类型</th><th>CPU</th><th>内存</th><th>磁盘</th><th>应用服务</th><th>中间件</th><th>操作</th></tr></thead><tbody>
+${ss.map(s=>{const sa=D.apps.filter(a=>a.sid===s.id);const sm=D.mw.filter(m=>m.sid===s.id);return `<tr>
+  <td>${sDot(s.status)}</td>
+  <td><b class="lk" onclick="nav('sdetail',${s.id})">${s.name}</b></td>
+  <td>${s.ip}</td><td>${tg('i',s.type)}</td>
+  <td>${pb(s.cpu)}</td><td>${pb(s.mem)}</td><td>${pb(s.disk)}</td>
+  <td>${sa.length?sa.map(a=>'<span class="lk" onclick="nav(\'apps\')">'+a.name+'</span>').join(', '):'<span style="color:var(--t3)">-</span>'}</td>
+  <td>${sm.length?sm.map(m=>'<span class="lk" onclick="nav(\'middleware\')">'+m.name+'</span>').join(', '):'<span style="color:var(--t3)">-</span>'}</td>
+  <td>${s.agent?tg('s','已安装'):tg('e','未安装')+' <button class="btn btn-s btn-sm" onclick="showAgentInstall('+s.id+')">安装Agent</button>'} <button class="btn btn-p btn-sm" onclick="nav('sdetail',${s.id})">详情</button></td>
+</tr>`}).join('')}
+</tbody></table></div></div>
+<div class="g2">
+  <div class="c"><div class="ch"><h3>📦 本项目应用服务</h3><button class="btn btn-g btn-sm" onclick="nav('apps')">查看全部 →</button></div><div class="cb">${as.length?as.map(a=>`<div style="padding:6px 0;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center"><div><span class="lk" onclick="nav('apps')">${a.name}</span> <span style="font-size:10px;color:var(--t3)">→ ${getS(a.sid).name}:${a.port}</span></div>${statusT(a.status)}</div>`).join(''):'<div style="color:var(--t3);font-size:12px">暂无应用服务</div>'}</div></div>
+  <div class="c"><div class="ch"><h3>⚙️ 本项目中间件</h3><button class="btn btn-g btn-sm" onclick="nav('middleware')">查看全部 →</button></div><div class="cb">${ms.length?ms.map(m=>`<div style="padding:6px 0;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center"><div><span class="lk" onclick="nav('middleware')">${m.name}</span> <span style="font-size:10px;color:var(--t3)">${m.type} → ${getS(m.sid).name}:${m.port}</span></div>${m.alert?tg('w','告警'):tg('s','健康')}</div>`).join(''):'<div style="color:var(--t3);font-size:12px">暂无中间件</div>'}</div></div>
+</div>`}
+
+// ===== PAGE: Servers =====
+function pgSrv(){return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">🖥️ 服务器管理</h2><button class="btn btn-p" onclick="addServer()">+ 添加服务器</button></div>
+<div class="search-bar"><input placeholder="搜索主机名 / IP..."><select><option>全部状态</option><option>在线</option><option>离线</option><option>告警中</option></select><select><option>全部类型</option><option>应用服务器</option><option>数据库服务器</option><option>缓存服务器</option><option>消息队列</option></select></div>
+<div class="c"><div class="tw"><table><thead><tr><th>状态</th><th>主机名</th><th>IP</th><th>类型</th><th>所属项目</th><th>CPU</th><th>内存</th><th>磁盘</th><th>Agent</th><th>操作</th></tr></thead><tbody>
+${D.servers.map(s=>`<tr><td>${sDot(s.status)}</td><td><b class="lk" onclick="nav('sdetail',${s.id})">${s.name}</b></td><td>${s.ip}</td><td>${tg('i',s.type)}</td><td><span class="lk" onclick="nav('pservers',${s.pid})">${getP(s.pid).name}</span></td><td>${pb(s.cpu)}</td><td>${pb(s.mem)}</td><td>${pb(s.disk)}</td><td>${s.agent?tg('s','已安装'):tg('e','未安装')}</td><td><button class="btn btn-p btn-sm" onclick="nav('sdetail',${s.id})">详情</button> <button class="btn btn-g btn-sm" onclick="toast('SSH 连接中...')">SSH</button>${s.agent?'':' <button class="btn btn-s btn-sm" onclick="showAgentInstall('+s.id+')">安装Agent</button>'}</td></tr>`).join('')}
+</tbody></table></div></div>`}
+
+function addServer(pid){showModal('添加服务器',`<div class="fr"><div class="fg"><label>主机名</label>${formField('','sname','','text')}</div><div class="fg"><label>IP 地址</label>${formField('','sip','','text')}</div></div><div class="fr"><div class="fg"><label>类型</label>${formField('','stype','应用服务器','select',['应用服务器','数据库服务器','缓存服务器','消息队列'])}</div><div class="fg"><label>所属项目</label>${formField('','spid',pid?getP(pid).name:D.projects[0].name,'select',D.projects.map(p=>p.name))}</div></div><div class="fg"><label>SSH 端口</label>${formField('','sssh','22','text')}</div><div class="fg"><label>认证方式</label>${formField('','sauth','密钥','select',['密钥','密码'])}</div><div class="mf"><button class="btn btn-p" onclick="saveServer()">保存并查看安装指南</button><button class="btn btn-g" onclick="closeModal()">取消</button></div>`)}
+function saveServer(){const n=document.querySelector('[name=sname]').value;if(!n){toast('请填写主机名',1);return}const newId=Date.now();D.servers.push({id:newId,name:n,ip:document.querySelector('[name=sip]').value||'0.0.0.0',type:document.querySelector('[name=stype]').value,status:'online',cpu:0,mem:0,disk:0,pid:D.projects[0].id,agent:false});closeModal();toast('服务器添加成功，请安装 Agent');setTimeout(()=>showAgentInstall(newId),300);render()}
+
+// ===== PAGE: Server Detail =====
+function pgSDetail(){const s=getS(curD);if(!s)return'<div>服务器不存在</div>';const sa=D.apps.filter(a=>a.sid===s.id);const sm=D.mw.filter(m=>m.sid===s.id);const al=D.alerts.filter(a=>a.sid===s.id);const p=getP(s.pid);return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">🖥️ ${s.name} — 服务器详情</h2><div><button class="btn btn-g" onclick="nav('servers')">← 返回列表</button> <button class="btn btn-p btn-sm" onclick="toast('SSH 连接中...')">SSH 终端</button></div></div>
+<div class="sr">
+  <div class="sc"><div class="sc-l">状态</div><div class="sc-v" style="font-size:18px">${sDot(s.status)}</div><div class="sc-d">${s.ip} · ${s.type}</div></div>
+  <div class="sc"><div class="sc-l">CPU 使用率</div><div class="sc-v" style="color:${s.cpu>80?'var(--er)':s.cpu>60?'var(--wn)':'var(--ok)'}">${s.cpu}%</div><div class="sc-d">${pb(s.cpu)}</div></div>
+  <div class="sc"><div class="sc-l">内存使用率</div><div class="sc-v" style="color:${s.mem>80?'var(--er)':s.mem>60?'var(--wn)':'var(--ok)'}">${s.mem}%</div><div class="sc-d">${pb(s.mem)}</div></div>
+  <div class="sc"><div class="sc-l">磁盘使用率</div><div class="sc-v" style="color:${s.disk>80?'var(--er)':s.disk>60?'var(--wn)':'var(--ok)'}">${s.disk}%</div><div class="sc-d">${pb(s.disk)}</div></div>
+</div>
+<div class="g2">
+  <div class="c"><div class="ch"><h3>📦 部署的应用服务（${sa.length}）</h3><button class="btn btn-p btn-sm" onclick="addApp(${s.id})">+ 部署应用</button></div><div class="cb">${sa.length?'<div class="tw"><table><thead><tr><th>服务名</th><th>端口</th><th>状态</th><th>堆内存</th><th>GC</th><th>HTTP 5xx</th><th>操作</th></tr></thead><tbody>'+sa.map(a=>`<tr><td><b class="lk" onclick="nav('apps')">${a.name}</b></td><td>${a.port}</td><td>${statusT(a.status)}</td><td style="font-size:10px">${a.heap}</td><td>${a.gc}</td><td style="color:${a.h5>0?'var(--er)':'var(--ok)'}">${a.h5}</td><td><button class="btn btn-g btn-sm" onclick="toast('${a.status==='running'?'正在停止...':'正在启动...'}')">${a.status==='running'?'停止':'启动'}</button></td></tr>`).join('')+'</tbody></table></div>':'<div style="color:var(--t3);font-size:12px">暂无部署的应用服务</div>'}</div></div>
+  <div class="c"><div class="ch"><h3>⚙️ 运行的中间件（${sm.length}）</h3><button class="btn btn-p btn-sm" onclick="addMW(${s.id})">+ 注册中间件</button></div><div class="cb">${sm.length?sm.map(m=>`<div style="padding:8px;border:1px solid var(--bd);border-radius:6px;margin-bottom:6px"><div style="display:flex;justify-content:space-between;align-items:center"><div><b class="lk" onclick="nav('middleware')">${m.name}</b> <span style="font-size:10px;color:var(--t3)">${m.type}:${m.port}</span></div>${m.alert?tg('w','告警'):tg('s','健康')}</div><div style="display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--t3)"><span>${m.m1l}: ${m.m1}</span><span>${m.m2l}: ${m.m2}</span><span>${m.m3l}: ${m.m3}</span></div></div>`).join(''):'<div style="color:var(--t3);font-size:12px">暂无中间件</div>'}</div></div>
+</div>
+<div class="c"><div class="ch"><h3>🚨 本机告警（${al.length}）</h3><button class="btn btn-g btn-sm" onclick="nav('alerts')">查看全部 →</button></div><div class="cb">${al.length?al.map(a=>`<div style="padding:6px 0;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center"><div>${levelT(a.level)} ${a.title}</div><div style="font-size:10px;color:var(--t3)">${a.time} · ${statusT(a.status)}</div></div>`).join(''):'<div style="color:var(--ok);font-size:12px">✅ 暂无告警</div>'}</div></div>
+<div class="c"><div class="ch"><h3>📋 基本信息</h3></div><div class="cb"><div class="g2" style="margin:0">
+  <div><div style="font-size:11px;color:var(--t3);margin-bottom:3px">所属项目</div><div><span class="lk" onclick="nav('pservers',${s.pid})">${p?p.name:'-'}</span></div></div>
+  <div><div style="font-size:11px;color:var(--t3);margin-bottom:3px">IP 地址</div><div>${s.ip}</div></div>
+  <div><div style="font-size:11px;color:var(--t3);margin-bottom:3px">服务器类型</div><div>${s.type}</div></div>
+  <div><div style="font-size:11px;color:var(--t3);margin-bottom:3px">Agent 状态</div><div>${s.agent?tg('s','已安装 · 在线'):tg('e','未安装')+' <button class="btn btn-s btn-sm" onclick="showAgentInstall('+s.id+')">安装Agent</button>'}</div></div>
+  <div><div style="font-size:11px;color:var(--t3);margin-bottom:3px">操作系统</div><div>CentOS 7.9</div></div>
+  <div><div style="font-size:11px;color:var(--t3);margin-bottom:3px">SSH 端口</div><div>22</div></div>
+</div></div></div>`}
+
+// ===== PAGE: Apps =====
+function pgApps(){return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">📦 应用服务管理</h2><button class="btn btn-p" onclick="addApp()">+ 注册应用服务</button></div>
+<div class="search-bar"><input placeholder="搜索服务名 / JAR 包路径..."><select><option>全部状态</option><option>运行中</option><option>已停止</option><option>异常</option></select></div>
+<div class="c"><div class="tw"><table><thead><tr><th>状态</th><th>服务名</th><th>类型</th><th>部署服务器</th><th>所属项目</th><th>端口</th><th>运行时长</th><th>操作</th></tr></thead><tbody>
+${D.apps.map(a=>{const s=getS(a.sid);const p=getP(s.pid);return `<tr><td>${statusT(a.status)}</td><td><b>${a.name}</b></td><td>${tg('i',a.type)}</td><td><span class="lk" onclick="nav('sdetail',${a.sid})">${s.name}</span></td><td><span class="lk" onclick="nav('pservers',${s.pid})">${p.name}</span></td><td>${a.port}</td><td>${a.status==='running'?Math.floor(Math.random()*15+1)+'d '+Math.floor(Math.random()*24)+'h':a.status==='error'?'<span style="color:var(--er)">进程无响应</span>':'-'}</td><td><button class="btn btn-g btn-sm" onclick="appDetail(${a.id})">详情</button> <button class="btn btn-${a.status==='running'?'d':'s'} btn-sm" onclick="toast('${a.status==='running'?'正在停止...':'正在启动...'}')">${a.status==='running'?'停止':'启动'}</button></td></tr>`}).join('')}
+</tbody></table></div></div>`}
+
+function addApp(sid){showModal('注册应用服务',`<div class="fr"><div class="fg"><label>服务名称</label>${formField('','aname','','text')}</div><div class="fg"><label>类型</label>${formField('','atype','JAR','select',['JAR','微服务'])}</div></div><div class="fr"><div class="fg"><label>部署服务器</label>${formField('','asid',sid?getS(sid).name:D.servers[0].name,'select',D.servers.map(s=>s.name))}</div><div class="fg"><label>端口</label>${formField('','aport','8080','text')}</div></div><div class="fg"><label>JAR 包路径</label>${formField('','apath','/opt/apps/','.jar','text')}</div><div class="fg"><label>启动参数</label>${formField('','ajvm','-Xmx512m -Xms256m','text')}</div><div class="mf"><button class="btn btn-p" onclick="closeModal();toast('应用服务注册成功')">保存</button><button class="btn btn-g" onclick="closeModal()">取消</button></div>`)}
+function appDetail(id){const a=D.apps.find(x=>x.id===id);const s=getS(a.sid);showModal(a.name+' — 应用详情',`<div class="g2" style="margin:0"><div><div style="font-size:10px;color:var(--t3)">状态</div><div style="margin-top:2px">${statusT(a.status)}</div></div><div><div style="font-size:10px;color:var(--t3)">PID</div><div style="margin-top:2px">${a.pid||'-'}</div></div><div><div style="font-size:10px;color:var(--t3)">堆内存</div><div style="margin-top:2px">${a.heap}</div></div><div><div style="font-size:10px;color:var(--t3)">GC 次数</div><div style="margin-top:2px">${a.gc}</div></div><div><div style="font-size:10px;color:var(--t3)">线程数</div><div style="margin-top:2px">${a.thr}</div></div><div><div style="font-size:10px;color:var(--t3)">HTTP 5xx</div><div style="margin-top:2px;color:${a.h5>0?'var(--er)':'var(--ok)'}">${a.h5}</div></div></div><div style="margin-top:12px"><div style="font-size:10px;color:var(--t3)">JAR 包路径</div><div style="margin-top:2px;font-size:11px;font-family:monospace">${a.path}</div></div><div style="margin-top:8px"><div style="font-size:10px;color:var(--t3)">部署服务器</div><div style="margin-top:2px"><span class="lk" onclick="closeModal();nav('sdetail',${a.sid})">${s.name} (${s.ip})</span></div></div>`,1)}
+
+// ===== PAGE: Middleware =====
+function pgMW(){return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">⚙️ 中间件管理</h2><button class="btn btn-p" onclick="addMW()">+ 注册中间件</button></div>
+<div class="g3">
+${D.mw.map(m=>{const s=getS(m.sid);const p=getP(s.pid);const ic=m.type==='Redis'?'🔴':m.type==='MySQL'?'🐬':m.type==='Kafka'?'🐪':'🌐';return `<div class="c"><div class="mc"><div class="mc-ic">${ic}</div><div class="mc-nm">${m.name}</div><div class="mc-addr"><span class="lk" onclick="nav('sdetail',${m.sid})">${s.name}</span>:${m.port} · <span class="lk" onclick="nav('pservers',${s.pid})">${p.name}</span></div><div class="mc-row"><div><div class="mc-k" style="color:${m.alert?'var(--wn)':'var(--ok)'}">${m.m1}</div><div class="mc-kl">${m.m1l}</div></div><div><div class="mc-k">${m.m2}</div><div class="mc-kl">${m.m2l}</div></div><div><div class="mc-k" style="color:var(--ok)">${m.m3}</div><div class="mc-kl">${m.m3l}</div></div></div>${m.alert?tg('w','连接数偏高'):tg('s','健康')}</div></div>`}).join('')}
+</div>`}
+
+function addMW(sid){showModal('注册中间件',`<div class="fr"><div class="fg"><label>名称</label>${formField('','mname','','text')}</div><div class="fg"><label>类型</label>${formField('','mtype','Redis','select',['Redis','MySQL','Kafka','Nginx','RabbitMQ'])}</div></div><div class="fr"><div class="fg"><label>部署服务器</label>${formField('','msid',sid?getS(sid).name:D.servers[0].name,'select',D.servers.map(s=>s.name))}</div><div class="fg"><label>端口</label>${formField('','mport','6379','text')}</div></div><div class="mf"><button class="btn btn-p" onclick="closeModal();toast('中间件注册成功')">保存</button><button class="btn btn-g" onclick="closeModal()">取消</button></div>`)}
+
+// ===== PAGE: Monitor =====
+function pgMon(){const bars=Array.from({length:30},(_,i)=>{const v=Math.random()*60+20;const c=v>80?'var(--er)':v>60?'var(--wn)':'var(--ok)';return '<div style="flex:1;height:'+v+'%;background:'+c+';border-radius:2px 2px 0 0;opacity:0.7;min-width:6px"></div>'}).join('');const bars2=Array.from({length:30},(_,i)=>{const v=Math.random()*30+50;const c=v>85?'var(--er)':v>70?'var(--wn)':'var(--ok)';return '<div style="flex:1;height:'+v+'%;background:'+c+';border-radius:2px 2px 0 0;opacity:0.7;min-width:6px"></div>'}).join('');return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">📡 实时监控</h2><div style="display:flex;gap:6px"><select class="search-bar" style="flex:none;width:auto;padding:6px 10px;font-size:11px;background:var(--bg3);border:1px solid var(--bd);border-radius:5px;color:var(--t2)"><option>全部服务器</option>${D.servers.map(s=>'<option>'+s.name+'</option>').join('')}</select><button class="btn btn-p btn-sm">刷新</button></div></div>
+<div class="g2">
+  <div class="c"><div class="ch"><h3>💻 CPU 使用率</h3><span style="font-size:10px;color:var(--t3)">1min 间隔</span></div><div class="cb"><div style="height:160px;display:flex;align-items:flex-end;gap:3px;padding-bottom:16px;border-bottom:1px solid var(--bd)">${bars}</div><div style="display:flex;justify-content:space-between;margin-top:4px"><span style="font-size:9px;color:var(--t3)">60min ago</span><span style="font-size:9px;color:var(--t3)">now</span></div></div></div>
+  <div class="c"><div class="ch"><h3>🧠 内存使用率</h3><span style="font-size:10px;color:var(--t3)">1min 间隔</span></div><div class="cb"><div style="height:160px;display:flex;align-items:flex-end;gap:3px;padding-bottom:16px;border-bottom:1px solid var(--bd)">${bars2}</div><div style="display:flex;justify-content:space-between;margin-top:4px"><span style="font-size:9px;color:var(--t3)">60min ago</span><span style="font-size:9px;color:var(--t3)">now</span></div></div></div>
+</div>
+<div class="c"><div class="ch"><h3>📦 JAR 包进程状态</h3></div><div class="tw"><table><thead><tr><th>服务名</th><th>PID</th><th>服务器</th><th>所属项目</th><th>堆内存</th><th>GC</th><th>线程</th><th>HTTP 5xx</th><th>健康</th></tr></thead><tbody>
+${D.apps.filter(a=>a.status!=='stopped').map(a=>{const s=getS(a.sid);const p=getP(s.pid);return `<tr><td><b>${a.name}</b></td><td>${a.pid}</td><td><span class="lk" onclick="nav('sdetail',${a.sid})">${s.name}</span></td><td><span class="lk" onclick="nav('pservers',${s.pid})">${p.name}</span></td><td style="font-size:10px">${a.heap}</td><td>${a.gc}</td><td>${a.thr}</td><td style="color:${a.h5>0?'var(--er)':'var(--ok)'}">${a.h5}</td><td>${a.status==='error'?tg('e','✗ 异常'):tg('s','✓ 健康')}</td></tr>`}).join('')}
+</tbody></table></div></div>`}
+
+// ===== PAGE: Alerts =====
+function pgAlert(){const ac=D.alerts.filter(a=>a.status==='active');return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">🚨 告警中心</h2><div><button class="btn btn-g btn-sm" onclick="showAlertRule()">告警规则</button> <button class="btn btn-g btn-sm" onclick="nav('notify')">通知配置</button></div></div>
+<div class="sr">
+  <div class="sc"><div class="sc-l">活跃告警</div><div class="sc-v" style="color:var(--er)">${ac.length}</div><div class="sc-d">严重 ${ac.filter(a=>a.level==='critical').length} · 警告 ${ac.filter(a=>a.level==='warning').length}</div></div>
+  <div class="sc"><div class="sc-l">今日告警</div><div class="sc-v" style="color:var(--wn)">18</div><div class="sc-d">较昨日 +3</div></div>
+  <div class="sc"><div class="sc-l">已恢复</div><div class="sc-v" style="color:var(--ok)">13</div><div class="sc-d">平均恢复 12min</div></div>
+  <div class="sc"><div class="sc-l">通知发送</div><div class="sc-v" style="color:var(--if)">32</div><div class="sc-d">飞书 20 · 短信 12</div></div>
+</div>
+<div class="c"><div class="tw"><table><thead><tr><th>级别</th><th>告警标题</th><th>来源</th><th>服务器</th><th>所属项目</th><th>状态</th><th>次数</th><th>最近触发</th><th>操作</th></tr></thead><tbody>
+${D.alerts.map(a=>{const s=getS(a.sid);const p=getP(s.pid);return `<tr><td>${levelT(a.level)}</td><td><b>${a.title}</b></td><td>${a.src}</td><td><span class="lk" onclick="nav('sdetail',${a.sid})">${s.name}</span></td><td><span class="lk" onclick="nav('pservers',${s.pid})">${p.name}</span></td><td>${statusT(a.status)}</td><td>${a.cnt}</td><td style="font-size:10px">${a.time}</td><td>${a.status==='active'?'<button class="btn btn-g btn-sm" onclick="toast(\'已认领\')">认领</button> <button class="btn btn-g btn-sm" onclick="toast(\'已屏蔽\')">屏蔽</button> <button class="btn btn-p btn-sm" onclick="deepDive('+a.id+')">深度排查</button>':'<button class="btn btn-g btn-sm" onclick="deepDive('+a.id+')">查看排查</button>'}</td></tr>`}).join('')}
+</tbody></table></div></div>
+<div class="dd" style="margin-top:14px"><div class="dd-t">🔍 AI 深度排查 — app-server-02 CPU 使用率超过 85%</div><div class="g2" style="margin:0"><div><div style="font-size:11px;font-weight:600;margin-bottom:8px;color:var(--t2)">📊 证据链（MCP 工具采集）</div><div class="ir fail"><strong>top 采集</strong>：java 进程 PID=12346 占用 CPU 89%，线程数 198</div><div class="ir fail"><strong>jstack 分析</strong>：150+ 线程 BLOCKED 在 OrderService.processPayment()</div><div class="ir fail"><strong>GC 日志</strong>：Full GC 频率 5次/min，STW 平均 1.2s</div><div class="ir"><strong>日志检索</strong>：大量 "Connection pool exhausted" ERROR</div></div><div><div style="font-size:11px;font-weight:600;margin-bottom:8px;color:var(--t2)">🧠 LLM 根因分析（GPT-4o）</div><div style="background:var(--bg3);border-radius:6px;padding:12px;font-size:11px;line-height:1.7"><p><strong>根因：</strong>order-service 数据库连接池耗尽 → 线程阻塞</p><p style="margin-top:6px"><strong>因果链：</strong>高并发 → 连接池满 → 线程 BLOCKED → CPU 飙升 → GC 频繁</p><p style="margin-top:6px"><strong>建议：</strong></p><ol style="padding-left:16px;margin-top:2px"><li>临时：重启 order-service 释放阻塞线程</li><li>短期：连接池 max-size 从 20 调至 50</li><li>长期：优化慢 SQL，引入读写分离</li></ol></div></div></div></div>`}
+
+function deepDive(id){nav('alerts');toast('正在调 GPT-4o + MCP 工具进行深度排查...')}
+function showAlertRule(){showModal('告警规则配置',`<div class="tw"><table><thead><tr><th>规则名</th><th>指标</th><th>条件</th><th>级别</th><th>启用</th><th>操作</th></tr></thead><tbody><tr><td>CPU 过高</td><td>cpu_usage</td><td>> 85% 持续 2min</td><td>${tg('e','严重')}</td><td><div class="tgl on" onclick="this.classList.toggle('on')"></div></td><td><button class="btn btn-g btn-sm">编辑</button></td></tr><tr><td>内存过高</td><td>mem_usage</td><td>> 90% 持续 2min</td><td>${tg('e','严重')}</td><td><div class="tgl on" onclick="this.classList.toggle('on')"></div></td><td><button class="btn btn-g btn-sm">编辑</button></td></tr><tr><td>磁盘过高</td><td>disk_usage</td><td>> 80%</td><td>${tg('w','警告')}</td><td><div class="tgl on" onclick="this.classList.toggle('on')"></div></td><td><button class="btn btn-g btn-sm">编辑</button></td></tr><tr><td>进程无响应</td><td>pid_alive</td><td>== false</td><td>${tg('w','警告')}</td><td><div class="tgl on" onclick="this.classList.toggle('on')"></div></td><td><button class="btn btn-g btn-sm">编辑</button></td></tr><tr><td>HTTP 5xx</td><td>http_5xx_rate</td><td>> 10/min</td><td>${tg('w','警告')}</td><td><div class="tgl on" onclick="this.classList.toggle('on')"></div></td><td><button class="btn btn-g btn-sm">编辑</button></td></tr></tbody></table></div><div class="mf"><button class="btn btn-p" onclick="closeModal();toast('规则已保存')">保存</button><button class="btn btn-g" onclick="closeModal()">关闭</button></div>`,1)}
+
+// ===== PAGE: Patrol =====
+function pgPatrol(){return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">🔍 巡检编排（YAML 声明式）</h2><button class="btn btn-p" onclick="addPatrol()">+ 新建巡检流程</button></div>
+<div class="g2">
+  <div class="c"><div class="ch"><h3>📝 巡检流程定义</h3><div><button class="btn btn-g btn-sm" onclick="toast('YAML 校验通过')">校验</button> <button class="btn btn-p btn-sm" onclick="toast('流程已保存')">保存</button></div></div><div class="cb"><div class="ym"><span class="yc"># 服务器日常巡检流程</span>
+<span class="yk">name</span>: <span class="ys">server-daily-patrol</span>
+<span class="yk">description</span>: <span class="ys">服务器/应用/中间件日常巡检</span>
+<span class="yk">schedule</span>:
+  <span class="yk">cron</span>: <span class="ys">"0 */30 * * * ?"</span>  <span class="yc"># 每30分钟</span>
+  <span class="yk">enabled</span>: <span class="yb">true</span>
+
+<span class="yk">steps</span>:
+  <span class="yc"># 阶段1: 探测（纯工具+规则，不调 LLM）</span>
+  - <span class="yk">name</span>: <span class="ys">collect-metrics</span>
+    <span class="yk">type</span>: <span class="ys">probe</span>
+    <span class="yk">tool</span>: <span class="ys">ssh_metrics</span>
+    <span class="yk">params</span>:
+      <span class="yk">targets</span>: <span class="ys">"$&#123;servers.all&#125;"</span>
+      <span class="yk">metrics</span>: [<span class="ys">cpu</span>, <span class="ys">memory</span>, <span class="ys">disk</span>]
+    <span class="yk">thresholds</span>:
+      <span class="yk">cpu</span>: <span class="yn">85</span>
+      <span class="yk">memory</span>: <span class="yn">90</span>
+      <span class="yk">disk</span>: <span class="yn">80</span>
+
+  - <span class="yk">name</span>: <span class="ys">check-jar-health</span>
+    <span class="yk">type</span>: <span class="ys">probe</span>
+    <span class="yk">tool</span>: <span class="ys">jar_health_check</span>
+    <span class="yk">params</span>:
+      <span class="yk">targets</span>: <span class="ys">"$&#123;apps.all&#125;"</span>
+      <span class="yk">checks</span>: [<span class="ys">pid_alive</span>, <span class="ys">heap_usage</span>, <span class="ys">gc_count</span>]
+
+  <span class="yc"># 阶段2: 异常时调 LLM 生成告警</span>
+  - <span class="yk">name</span>: <span class="ys">generate-alert</span>
+    <span class="yk">type</span>: <span class="ys">condition</span>
+    <span class="yk">condition</span>: <span class="ys">"$&#123;steps.*.anomalies.size() > 0&#125;"</span>
+    <span class="yk">action</span>:
+      <span class="yk">llm</span>: <span class="ys">qwen-plus</span>
+      <span class="yk">prompt</span>: <span class="ys">"根据异常数据生成告警通知"</span>
+      <span class="yk">notify</span>: [<span class="ys">feishu</span>, <span class="ys">sms</span>]
+
+  <span class="yc"># 阶段3: 严重告警深度排查</span>
+  - <span class="yk">name</span>: <span class="ys">deep-investigate</span>
+    <span class="yk">type</span>: <span class="ys">condition</span>
+    <span class="yk">condition</span>: <span class="ys">"$&#123;alerts.severity == 'critical'&#125;"</span>
+    <span class="yk">action</span>:
+      <span class="yk">llm</span>: <span class="ys">gpt-4o</span>
+      <span class="yk">mcp_tools</span>: [<span class="ys">jstack</span>, <span class="ys">gc_log</span>, <span class="ys">log_search</span>]
+      <span class="yk">notify</span>: [<span class="ys">feishu</span>, <span class="ys">sms</span>]</div></div></div>
+  <div class="c"><div class="ch"><h3>🔄 执行流程</h3></div><div class="cb"><div style="display:flex;flex-direction:column;gap:10px">
+    <div style="border:1px solid var(--bd);border-radius:8px;padding:12px;display:flex;align-items:center;gap:10px"><span style="font-size:18px">📡</span><div><div style="font-weight:600;font-size:12px">探测阶段</div><div style="font-size:10px;color:var(--t3)">SSH 采集指标 + 规则判断 · <b style="color:var(--ok)">不调 LLM</b></div></div></div>
+    <div style="text-align:center;color:var(--t3);font-size:14px">↓ 无异常跳过</div>
+    <div style="border:1px solid rgba(239,68,68,.3);background:rgba(239,68,68,.05);border-radius:8px;padding:12px;display:flex;align-items:center;gap:10px"><span style="font-size:18px">🚨</span><div><div style="font-weight:600;font-size:12px;color:var(--er)">告警阶段</div><div style="font-size:10px;color:var(--t3)">qwen-plus 生成告警摘要 → 飞书/短信通知</div></div></div>
+    <div style="text-align:center;color:var(--t3);font-size:14px">↓ 仅严重告警</div>
+    <div style="border:1px solid rgba(79,110,247,.3);background:rgba(79,110,247,.05);border-radius:8px;padding:12px;display:flex;align-items:center;gap:10px"><span style="font-size:18px">🧠</span><div><div style="font-weight:600;font-size:12px;color:var(--pl)">深度排查</div><div style="font-size:10px;color:var(--t3)">gpt-4o + MCP 工具 · 根因分析 + 解决方案</div></div></div>
+    <div style="text-align:center;color:var(--t3);font-size:14px">↓ 周期汇总</div>
+    <div style="border:1px solid rgba(34,197,94,.3);background:rgba(34,197,94,.05);border-radius:8px;padding:12px;display:flex;align-items:center;gap:10px"><span style="font-size:18px">📋</span><div><div style="font-weight:600;font-size:12px;color:var(--ok)">报告阶段</div><div style="font-size:10px;color:var(--t3)">qwen-plus 生成巡检报告 → 飞书/短信发送</div></div></div>
+  </div></div></div>
+</div>`}
+
+function addPatrol(){showModal('新建巡检流程',`<div class="fg"><label>流程名称</label>${formField('','ptname','','text')}</div><div class="fg"><label>描述</label>${formField('','ptdesc','','text')}</div><div class="fr"><div class="fg"><label>Cron 表达式</label>${formField('','ptcron','0 */30 * * * ?','text')}</div><div class="fg"><label>启用</label>${formField('','pton','true','select',['true','false'])}</div></div><div class="mf"><button class="btn btn-p" onclick="closeModal();toast('巡检流程已创建')">创建</button><button class="btn btn-g" onclick="closeModal()">取消</button></div>`)}
+
+// ===== PAGE: Schedule =====
+function pgSch(){return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">⏰ 定时调度引擎（内置）</h2><span style="font-size:10px;color:var(--ok)">不依赖外部 XXL-Job，调度引擎内置</span></div>
+<div class="c"><div class="tw"><table><thead><tr><th>启用</th><th>巡检流程</th><th>Cron</th><th>频率</th><th>下次执行</th><th>最近执行</th><th>状态</th><th>操作</th></tr></thead><tbody>
+${D.scheds.map(s=>`<tr><td><div class="tgl${s.on?' on':''}" onclick="this.classList.toggle('on');toast(this.classList.contains('on')?'已启用':'已禁用')"></div></td><td><b>${s.name}</b></td><td style="font-family:monospace;font-size:10px">${s.cron}</td><td>${s.freq}</td><td>${s.nx}</td><td>${s.ls}</td><td>${s.rs.includes('异常')?tg('w',s.rs):tg('s',s.rs)}</td><td><button class="btn btn-g btn-sm" onclick="showSchLog('${s.name}')">记录</button> <button class="btn btn-p btn-sm" onclick="toast('正在执行 ${s.name}...')">立即执行</button></td></tr>`).join('')}
+</tbody></table></div></div>`}
+
+function showSchLog(name){showModal(name+' — 执行记录',`<div class="tw"><table><thead><tr><th>执行时间</th><th>耗时</th><th>结果</th><th>异常项</th><th>操作</th></tr></thead><tbody><tr><td>14:00:00</td><td>12s</td><td>${tg('w','3异常')}</td><td>CPU过高/内存过高/进程无响应</td><td><button class="btn btn-g btn-sm" onclick="nav('report')">查看报告</button></td></tr><tr><td>13:30:00</td><td>8s</td><td>${tg('s','全量通过')}</td><td>-</td><td><button class="btn btn-g btn-sm" onclick="nav('report')">查看报告</button></td></tr><tr><td>13:00:00</td><td>10s</td><td>${tg('w','1异常')}</td><td>Redis连接数偏高</td><td><button class="btn btn-g btn-sm" onclick="nav('report')">查看报告</button></td></tr></tbody></table></div><div class="mf"><button class="btn btn-g" onclick="closeModal()">关闭</button></div>`,1)}
+
+// ===== PAGE: Report =====
+function pgRpt(){return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">📋 巡检报告</h2><div><select style="background:var(--bg3);border:1px solid var(--bd);border-radius:5px;padding:5px 10px;color:var(--t2);font-size:11px"><option>全部流程</option><option>server-daily-patrol</option><option>jar-health-patrol</option></select></div></div>
+<div class="c"><div class="ch"><h3>📊 server-daily-patrol — 2026-08-01 14:00</h3>${tg('w','3 项异常')}</div><div class="cb">
+  <div class="ir pass"><div style="display:flex;justify-content:space-between"><div><strong>collect-metrics</strong> — 12台服务器指标采集</div>${tg('s','9 通过')}</div></div>
+  <div class="ir fail"><div style="display:flex;justify-content:space-between"><div><strong>collect-metrics</strong> — app-server-02 CPU 89% (阈值85%)</div>${tg('e','异常')}</div></div>
+  <div class="ir fail"><div style="display:flex;justify-content:space-between"><div><strong>collect-metrics</strong> — app-server-02 内存 91% (阈值90%)</div>${tg('e','异常')}</div></div>
+  <div class="ir fail"><div style="display:flex;justify-content:space-between"><div><strong>check-jar-health</strong> — order-service 进程无响应</div>${tg('e','异常')}</div></div>
+  <div class="ir pass"><div style="display:flex;justify-content:space-between"><div><strong>check-jar-health</strong> — 其他 JAR 包健康检查</div>${tg('s','全量通过')}</div></div>
+  <div class="ir pass"><div style="display:flex;justify-content:space-between"><div><strong>check-middleware</strong> — Redis/MySQL/Kafka 状态</div>${tg('w','1 警告')}</div></div>
+</div></div>
+<div class="c"><div class="ch"><h3>🤖 AI 巡检摘要（qwen-plus 生成）</h3></div><div class="cb" style="line-height:1.7;font-size:12px"><p>本次巡检于 2026-08-01 14:00 执行，共检查 <b>12 台服务器、${D.apps.length} 个应用服务、${D.mw.length} 个中间件实例</b>。</p><p style="margin-top:6px">发现 <b style="color:var(--er)">3 项异常</b>：</p><ol style="padding-left:16px;margin-top:4px"><li><b>app-server-02</b> CPU 89%/内存 91%，资源严重不足，建议扩容</li><li><b>order-service</b> 进程无响应，疑似连接池耗尽，建议重启并调参</li><li><b>Redis-01</b> 连接数接近上限，建议评估扩容</li></ol><p style="margin-top:6px">整体健康度 <b style="color:var(--wn)">87%</b>，较上次下降 5%。</p></div></div>`}
+
+// ===== PAGE: AI Chat =====
+function pgAI(){return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">🤖 智能助手</h2><span style="font-size:10px;color:var(--t3)">当前模型：qwen-plus · 可在 LLM 策略中切换</span></div>
+<div class="c"><div class="cb">
+  <div class="chat-m" id="chatMsgs">
+    <div class="chat-msg u">app-server-02 为什么 CPU 这么高？</div>
+    <div class="chat-msg b">我来帮你排查 app-server-02 的 CPU 异常。正在调用 MCP 工具采集信息...<br><br>📊 <b>采集结果：</b><br>• top 显示 java 进程 (PID=12346) CPU 占用 89%<br>• jstack 发现 150+ 线程 BLOCKED 在 OrderService.processPayment()<br>• GC 日志显示 Full GC 5次/min，STW 1.2s<br>• 应用日志大量 "Connection pool exhausted" ERROR<br><br>🔍 <b>根因分析：</b><br>order-service 数据库连接池耗尽 → 线程阻塞等待连接 → CPU 上下文切换频繁 → GC 压力增大<br><br>💡 <b>建议：</b><br>1. 立即重启 order-service 释放阻塞线程<br>2. 将连接池 max-size 从 20 调至 50<br>3. 排查慢 SQL 并优化<br>4. 考虑引入读写分离降低主库压力</div>
+    <div class="chat-msg u">帮我重启 order-service</div>
+    <div class="chat-msg b">好的，正在通过 MCP SSH 工具执行重启...<br><br>✅ <b>重启完成</b><br>• 已停止进程 PID=12346<br>• 已启动新进程 PID=12580<br>• 健康检查通过，服务已恢复正常<br>• CPU 使用率已降至 34%<br><br>📤 已通过飞书机器人通知运维组，短信通知研发负责人。</div>
+  </div>
+  <div class="chat-in"><input id="chatInput" placeholder="输入问题，如：查看 app-server-01 磁盘使用情况..." onkeydown="if(event.key==='Enter')sendChat()"><button class="btn btn-p" onclick="sendChat()">发送</button></div>
+</div></div>`}
+
+function sendChat(){const inp=document.getElementById('chatInput');const msg=inp.value.trim();if(!msg)return;const box=document.getElementById('chatMsgs');box.innerHTML+='<div class="chat-msg u">'+msg+'</div>';inp.value='';setTimeout(()=>{box.innerHTML+='<div class="chat-msg b">收到指令，正在分析...<br><br>📌 已完成初步排查，详细结果请查看对应模块。如需进一步操作，请告诉我。</div>';box.scrollTop=box.scrollHeight},800);box.scrollTop=box.scrollHeight}
+
+// ===== PAGE: LLM =====
+function pgLLM(){return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">🧠 分层调 LLM 策略</h2><span style="font-size:10px;color:var(--t3)">核心：探测不调 LLM，异常才调 LLM，汇总才调 LLM</span></div>
+<div class="c" style="margin-bottom:14px"><div class="cb"><div style="display:flex;align-items:center;gap:8px;justify-content:center;flex-wrap:wrap">
+  <div style="border:1px solid var(--bd);border-radius:8px;padding:14px 18px;text-align:center;min-width:140px"><div style="font-size:20px">📡</div><div style="font-size:12px;font-weight:600;margin-top:4px">探测阶段</div><div style="font-size:10px;color:var(--t3);margin-top:2px">纯工具+规则<br><b style="color:var(--ok)">不调 LLM</b></div></div>
+  <div style="color:var(--t3);font-size:18px">→</div>
+  <div style="border:1px solid rgba(239,68,68,.3);background:rgba(239,68,68,.05);border-radius:8px;padding:14px 18px;text-align:center;min-width:140px"><div style="font-size:20px">🚨</div><div style="font-size:12px;font-weight:600;margin-top:4px;color:var(--er)">告警生成</div><div style="font-size:10px;color:var(--t3);margin-top:2px">qwen-plus 轻量模型<br><b style="color:var(--wn)">低成本低延迟</b></div></div>
+  <div style="color:var(--t3);font-size:18px">→</div>
+  <div style="border:1px solid rgba(79,110,247,.3);background:rgba(79,110,247,.05);border-radius:8px;padding:14px 18px;text-align:center;min-width:140px"><div style="font-size:20px">🧠</div><div style="font-size:12px;font-weight:600;margin-top:4px;color:var(--pl)">深度排查</div><div style="font-size:10px;color:var(--t3);margin-top:2px">gpt-4o + MCP 工具<br><b style="color:var(--pl)">高精度根因分析</b></div></div>
+  <div style="color:var(--t3);font-size:18px">→</div>
+  <div style="border:1px solid rgba(34,197,94,.3);background:rgba(34,197,94,.05);border-radius:8px;padding:14px 18px;text-align:center;min-width:140px"><div style="font-size:20px">📋</div><div style="font-size:12px;font-weight:600;margin-top:4px;color:var(--ok)">周期报告</div><div style="font-size:10px;color:var(--t3);margin-top:2px">qwen-plus 生成摘要<br><b style="color:var(--ok)">定时汇总</b></div></div>
+</div></div></div>
+<div class="c"><div class="ch"><h3>⚙️ LLM 模型配置</h3><button class="btn btn-p btn-sm" onclick="addLLM()">+ 添加模型</button></div><div class="tw"><table><thead><tr><th>场景</th><th>模型</th><th>调用时机</th><th>平均 Token</th><th>平均延迟</th><th>月成本</th><th>状态</th><th>操作</th></tr></thead><tbody>
+<tr><td>${tg('e','告警生成')}</td><td><b>qwen-plus</b></td><td>探测发现异常时</td><td>~500</td><td>1.2s</td><td style="color:var(--ok)">¥50</td><td>${tg('s','已启用')}</td><td><button class="btn btn-g btn-sm" onclick="editLLM('告警生成')">编辑</button></td></tr>
+<tr><td>${tg('e','深度排查')}</td><td><b>gpt-4o</b></td><td>严重告警触发时</td><td>~2000</td><td>3.5s</td><td style="color:var(--wn)">¥300</td><td>${tg('s','已启用')}</td><td><button class="btn btn-g btn-sm" onclick="editLLM('深度排查')">编辑</button></td></tr>
+<tr><td>${tg('s','周期报告')}</td><td><b>qwen-plus</b></td><td>每日/每周汇总</td><td>~1500</td><td>2.0s</td><td style="color:var(--ok)">¥30</td><td>${tg('s','已启用')}</td><td><button class="btn btn-g btn-sm" onclick="editLLM('周期报告')">编辑</button></td></tr>
+<tr><td>${tg('p','智能助手')}</td><td><b>qwen-plus</b></td><td>用户主动对话</td><td>~800</td><td>1.5s</td><td style="color:var(--ok)">¥80</td><td>${tg('s','已启用')}</td><td><button class="btn btn-g btn-sm" onclick="editLLM('智能助手')">编辑</button></td></tr>
+</tbody></table></div></div>`}
+
+function addLLM(){showModal('添加 LLM 模型',`<div class="fr"><div class="fg"><label>场景</label>${formField('','lscene','','select',['告警生成','深度排查','周期报告','智能助手'])}</div><div class="fg"><label>模型</label>${formField('','lmodel','','select',['qwen-plus','qwen-max','gpt-4o','gpt-4o-mini','deepseek-chat','glm-4'])}</div></div><div class="fr"><div class="fg"><label>API Key</label>${formField('','lkey','','password')}</div><div class="fg"><label>Base URL</label>${formField('','lurl','','text')}</div></div><div class="mf"><button class="btn btn-p" onclick="closeModal();toast('模型配置已保存')">保存</button><button class="btn btn-g" onclick="closeModal()">取消</button></div>`)}
+function editLLM(scene){showModal('编辑 LLM — '+scene,`<div class="fr"><div class="fg"><label>场景</label>${formField('','lscene',scene,'text')}</div><div class="fg"><label>模型</label>${formField('','lmodel','qwen-plus','select',['qwen-plus','qwen-max','gpt-4o','gpt-4o-mini','deepseek-chat','glm-4'])}</div></div><div class="fr"><div class="fg"><label>API Key</label>${formField('','lkey','sk-****','password')}</div><div class="fg"><label>最大 Token</label>${formField('','lmax','2000','number')}</div></div><div class="fg"><label>Temperature</label>${formField('','ltemp','0.7','number')}</div><div class="mf"><button class="btn btn-p" onclick="closeModal();toast('配置已更新')">保存</button><button class="btn btn-g" onclick="closeModal()">取消</button></div>`)}
+
+// ===== PAGE: Notify =====
+function pgNotify(){return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">📤 通知管理</h2><button class="btn btn-p" onclick="addNotifyCh()">+ 添加通知渠道</button></div>
+<div class="g2">
+  <div class="c"><div class="ch"><h3>📢 通知渠道</h3></div><div class="cb">
+    <div class="nch"><div class="nch-i" style="background:rgba(0,120,255,.15)">🐦</div><div style="flex:1"><div class="nch-n">飞书机器人</div><div class="nch-d">Webhook: https://open.feishu.cn/open-apis/bot/v2/hook/xxx</div></div><div class="tgl on" onclick="this.classList.toggle('on')"></div></div>
+    <div class="nch"><div class="nch-i" style="background:rgba(34,197,94,.15)">💬</div><div style="flex:1"><div class="nch-n">短信通知</div><div class="nch-d">阿里云短信 · 签名：运维告警 · 模板：告警通知</div></div><div class="tgl on" onclick="this.classList.toggle('on')"></div></div>
+  </div></div>
+  <div class="c"><div class="ch"><h3>📋 通知策略</h3><button class="btn btn-g btn-sm" onclick="editNotifyPolicy()">编辑策略</button></div><div class="cb"><div class="tw"><table><thead><tr><th>告警级别</th><th>飞书</th><th>短信</th><th>接收人</th><th>升级策略</th></tr></thead><tbody>
+    <tr><td>${tg('e','严重')}</td><td>✅ 即时</td><td>✅ 即时</td><td>运维组+研发负责人</td><td>15min未认领→升级总监</td></tr>
+    <tr><td>${tg('w','警告')}</td><td>✅ 即时</td><td>✅ 每日汇总</td><td>运维组</td><td>30min未处理→短信提醒</td></tr>
+    <tr><td>${tg('i','信息')}</td><td>✅ 每日汇总</td><td>—</td><td>运维组</td><td>—</td></tr>
+  </tbody></table></div></div></div>
+</div>
+<div class="c"><div class="ch"><h3>📨 最近通知记录</h3></div><div class="tw"><table><thead><tr><th>时间</th><th>渠道</th><th>告警</th><th>接收人</th><th>状态</th></tr></thead><tbody>
+  <tr><td style="font-size:10px">14:02:15</td><td>${tg('if','飞书')}</td><td>app-server-02 CPU 超过85%</td><td>运维组群</td><td>${tg('s','已送达')}</td></tr>
+  <tr><td style="font-size:10px">14:02:16</td><td>${tg('s','短信')}</td><td>app-server-02 CPU 超过85%</td><td>张三、李四</td><td>${tg('s','已送达')}</td></tr>
+  <tr><td style="font-size:10px">14:05:10</td><td>${tg('if','飞书')}</td><td>app-server-02 内存超过90%</td><td>运维组群</td><td>${tg('s','已送达')}</td></tr>
+  <tr><td style="font-size:10px">14:05:11</td><td>${tg('s','短信')}</td><td>app-server-02 内存超过90%</td><td>张三、李四</td><td>${tg('s','已送达')}</td></tr>
+  <tr><td style="font-size:10px">13:50:00</td><td>${tg('if','飞书')}</td><td>order-service 进程无响应</td><td>运维组+研发负责人</td><td>${tg('s','已送达')}</td></tr>
+  <tr><td style="font-size:10px">08:00:00</td><td>${tg('if','飞书')}</td><td>每日巡检报告汇总</td><td>运维组群</td><td>${tg('s','已送达')}</td></tr>
+</tbody></table></div></div>`}
+
+function addNotifyCh(){showModal('添加通知渠道',`<div class="fg"><label>渠道类型</label>${formField('','ncht','飞书机器人','select',['飞书机器人','短信','钉钉机器人','企业微信机器人','邮件'])}</div><div class="fg"><label>名称</label>${formField('','nchn','','text')}</div><div class="fg"><label>Webhook / 配置</label>${formField('','nchurl','','text')}</div><div class="mf"><button class="btn btn-p" onclick="closeModal();toast('通知渠道已添加')">保存</button><button class="btn btn-g" onclick="closeModal()">取消</button></div>`)}
+function editNotifyPolicy(){showModal('编辑通知策略',`<div style="font-size:11px;line-height:1.8"><p><b style="color:var(--er)">严重告警</b>：飞书即时 + 短信即时 → 运维组+研发负责人 → 15min未认领升级至技术总监</p><p><b style="color:var(--wn)">警告</b>：飞书即时 + 短信每日汇总 → 运维组 → 30min未处理短信提醒</p><p><b style="color:var(--if)">信息</b>：飞书每日汇总 → 运维组</p></div><div class="mf"><button class="btn btn-p" onclick="closeModal();toast('策略已更新')">保存</button><button class="btn btn-g" onclick="closeModal()">关闭</button></div>`)}
+
+// ===== PAGE: System =====
+function pgSys(){return `
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h2 style="font-size:18px">🔧 系统设置</h2></div>
+<div class="tabs"><div class="tab on" onclick="this.parentElement.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));this.classList.add('on');document.getElementById('sysTab1').style.display='block';document.getElementById('sysTab2').style.display='none'">用户管理</div><div class="tab" onclick="this.parentElement.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));this.classList.add('on');document.getElementById('sysTab1').style.display='none';document.getElementById('sysTab2').style.display='block'">Agent 配置</div></div>
+<div id="sysTab1">
+  <div class="c"><div class="ch"><h3>👥 用户管理</h3><button class="btn btn-p btn-sm" onclick="addUser()">+ 添加用户</button></div><div class="tw"><table><thead><tr><th>用户名</th><th>姓名</th><th>角色</th><th>手机号</th><th>飞书ID</th><th>通知渠道</th><th>状态</th><th>操作</th></tr></thead><tbody>
+  ${D.users.map(u=>`<tr><td>${u.un}</td><td>${u.name}</td><td>${u.role==='超级管理员'?tg('p',u.role):u.role==='研发负责人'?tg('w',u.role):tg('i',u.role)}</td><td>${u.phone}</td><td style="font-size:10px">${u.fs}</td><td>${u.ch}</td><td>${u.on?tg('s','启用'):tg('e','禁用')}</td><td><button class="btn btn-g btn-sm" onclick="editUser(${u.id})">编辑</button> ${u.id!==1?'<button class="btn btn-d btn-sm" onclick="delUser('+u.id+')">删除</button>':''}</td></tr>`).join('')}
+  </tbody></table></div></div>
+</div>
+<div id="sysTab2" style="display:none">
+  <div class="c"><div class="ch"><h3>🤖 Agent 配置</h3></div><div class="cb"><div class="g2" style="margin:0">
+    <div class="fg"><label>数据采集间隔</label>${formField('','agInt','30','select',['10','30','60'])}</div>
+    <div class="fg"><label>上报地址</label>${formField('','agUrl','http://opsguard-server:8080/api/collect','text')}</div>
+    <div class="fg"><label>日志保留天数</label>${formField('','agLog','7','select',['3','7','14','30'])}</div>
+    <div class="fg"><label>SSH 超时(秒)</label>${formField('','agSSH','10','select',['5','10','30'])}</div>
+  </div><div style="margin-top:10px"><button class="btn btn-p" onclick="toast('Agent 配置已保存')">保存配置</button></div></div></div>
+</div>`}
+
+function addUser(){showModal('添加用户',`<div class="fr"><div class="fg"><label>用户名</label>${formField('','uun','','text')}</div><div class="fg"><label>姓名</label>${formField('','unm','','text')}</div></div><div class="fr"><div class="fg"><label>角色</label>${formField('','url','运维','select',['超级管理员','运维','研发负责人','运维'])}</div><div class="fg"><label>手机号</label>${formField('','uph','','text')}</div></div><div class="fr"><div class="fg"><label>飞书 ID</label>${formField('','ufs','','text')}</div><div class="fg"><label>通知渠道</label>${formField('','uch','飞书+短信','select',['飞书+短信','飞书','短信','飞书+短信+邮件'])}</div></div><div class="mf"><button class="btn btn-p" onclick="saveUser()">保存</button><button class="btn btn-g" onclick="closeModal()">取消</button></div>`)}
+function editUser(id){const u=D.users.find(x=>x.id===id);showModal('编辑用户 — '+u.name,`<div class="fr"><div class="fg"><label>用户名</label>${formField('','uun',u.un,'text')}</div><div class="fg"><label>姓名</label>${formField('','unm',u.name,'text')}</div></div><div class="fr"><div class="fg"><label>角色</label>${formField('','url',u.role,'select',['超级管理员','运维','研发负责人'])}</div><div class="fg"><label>手机号</label>${formField('','uph',u.phone,'text')}</div></div><div class="fr"><div class="fg"><label>飞书 ID</label>${formField('','ufs',u.fs,'text')}</div><div class="fg"><label>通知渠道</label>${formField('','uch',u.ch,'select',['飞书+短信','飞书','短信'])}</div></div><div class="fg"><label><input type="checkbox" ${u.on?'checked':''}> 启用</label></div><div class="mf"><button class="btn btn-p" onclick="closeModal();toast('用户信息已更新')">保存</button><button class="btn btn-g" onclick="closeModal()">取消</button></div>`)}
+function delUser(id){if(confirm('确认删除此用户？')){D.users=D.users.filter(u=>u.id!==id);toast('用户已删除');render()}}
+function saveUser(){const n=document.querySelector('[name=uun]').value;if(!n){toast('请填写用户名',1);return}D.users.push({id:Date.now(),un:n,name:document.querySelector('[name=unm]').value||n,role:document.querySelector('[name=url]').value,phone:document.querySelector('[name=uph]').value||'-',fs:document.querySelector('[name=ufs]').value||'-',ch:document.querySelector('[name=uch]').value,on:true});closeModal();toast('用户创建成功');render()}
+
+// ===== LOGIN =====
+let isLoggedIn = false;
+function renderLogin(){
+  document.getElementById('app').innerHTML = `
+  <div class="login-page">
+    <div class="login-left">
+      <div class="login-logo"><div class="login-logo-i">OG</div><div><div class="login-logo-t">OpsGuard</div><div class="login-logo-s">智能运维监控平台</div></div></div>
+      <div class="login-slogan">统一运维智能体平台<br>让协作闭环更高效</div>
+      <div class="login-desc">面向产研团队的统一运维入口，围绕服务器监控、应用管理、智能巡检、AIOps 等，沉淀从发现异常到闭环复盘的完整链路。</div>
+      <div class="login-features">
+        <div class="login-feat"><div class="login-feat-ic f1">📡</div><div><b>实时监控</b> — 服务器 CPU/内存/磁盘 + JAR 包进程状态</div></div>
+        <div class="login-feat"><div class="login-feat-ic f2">🔍</div><div><b>智能巡检</b> — YAML 编排巡检流程，定时自动执行</div></div>
+        <div class="login-feat"><div class="login-feat-ic f3">🧠</div><div><b>分层调 LLM</b> — 探测不调 LLM，异常才调，成本可控</div></div>
+        <div class="login-feat"><div class="login-feat-ic f4">🚨</div><div><b>AI 深度排查</b> — GPT-4o + MCP 自动根因分析与解决方案</div></div>
+      </div>
+    </div>
+    <div class="login-right">
+      <div class="login-form">
+        <h2>登录工作台</h2>
+        <p>使用平台账号进入 OpsGuard</p>
+        <div class="login-field"><label>用户名</label><input id="loginUser" type="text" placeholder="请输入用户名" value="admin"></div>
+        <div class="login-field"><label>密码</label><input id="loginPass" type="password" placeholder="请输入密码" value="admin123"></div>
+        <div id="loginError" class="login-error">用户名或密码错误</div>
+        <div class="login-row"><label><input type="checkbox" checked> 记住密码</label><span style="color:var(--pl);cursor:pointer">忘记密码？</span></div>
+        <button class="login-btn" onclick="doLogin()">进入工作台</button>
+        <div class="login-hint">默认账号：admin / admin123</div>
+      </div>
+    </div>
+  </div>`;
+  document.getElementById('loginPass').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin()});
+}
+function doLogin(){
+  const u=document.getElementById('loginUser').value;
+  const p=document.getElementById('loginPass').value;
+  if(u==='admin'&&p==='admin123'){
+    isLoggedIn=true;render();
+  } else {
+    document.getElementById('loginError').classList.add('show');
+    setTimeout(()=>document.getElementById('loginError').classList.remove('show'),3000);
+  }
+}
+
+// ===== AGENT INSTALL =====
+function showAgentInstall(sid){
+  const s=getS(sid);
+  const ip=s?s.ip:'0.0.0.0';
+  showModal('🤖 Agent 安装指南',`
+  <div style="margin-bottom:14px;padding:12px;background:rgba(79,110,247,.08);border:1px solid rgba(79,110,247,.2);border-radius:8px">
+    <div style="font-size:12px;font-weight:600;color:var(--pl);margin-bottom:6px">💡 Agent 是什么？有什么作用？</div>
+    <div style="font-size:11px;color:var(--t2);line-height:1.7">
+      Agent 是部署在<b>被监控服务器</b>上的轻量采集程序，它的核心作用：<br>
+      <b>① 采集指标</b> — 每 30 秒采集一次 CPU、内存、磁盘、网络等系统指标，上报到 Server<br>
+      <b>② 进程监控</b> — 检测 JAR 包进程是否存活、堆内存、GC、线程数等 Java 运行指标<br>
+      <b>③ 中间件探活</b> — 检测 Redis、MySQL、Kafka 等中间件的连接数、状态等<br>
+      <b>④ 执行命令</b> — 接收 Server 下发的巡检指令，执行 jstack/jmap/GC 日志采集等<br>
+      <b>⑤ MCP 工具</b> — 为 AI 深度排查提供 SSH 执行、日志检索等 MCP 工具能力<br><br>
+      <b style="color:var(--wn)">⚠️ 不安装 Agent 的后果：无法采集指标、无法监控、无法巡检、无法 AI 排查</b>
+    </div>
+  </div>
+
+  <div style="font-size:12px;font-weight:600;margin-bottom:8px">📋 安装步骤</div>
+  <div class="agent-steps">
+    <div class="agent-step"><div class="agent-step-num done">1</div><div><div class="agent-step-title">添加服务器信息</div><div class="agent-step-desc">填写服务器 IP、SSH 端口、认证方式 → 已完成</div></div><div class="agent-step-status" style="color:var(--ok)">✓ 完成</div></div>
+    <div class="agent-step"><div class="agent-step-num active">2</div><div><div class="agent-step-title">复制安装命令到目标服务器执行</div><div class="agent-step-desc">SSH 登录到目标服务器，执行以下命令一键安装 Agent：</div>
+      <div class="agent-cmd">curl -sSL http://opsguard-server:8080/api/agent/install | bash -s -- --server=http://opsguard-server:8080 --token=AG-<span style="color:#79c0ff">${Date.now().toString(36).toUpperCase()}</span><button class="agent-cmd-copy" onclick="navigator.clipboard.writeText(this.parentElement.textContent.replace('复制','').trim());toast('已复制安装命令')">复制</button></div>
+      <div style="font-size:10px;color:var(--t3)">脚本将自动：检测环境 → 下载 Agent → 配置连接 → 注册为系统服务 → 启动 Agent</div>
+    </div><div class="agent-step-status" style="color:var(--p)">待执行</div></div>
+    <div class="agent-step"><div class="agent-step-num">3</div><div><div class="agent-step-title">Agent 启动并连接 Server</div><div class="agent-step-desc">Agent 启动后会自动向 Server 注册，建立 WebSocket 长连接</div></div><div class="agent-step-status">等待中</div></div>
+    <div class="agent-step"><div class="agent-step-num">4</div><div><div class="agent-step-title">验证安装成功</div><div class="agent-step-desc">安装成功后，服务器列表中 Agent 状态变为"已安装·在线"，指标开始上报</div></div><div class="agent-step-status">等待中</div></div>
+  </div>
+
+  <div style="font-size:12px;font-weight:600;margin:14px 0 8px">🔍 如何判断安装是否成功？</div>
+  <div class="agent-info-box">
+    <h4>方法一：平台自动检测（推荐）</h4>
+    <ul>
+      <li>服务器列表中 Agent 列显示 <span style="color:var(--ok)">已安装</span>（绿色）= 安装成功</li>
+      <li>显示 <span style="color:var(--er)">失联</span>（红色）= Agent 未安装或已断开</li>
+      <li>服务器详情页基本信息中可查看 Agent 版本和在线时长</li>
+    </ul>
+  </div>
+  <div class="agent-info-box">
+    <h4>方法二：手动检查</h4>
+    <ul>
+      <li><code style="color:#79c0ff">systemctl status opsguard-agent</code> — 查看服务状态（active = 正常）</li>
+      <li><code style="color:#79c0ff">tail -f /var/log/opsguard-agent/agent.log</code> — 查看运行日志</li>
+      <li><code style="color:#79c0ff">curl http://localhost:9100/health</code> — Agent 健康检查接口</li>
+    </ul>
+  </div>
+
+  <div style="font-size:12px;font-weight:600;margin:14px 0 8px">⚠️ 安装失败常见原因</div>
+  <div style="font-size:11px;color:var(--t2);line-height:1.8">
+    <div style="padding:4px 0">❌ <b>网络不通</b> — 目标服务器无法访问 Server 的 8080 端口 → 检查防火墙/安全组</div>
+    <div style="padding:4px 0">❌ <b>Java 未安装</b> — Agent 需要 Java 17+ → 先安装 JDK</div>
+    <div style="padding:4px 0">❌ <b>端口冲突</b> — Agent 默认占用 9100 端口 → 修改 agent.yml 中的 port</div>
+    <div style="padding:4px 0">❌ <b>权限不足</b> — 需要 root 或 sudo 权限执行安装脚本</div>
+  </div>
+
+  <div class="mf">
+    <button class="btn btn-p" onclick="simulateAgentInstall(${sid||0})">🔄 模拟安装（演示）</button>
+    <button class="btn btn-g" onclick="closeModal()">关闭</button>
+  </div>`,1);
+}
+
+function simulateAgentInstall(sid){
+  closeModal();
+  toast('Agent 安装中，请稍候...');
+  if(sid){
+    const s=getS(sid);
+    if(s){s.agent=true;s.status=s.status==='offline'?'online':s.status}
+  }
+  setTimeout(()=>{toast('✅ Agent 安装成功！服务器已纳入监控');render()},2000);
+}
+
+// ===== INIT =====
+if(!isLoggedIn){renderLogin()}else{render()};
+</script>
+</body>
+</html>

@@ -4,6 +4,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
 )
 
 // Response is the standard envelope for all management-plane endpoints.
@@ -24,10 +26,11 @@ func fail(c *gin.Context, status int, message string) {
 }
 
 // Handlers groups the HTTP handlers. It is a skeleton holder for the
-// dependencies (config, worker proxy client, ainexus client) that the
-// business logic will need.
+// dependencies (config, worker proxy client) that the business logic will
+// need; AINexus holds the embedded AI gateway (nil when disabled).
 type Handlers struct {
-	// future deps: config *config.Config, workerProxy *proxy.Client, ainx *ainexus.Client
+	// future deps: config *config.Config, workerProxy *proxy.Client
+	AINexus *ainexusserver.Server // 内嵌 AiNexus 网关（config 未启用时为 nil）
 }
 
 // NewHandlers constructs the handler set.

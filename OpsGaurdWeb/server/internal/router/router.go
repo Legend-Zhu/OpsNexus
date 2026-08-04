@@ -7,7 +7,8 @@
 //	/api/v1/clusters/:name/workloads   工作负载（经 Worker 编排）
 //	/api/v1/clusters/:name/events      监控事件
 //	/api/v1/clusters/:name/audit       审计
-//	/api/v1/ainexus/*       AiNexus 异常排查服务代理
+//	/api/v1/ainexus/*       AiNexus 异常排查（内嵌网关，进程内直调）
+//	/ainexus/*              内嵌 AiNexus 网关原生端点（兼容其 URL 契约）
 package router
 
 import (
@@ -22,6 +23,18 @@ func New(h *api.Handlers) *gin.Engine {
 
 	// 健康检查
 	r.GET("/healthz", h.Health)
+
+	// 内嵌 AiNexus 网关原生端点（兼容 AiNexus 自身 URL 契约，非独立服务）
+	ainx := r.Group("/ainexus")
+	{
+		ainx.GET("/health", h.AINexusHealth)
+		ainx.GET("/v1/models", h.EmbedModelsHandler)
+		ainx.GET("/api/models", h.ListAINexusModels)
+		ainx.GET("/api/tools", h.EmbedToolsHandler)
+		ainx.GET("/api/mcp", h.EmbedMCPHandler)
+		ainx.POST("/v1/chat/completions", h.EmbedOpenAIHandler)
+		ainx.POST("/v1/messages", h.EmbedAnthropicHandler)
+	}
 
 	// API v1
 	v1 := r.Group("/api/v1")
@@ -43,7 +56,7 @@ func New(h *api.Handlers) *gin.Engine {
 		clusters.GET("/:name/events", h.ListEvents)
 		clusters.GET("/:name/audit", h.ListAudit)
 
-		// AiNexus 异常排查服务（整合为独立服务）
+		// AiNexus 异常排查（内嵌网关，进程内直调）
 		ainexus := v1.Group("/ainexus")
 		{
 			ainexus.GET("/health", h.AINexusHealth)

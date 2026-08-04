@@ -63,10 +63,10 @@ Alert(告警: 级别/来源/服务器/状态/次数) · User(角色) · Schedule
 | 纳管对象 | 裸机服务器 + JAR 进程 + 中间件 | **Docker Swarm 集群**（节点 + 服务/容器） | 管理端顶层为**集群**（类 Rancher），集群内提供**容器视图**（Worker 提供）|
 | Agent | 裸机采集程序（9100 端口，采集 CPU/内存/磁盘/进程） | Worker 容器（挂 docker.sock：容器 stats/端口/日志/命令执行/MCP） | **v1 以 Worker 为 Agent**；裸机 Agent 作为后续扩展（Worker 已有 nsenter 宿主机能力可覆盖部分）|
 | 资源指标 | 服务器 CPU/内存/磁盘 | 容器 stats + 节点资源（Worker `/local/stats`） | 节点维度指标由 Worker 聚合提供 |
-| AI 排查 | 假设有 Agent 提供 MCP 工具 | **Worker 自带 /mcp（16 工具）** | **闭环：AiNexus 作为 MCP 客户端连接 Worker 的 /mcp**，管理端代理 AiNexus 对话 |
+| AI 排查 | 假设有 Agent 提供 MCP 工具 | **Worker 自带 /mcp（16 工具）** | **闭环：内嵌 AiNexus 作为 MCP 客户端连接 Worker 的 /mcp**，对话/排查端点由管理端进程内直调 |
 | LLM 网关 | 原型假设直连各模型 | — | **AiNexus 已是现成的多模型路由网关**（OpenAI/Anthropic 双格式 + 多 Provider） |
 
-> **结论**：原型给出的是**产品形态与信息架构**；底层资源模型以**集群（swarm）+ Worker** 实现，AI 能力由 **AiNexus** 承载。两者通过"管理端 → AiNexus（对话/排查）→ MCP → Worker（采集/操作）"形成闭环。
+> **结论**：原型给出的是**产品形态与信息架构**；底层资源模型以**集群（swarm）+ Worker** 实现，AI 能力由 **AiNexus** 承载（vendor 进后端单进程）。两者通过"前端 → 管理端（内嵌 AiNexus）→ MCP → Worker（采集/操作）"形成闭环。
 
 ---
 
@@ -74,30 +74,31 @@ Alert(告警: 级别/来源/服务器/状态/次数) · User(角色) · Schedule
 
 ### 2.1 定位
 
-OpsGaurdWeb 是**多集群管理控制台**（类 Rancher）：纳管多个 swarm 集群（每个集群一个 Worker），提供资源管理、监控告警、智能巡检、AI 排查、通知与系统管理。AiNexus 作为**独立 AI 服务**整合进控制台，负责全部 LLM 交互。
+OpsGaurdWeb 是**多集群管理控制台**（类 Rancher）：纳管多个 swarm 集群（每个集群一个 Worker），提供资源管理、监控告警、智能巡检、AI 排查、通知与系统管理。AiNexus 的代码 **vendor 进后端进程**（单进程承载管理 API + AI 网关），负责全部 LLM 交互。
 
 ### 2.2 总体架构
 
 ```
-┌──────────────────────── OpsGaurdWeb 管理端 ────────────────────────┐
-│  前端（Vue3 + Element Plus）                                          │
-│  仪表盘│集群管理│工作负载│监控告警│智能巡检│AI 助手│通知│系统            │
-│        │                    │                     │                 │
-│   axios/SSE ────────────────┼─────────────────────┘                 │
-└────────┼────────────────────┼──────────────────────────────────────┘
-         │ /api/v1/clusters   │ /api/v1/ainexus/chat (SSE 代理)
-┌────────▼────────┐   ┌───────▼────────┐
-│ 后端 Go+Gin      │   │  AiNexus 服务   │  ← 整合为独立服务
-│ 集群注册表/代理    │──▶│  (多模型路由 +   │
-│ Worker 代理客户端 │   │   ReAct Agent +  │──MCP(stdio/SSE/HTTP)──▶ Worker /mcp
-│ AiNexus 客户端    │   │   MCP 客户端)    │   （16 工具：编排/监控/命令执行）
-└─────────────────┘   └─────────────────┘
+┌──────────────────────── OpsGaurdWeb 管理端（单进程） ─────────────────┐
+│  前端（Vue3 + Element Plus）                                           │
+│  仪表盘│集群管理│工作负载│监控告警│智能巡检│AI 助手│通知│系统             │
+│        │                    │                     │                  │
+│   axios/SSE ────────────────┼─────────────────────┘                  │
+└────────┼────────────────────┼────────────────────────────────────────┘
+         │ /api/v1/clusters   │ /api/v1/ainexus/chat (SSE，进程内)
+┌────────▼────────────────────▼──────────────────────────────┐
+│ 后端 Go+Gin                                                 │
+│ ├─ 管理面：集群注册表 / Worker 代理客户端 / 告警 ingest        │
+│ └─ AiNexus 内嵌网关（vendor 自 ./AiNexus，同进程）              │
+│    多模型路由 + ReAct Agent + MCP 客户端 ──MCP(stdio/SSE/HTTP)─┼──▶ Worker /mcp
+│    （无独立端口、无独立鉴权，原生端点挂载 /ainexus/*）            │
+└─────────────────────────────────────────────────────────────┘
          │ 代理（Worker HTTP API + MCP）
 ┌────────▼──────────────────────────────┐
 │ 集群 1..N：Worker（swarm manager）       │
 │  ├─ 编排 POST /api/v1/services          │
 │  ├─ 监控 /events /audit /local/*        │
-│  └─ MCP /mcp（供 AiNexus 调用）          │
+│  └─ MCP /mcp（供内嵌 AiNexus 调用）       │
 └─────────────────────────────────────────┘
 ```
 
@@ -107,7 +108,7 @@ OpsGaurdWeb 是**多集群管理控制台**（类 Rancher）：纳管多个 swar
 |---|---|---|
 | 前端 | Vue3 + TypeScript + Vite + Element Plus + Pinia + Vue Router | ✅ 骨架（路由/布局/4 占位页/api 骨架） |
 | 后端 | Go + Gin | ✅ 骨架（clusters/workloads/events/audit/ainexus 路由占位 + response 封装） |
-| AI | AiNexus（Go+gin，多模型路由 + MCP 客户端） | 现成服务，待整合 |
+| AI | AiNexus（Go+gin，多模型路由 + MCP 客户端） | 代码 vendor 进后端单进程，待整合 |
 | 集群侧 | Worker（swarm 编排/监控/MCP） | ✅ 已投产（真机双节点验证） |
 
 ---
@@ -140,11 +141,12 @@ OpsGaurdWeb 是**多集群管理控制台**（类 Rancher）：纳管多个 swar
 ```
 server/internal/
 ├── api/            # handlers（骨架已有 clusters/workloads/events/audit/ainexus）
-├── config/         # 集群注册表 + AiNexus 上游（骨架已有）
-├── router/         # 路由（骨架已有）
+├── config/         # 集群注册表 + AiNexus 内嵌配置（骨架已有）
+├── router/         # 路由（骨架已有，挂载 ainexus 组）
+├── ainexus/        # 【内嵌】AiNexus 网关代码（从仓库 ./AiNexus vendor 进本模块，
+│                   #        providers/tools/mcp/agent/handler/server 全套，单进程运行）
 ├── cluster/        # 集群管理：注册表 CRUD + Worker 连接状态探测（新增）
 ├── workerproxy/    # Worker HTTP 代理客户端：services/events/audit/local/*（新增）
-├── ainexus/        # AiNexus 客户端：/v1/models、SSE 对话透传、健康（新增）
 ├── patrol/         # 巡检：YAML 流程定义存储 + 内置调度引擎（新增）
 ├── notify/         # 通知：渠道/策略/发送记录（新增）
 └── store/          # 持久化（SQLite/BoltDB 起步，管理端自身数据）
@@ -172,11 +174,15 @@ GET         /api/v1/clusters/:name/events       # Worker /events（webhook 已�
 GET         /api/v1/clusters/:name/audit        # Worker /audit
 GET         /api/v1/clusters/:name/metrics      # 节点资源聚合（Worker /local/stats）
 
-# AiNexus 整合（骨架已有，补 SSE 透传）
-GET         /api/v1/ainexus/models              # AiNexus /v1/models（模型选择器）
-GET         /api/v1/ainexus/health
-POST        /api/v1/ainexus/chat                # SSE 透传 OpenAI 格式（流式）
-POST        /api/v1/ainexus/investigate         # 深度排查：告警 → 拼上下文（事件/日志/审计）→ AiNexus
+# AiNexus 整合（内嵌网关，不单独起服务）
+GET         /api/v1/ainexus/health                # 内嵌网关健康（providers/models/tools/mcp）
+GET         /api/v1/ainexus/models                # 模型列表（模型选择器）
+POST        /api/v1/ainexus/chat                  # OpenAI 格式对话（SSE 流式，进程内直调）
+POST        /api/v1/ainexus/investigate           # 深度排查：告警 → 拼上下文 → 内嵌 Agent
+# 内嵌网关原生端点（挂载 /ainexus，兼容 AiNexus 自身 URL 契约）
+GET         /ainexus/health | /ainexus/api/models | /ainexus/api/tools | /ainexus/api/mcp
+POST        /ainexus/v1/chat/completions | /ainexus/v1/messages
+GET         /ainexus/v1/models
 
 # 巡检（新增）
 GET/POST    /api/v1/patrols                     # YAML 流程 CRUD + 校验
@@ -203,11 +209,13 @@ GET/POST    /api/v1/users                       # 用户管理
 
 后端 `workerproxy` 封装对 Worker 的调用（带 token、超时、错误归一），为前端提供统一数据。**关键：Worker 已实现的 webhook 事件推送 → 管理端可直接作为告警数据入口**（管理端开一个 `/api/v1/ingest/events` 接收 Worker webhook 推送的监控事件/审计，写入管理端存储）。
 
-### 5.3 AiNexus 整合（异常排查）
+### 5.3 AiNexus 整合（内嵌进后端，单进程）
 
-- **对话/排查**：前端 AI 助手 → 后端 `/ainexus/chat` → AiNexus `/v1/chat/completions`（SSE 透传）。
-- **深度排查**：管理端把告警上下文（相关事件、服务日志、审计记录）注入 prompt → AiNexus ReAct Agent 调 MCP 工具 → **AiNexus 的 MCP 客户端连接该集群 Worker 的 `/mcp`**，由 Worker 的 16 工具（get_service_logs/get_events/exec_host_command/...）实际采集证据 → LLM 根因分析。**这一环正好复用 AiNexus 已有的 MCP 集成（stdio/SSE/Streamable HTTP 三种传输），Worker /mcp 即 Streamable HTTP。**
+- **形态**：AiNexus 的 Go 代码作为 `server/internal/ainexus/` **vendor 进管理端后端模块**（Go `internal` 可见性规则下不可跨模块 import，故为代码级集成而非 `replace` 依赖）。后端进程内同时持有管理 API 与 AI 网关：AiNexus 的 providers/tools/MCP Manager/ReAct Agent 全部在同一进程，`/ainexus/*` 原生端点直接挂载进 gin 路由，不再有独立监听端口、独立鉴权、进程间 HTTP。
+- **对话/排查**：前端 AI 助手 → 后端 `/ainexus/chat` → **进程内调用** AiNexus OpenAI handler（gin Context 直接传入，SSE 写回同一响应流），无中间 HTTP 跳转。
+- **深度排查**：管理端把告警上下文（相关事件、服务日志、审计记录）注入 prompt → 内嵌 ReAct Agent 调 MCP 工具 → **AiNexus 的 MCP 客户端连接该集群 Worker 的 `/mcp`**，由 Worker 的 16 工具（get_service_logs/get_events/exec_host_command/...）实际采集证据 → LLM 根因分析。**MCP 集成（stdio/SSE/Streamable HTTP 三种传输）与 Worker /mcp 的对接逻辑原样复用，仅传输 URL 走内网。**
 - **分层调 LLM**：AiNexus 多模型路由天然支持"告警用轻量模型、深度排查用强模型"——管理端在请求时按场景指定 model。
+- **鉴权收敛**：AiNexus 网关自身的 APIKey 校验在嵌入后**关闭**（由管理端统一鉴权中间件覆盖 `/api/v1/ainexus/*`），避免双重认证。
 
 ### 5.4 通知渠道与互联网代理（内网部署约束）
 
@@ -232,8 +240,8 @@ GET/POST    /api/v1/users                       # 用户管理
 
 ```
 用户："app-server-02 为什么 CPU 这么高？"
-  → 前端 /troubleshoot → 后端 /ainexus/chat（SSE）
-  → AiNexus（model=deepseek-v4-flash）ReAct Agent
+  → 前端 /troubleshoot → 后端 /ainexus/chat（SSE，进程内）
+  → 内嵌 AiNexus（model=deepseek-v4-flash）ReAct Agent
   → MCP call → Worker /mcp exec_host_command("top") / get_service_logs / get_events
   → 证据回 AiNexus → LLM 根因分析 → SSE 回前端展示（证据链 + 因果 + 建议）
 ```
@@ -245,7 +253,7 @@ GET/POST    /api/v1/users                       # 用户管理
 > **已确认（2026-08-04）**：① 资源模型按集群+swarm 服务，裸机 Agent 留扩展；② **AiNexus 集成进平台**（随管理端一起交付部署）；③ 内置调度 **单实例**；④ 通知渠道**可配置不预设**，**必须支持飞书或短信**，且**服务部署在内网、短信/飞书等外呼需经互联网服务器代理**；⑤ 用户认证走 **SSO**；⑥ 存储用 **PostgreSQL**；⑦ 告警规则**管理 Worker 的 monitoring config**（单一事实来源）。
 
 1. **资源模型：集群 + swarm 服务为第一公民**（类 Rancher），原型的"服务器/应用/中间件"视图在 v1 以"节点/服务/端口服务"呈现；裸机 Agent（JAR 进程/中间件专项）列为扩展，复用 Worker 的 nsenter 宿主机能力与容器 stats。✅ 已确认
-2. **AiNexus 集成进平台**：作为平台内置服务随管理端交付（同一套部署编排），管理端只做 SSE 代理 + 上下文注入 + 模型策略，不在管理端内重写 LLM 逻辑。✅ 已确认
+2. **AiNexus 整合进后端**：AiNexus 的 Go 代码 **vendor 进 `server/internal/ainexus/`**（Go `internal` 可见性规则下不能跨模块 import，故代码级集成），与管理端同进程运行——无独立服务、无独立端口、无进程间 HTTP；`/ainexus/*` 原生端点挂载进管理端路由，网关自身 APIKey 鉴权关闭（统一走管理端鉴权）。✅ 已确认
 3. **告警数据入口 = Worker webhook**：Worker 已支持事件/审计 webhook 推送，管理端开 ingest 端点落库，天然获得多集群告警汇聚。
 4. **巡检编排 v1 简化**：YAML 流程存储 + **内置调度引擎（单实例，Go cron，不做分布式/并发控制）**，按流程调 AiNexus 生成告警/报告；与 Worker 实时探针互补。✅ 已确认
 5. **SSE 透传**：AI 对话与日志流均以 SSE 从前端直连体验，后端只做代理不做缓冲。
@@ -283,7 +291,7 @@ User { id, sso_sub, username, name, role, phone, feishu_id, notify_channels(json
 | **P1 集群接入** | 集群注册表 CRUD + Worker 健康探测 + Worker 代理客户端 + **PostgreSQL 存储层** | `cluster/`、`workerproxy/`、`store/`、前端集群页接真数据 |
 | **P2 工作负载** | 服务列表/详情/部署/缩放/回滚 + SSE 日志 | 前端 workloads 页 + 后端代理 |
 | **P3 监控告警** | webhook ingest 端点 + 告警落库/列表/认领 + 节点资源视图 + 告警规则（管理 Worker monitoring config） | `ingest`、`Alert`、前端 alerts/monitor 页 |
-| **P4 AiNexus 集成** | AiNexus 随平台部署编排 + /ainexus/chat SSE 透传 + 模型选择 + 深度排查（上下文注入 + MCP 闭环） | `ainexus/` 客户端、前端 troubleshoot 页、部署编排 |
+| **P4 AiNexus 整合** | **vendor AiNexus 进后端**（`internal/ainexus/`）+ `/ainexus/*` 原生端点挂载 + /ainexus/chat 进程内 SSE + 模型选择 + 深度排查（上下文注入 + MCP 闭环） | `ainexus/` 内嵌网关、前端 troubleshoot 页 |
 | **P5 智能巡检** | YAML 流程 CRUD + 内置调度引擎（单实例 Go cron）+ 执行记录 + AI 报告 | `patrol/`、前端 patrol/schedule/report 页 |
 | **P6 通知/系统** | 渠道（可配置）+ 互联网代理对接 + 策略/记录 + **SSO 认证** + 用户管理 | `notify/`、`sso/`、`users`、前端 notify/system 页 |
 
@@ -298,7 +306,7 @@ User { id, sso_sub, username, name, role, phone, feishu_id, notify_channels(json
 1. **SSO 落地方式**：对接哪种 SSO（OIDC? 企业网关? 自建?）；本地账号 fallback 的边界（v1 是否保留本地登录入口）。
 2. **通知互联网代理**：代理服务的形态（独立小服务 HTTP 转发？还是复用现有网关？）；短信服务商（阿里云/腾讯云）与飞书 Webhook 的凭据存放（代理侧）。
 3. **PostgreSQL 连接**：库名/账号/密码经环境变量注入；是否需要迁移工具（golang-migrate）。
-4. **AiNexus 随平台部署**：AiNexus 容器与服务编排（与管理端同 compose/stack）；其 MCP 客户端连 Worker /mcp 的 token 配置。
+4. **AiNexus 内嵌边界**：vendor 时保留 AiNexus 的 providers/tools/MCP/Agent 全部能力；管理端与内嵌网关共享一个 gin 引擎后，需确认 `/ainexus/*` 原生端点与 `/api/v1/ainexus/*` 的业务化包装不冲突；内嵌后关闭网关自身 APIKey 校验，鉴权收敛到管理端。
 5. **告警规则管理范围**：管理端编辑 Worker monitoring config 时的校验/下发链路（复用 Worker deploy/update 的 config 通道）。
 6. **巡检调度**：单实例 Go cron 的持久化（进程重启后 cron 恢复）与执行记录保留策略。
 
@@ -313,7 +321,7 @@ User { id, sso_sub, username, name, role, phone, feishu_id, notify_channels(json
 | 命令执行/SSH | Worker `exec_host_command`/`exec_in_container`（黑白名单） | ✅ 已实现 |
 | MCP 工具（AI 排查证据） | Worker `/mcp` 16 工具 | ✅ 已实现 |
 | 事件/告警 | Worker 事件 + webhook 推送 | ✅ 已实现（管理端 ingest 待做） |
-| LLM 对话/多模型路由 | AiNexus（**集成进平台**） | ✅ 现成服务（待整合） |
+| LLM 对话/多模型路由 | AiNexus（**vendor 进后端**） | ✅ 现成代码（待整合） |
 | 分层调 LLM 策略 | AiNexus 多模型路由 + 管理端按场景指定 model | 待整合 |
 | 巡检编排/调度/报告 | 管理端 `patrol/`（新增） | 待开发 |
 | 通知（飞书/短信） | 管理端 `notify/`（新增） | 待开发 |
