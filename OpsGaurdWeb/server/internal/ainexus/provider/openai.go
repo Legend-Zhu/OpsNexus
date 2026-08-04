@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // OpenAIProvider OpenAI 兼容 API 客户端
@@ -312,9 +313,13 @@ func (p *OpenAIProvider) processStream(body io.ReadCloser, ch chan<- StreamEvent
 		for _, choice := range chunk.Choices {
 			delta := choice.Delta
 
-			// 文本内容增量
+			// 文本内容增量（截断单条超长 chunk，防一次性塞爆 Agent 上下文）
 			if delta.Content != nil && *delta.Content != "" {
-				ch <- StreamEvent{Type: EventContentDelta, Content: *delta.Content}
+				content := *delta.Content
+				if utf8.RuneCountInString(content) > MaxStreamChunkRunes {
+					content = string([]rune(content)[:MaxStreamChunkRunes]) + "\n…[output truncated]"
+				}
+				ch <- StreamEvent{Type: EventContentDelta, Content: content}
 			}
 
 			// 工具调用增量

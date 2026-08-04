@@ -218,6 +218,7 @@ GET/POST    /api/v1/users                       # 用户管理
 - **深度排查**：管理端把告警上下文（相关事件、服务日志、审计记录）注入 prompt → 内嵌 ReAct Agent 调 MCP 工具 → **AiNexus 的 MCP 客户端连接该集群 Worker 的 `/mcp`**，由 Worker 的 16 工具（get_service_logs/get_events/exec_host_command/...）实际采集证据 → LLM 根因分析。**MCP 集成（stdio/SSE/Streamable HTTP 三种传输）与 Worker /mcp 的对接逻辑原样复用，仅传输 URL 走内网。**
 - **分层调 LLM**：AiNexus 多模型路由天然支持"告警用轻量模型、深度排查用强模型"——管理端在请求时按场景指定 model。
 - **鉴权收敛**：AiNexus 网关自身的 APIKey 校验在嵌入后**关闭**（由管理端统一鉴权中间件覆盖 `/api/v1/ainexus/*`），避免双重认证。
+- **上下文管理（长排查防爆）**：三层防护——① 对话历史：`Conversation.Trim(maxTokens, keepRounds)` 按**完整轮次**（assistant(tool_calls)+其 tool 结果）原子裁剪旧历史，避免孤立 tool 消息导致 400，保留最近 N 个工具轮次 + 最新用户消息；② 工具结果：`MCPTool.Execute` 单次结果限长 8000 rune（exec/日志类工具输出截断并标注），provider 流式 chunk 限长 4000 rune；③ 输入注入：investigate 各证据源（事件/审计/日志）字节预算 16KB。预算经 `agent.max_context_tokens / keep_tool_rounds` 配置。
 
 ### 5.4 通知渠道与互联网代理（内网部署约束）
 

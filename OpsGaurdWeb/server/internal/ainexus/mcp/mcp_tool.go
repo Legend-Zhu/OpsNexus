@@ -4,11 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"unicode/utf8"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/tool"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
+
+// MaxToolResultBytes 单次工具调用的结果上限（rune 计）。
+// 命令/日志类工具（如 exec_host_command）可能返回海量输出，超出即截断并
+// 标注，避免一次工具结果打爆上下文（防长排查失控的核心防线）。
+const MaxToolResultBytes = 8000
 
 // MCPTool 封装 MCP 远程工具，实现 tool.Tool 接口
 type MCPTool struct {
@@ -66,16 +72,28 @@ func (t *MCPTool) Execute(ctx context.Context, params map[string]any) (tool.Tool
 		return tool.NewErrorResult(fmt.Sprintf("MCP tool call failed: %s", err)), nil
 	}
 
-	// 将结果内容转换为字符串
+	// 将结果内容转换为字符串（截断到 MaxToolResultBytes，防上下文打爆）
 	var contentStr string
 	for _, c := range result.Content {
+		var s string
 		switch v := c.(type) {
 		case mcp.TextContent:
-			contentStr += v.Text
+			s = v.Text
 		default:
 			b, _ := json.Marshal(v)
-			contentStr += string(b)
+			s = string(b)
 		}
+		remain := MaxToolResultBytes - utf8.RuneCountInString(contentStr)
+		if remain <= 0 {
+			contentStr += "\n…[more output truncated]"
+			break
+		}
+		rs := []rune(s)
+		if len(rs) > remain {
+			contentStr += string(rs[:remain]) + "\n…[output truncated]"
+			break
+		}
+		contentStr += s
 	}
 
 	if result.IsError {

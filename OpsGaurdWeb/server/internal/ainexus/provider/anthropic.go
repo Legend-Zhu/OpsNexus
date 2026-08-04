@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // AnthropicProvider Anthropic 兼容 API 客户端
@@ -322,7 +323,12 @@ func (p *AnthropicProvider) processStream(body io.ReadCloser, ch chan<- StreamEv
 			}
 			switch event.Delta.Type {
 			case "text_delta":
-				ch <- StreamEvent{Type: EventContentDelta, Content: event.Delta.Text}
+				// 截断单条超长 chunk，防一次性塞爆 Agent 上下文
+				content := event.Delta.Text
+				if utf8.RuneCountInString(content) > MaxStreamChunkRunes {
+					content = string([]rune(content)[:MaxStreamChunkRunes]) + "\n…[output truncated]"
+				}
+				ch <- StreamEvent{Type: EventContentDelta, Content: content}
 			case "input_json_delta":
 				if tc, ok := toolCallsMap[event.Index]; ok {
 					tc.Arguments += event.Delta.PartialJSON

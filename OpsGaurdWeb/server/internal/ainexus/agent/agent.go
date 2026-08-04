@@ -51,9 +51,17 @@ func New(p provider.Provider, registry *tool.Registry, cfg config.AgentConfig, l
 	}
 }
 
+// trimContext 在每次请求前把对话裁剪到上下文预算内（按完整轮次，防无限膨胀）。
+func (a *Agent) trimContext(conv *Conversation) {
+	if a.config.MaxContextTokens > 0 {
+		conv.Trim(a.config.MaxContextTokens, a.config.KeepToolRounds)
+	}
+}
+
 // RunStream 流式运行 Agent，返回事件 channel
 func (a *Agent) RunStream(ctx context.Context, conv *Conversation) (<-chan AgentEvent, error) {
 	toolDefs := a.registry.ToolDefinitions()
+	a.trimContext(conv)
 	req := conv.ToRequest(toolDefs, true)
 
 	eventCh, err := a.provider.ChatCompletionStream(ctx, req)
@@ -87,6 +95,7 @@ func (a *Agent) Run(ctx context.Context, conv *Conversation) (*provider.ChatResp
 	toolDefs := a.registry.ToolDefinitions()
 
 	for round := 0; round < a.config.MaxToolRounds; round++ {
+		a.trimContext(conv)
 		req := conv.ToRequest(toolDefs, false)
 		resp, err := a.provider.ChatCompletion(ctx, req)
 		if err != nil {
@@ -237,6 +246,7 @@ func (a *Agent) reactLoop(ctx context.Context, conv *Conversation, eventCh <-cha
 
 	// 再次调用 Provider，继续 ReAct 循环
 	toolDefs := a.registry.ToolDefinitions()
+	a.trimContext(conv)
 	req := conv.ToRequest(toolDefs, true)
 	newEventCh, err := a.provider.ChatCompletionStream(ctx, req)
 	if err != nil {

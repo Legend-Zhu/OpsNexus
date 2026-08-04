@@ -97,6 +97,10 @@ type MCPServerConfig struct {
 type AgentConfig struct {
 	MaxToolRounds     int  `yaml:"max_tool_rounds"`
 	ParallelToolCalls bool `yaml:"parallel_tool_calls"`
+	// MaxContextTokens 上下文 token 预算（0=不裁剪）：超过后按完整轮次裁剪旧历史。
+	MaxContextTokens int `yaml:"max_context_tokens,omitempty"`
+	// KeepToolRounds 裁剪时保留最近多少个工具轮次（默认 3）。
+	KeepToolRounds int `yaml:"keep_tool_rounds,omitempty"`
 }
 
 // DefaultConfig 返回默认配置
@@ -124,6 +128,8 @@ func DefaultConfig() *Config {
 		Agent: AgentConfig{
 			MaxToolRounds:     10,
 			ParallelToolCalls: true,
+			MaxContextTokens:  32000, // 默认上下文预算，防长排查对话无限膨胀
+			KeepToolRounds:    3,
 		},
 	}
 }

@@ -74,10 +74,19 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 	}
 
 	// 3. 拉上下文（证据：近期事件 + 审计 + 服务日志；失败不阻塞排查）
+	//    每个证据源都有字节上限，防海量证据一次性打爆模型上下文。
 	events, _ := cli.Events(ctx, alert.Service, "", maxEvents)
 	audit, _ := cli.Audit(ctx, "", 10)
+	events = capEvidence(events, evidenceBytes)
+	audit = capEvidence(audit, evidenceBytes)
 	var logs []workerproxy.LogLine
+	logBytes := 0
 	_ = cli.StreamLogs(ctx, alert.Service, false, logTail, "", func(ll workerproxy.LogLine) bool {
+		logBytes += len(ll.Line) + 32
+		if logBytes > evidenceBytes {
+			logs = append(logs, workerproxy.LogLine{Line: "…[logs truncated]"})
+			return false
+		}
 		logs = append(logs, ll)
 		return true
 	})
@@ -156,6 +165,22 @@ func BuildInvestigateMessages(
 		{"role": "system", "content": system},
 		{"role": "user", "content": user},
 	}
+}
+
+// evidenceBytes 单个证据源（事件/审计/日志）的字节预算，防注入打爆上下文。
+const evidenceBytes = 16 << 10 // 16KB
+
+// capEvidence 将证据 JSON 截断到字节上限（超出替换为截断标记）。
+func capEvidence(raw json.RawMessage, limit int) json.RawMessage {
+	if len(raw) <= limit {
+		return raw
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return raw
+	}
+	trimmed := raw[:limit]
+	// 尽量在安全边界截断（避免 JSON 解析失败；prompt 里以文本呈现，不依赖解析）
+	return append(trimmed, []byte("\n…[evidence truncated]")...)
 }
 
 func formatRFC3339(t time.Time) string {

@@ -10,6 +10,11 @@ type ToolFormat string
 const (
 	ToolFormatOpenAI    ToolFormat = "openai"
 	ToolFormatAnthropic ToolFormat = "anthropic"
+
+	// MaxStreamChunkRunes 单条流式 chunk 的最大字符数：上游模型/网关可能
+	// 一次吐超长文本（如推理模型一次性输出），Agent 会把它累积进对话，
+	// 超出即截断，防单条输出打爆上下文。
+	MaxStreamChunkRunes = 4000
 )
 
 // Role 消息角色
