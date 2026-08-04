@@ -62,7 +62,23 @@ func (a *Agent) RunStream(ctx context.Context, conv *Conversation) (<-chan Agent
 	}
 
 	outCh := make(chan AgentEvent, 128)
-	go a.reactLoop(ctx, conv, eventCh, outCh, 0)
+	go func() {
+		defer close(outCh)
+		defer func() {
+			if r := recover(); r != nil {
+				a.logger.Printf("FATAL: reactLoop panic (recovered): %v", r)
+				// 尝试发送错误事件，如果 channel 还没关
+				select {
+				case outCh <- AgentEvent{
+					Type:  AgentEventError,
+					Error: fmt.Errorf("internal panic: %v", r),
+				}:
+				default:
+				}
+			}
+		}()
+		a.reactLoop(ctx, conv, eventCh, outCh, 0)
+	}()
 	return outCh, nil
 }
 
@@ -106,12 +122,12 @@ func (a *Agent) Run(ctx context.Context, conv *Conversation) (*provider.ChatResp
 }
 
 // reactLoop ReAct 循环（流式）
+// 注意：outCh 由 RunStream 中的 wrapper goroutine 负责关闭，此处不 close
 func (a *Agent) reactLoop(ctx context.Context, conv *Conversation, eventCh <-chan provider.StreamEvent, outCh chan<- AgentEvent, round int) {
-	defer close(outCh)
-
 	// 收集当前轮次的文本和工具调用
 	var currentText string
-	toolCallsMap := make(map[int]*provider.ToolCall)
+	toolCallsMap := make(map[int]*provider.ToolCall) // key: toolCallIndex
+	var toolCallCounter int
 	var usage *provider.UsageInfo
 	doneReceived := false // 标记是否已收到 Provider 的流结束信号
 
@@ -130,17 +146,34 @@ func (a *Agent) reactLoop(ctx context.Context, conv *Conversation, eventCh <-cha
 				Name:      event.ToolCall.Name,
 				Arguments: event.ToolCall.Arguments,
 			}
-			toolCallsMap[len(toolCallsMap)] = tc
+			idx := toolCallCounter
+			toolCallCounter++
+			toolCallsMap[idx] = tc
 			outCh <- AgentEvent{
 				Type:     AgentEventToolStart,
 				ToolCall: tc,
 			}
 
 		case provider.EventToolCallDelta:
-			// 参数增量，无需单独转发给客户端
+			// 从 delta 事件中更新最后一个工具调用的参数
+			if event.ToolCall != nil && toolCallCounter > 0 {
+				lastIdx := toolCallCounter - 1
+				if tc, ok := toolCallsMap[lastIdx]; ok {
+					tc.Arguments = event.ToolCall.Arguments
+				}
+			}
 
 		case provider.EventToolCallEnd:
-			// 工具调用参数已完整，无需额外操作
+			// 使用 EventToolCallEnd 中的完整 ToolCall 更新 map 中的对应条目
+			if event.ToolCall != nil {
+				for _, tc := range toolCallsMap {
+					if tc.ID == event.ToolCall.ID {
+						tc.Name = event.ToolCall.Name
+						tc.Arguments = event.ToolCall.Arguments
+						break
+					}
+				}
+			}
 
 		case provider.EventDone:
 			if !doneReceived {
@@ -188,13 +221,7 @@ func (a *Agent) reactLoop(ctx context.Context, conv *Conversation, eventCh <-cha
 	// 将助手消息加入对话
 	conv.AddAssistantToolCalls(toolCalls, currentText)
 
-	// 通知客户端工具调用开始并执行
-	for _, tc := range toolCalls {
-		outCh <- AgentEvent{
-			Type:     AgentEventToolStart,
-			ToolCall: &tc,
-		}
-	}
+	// 注意：工具调用的 AgentEventToolStart 已在流式处理中发送，此处不再重复发送
 
 	results := a.executeToolCalls(ctx, toolCalls)
 

@@ -72,7 +72,23 @@ tools:
     enabled: true
     max_size: 1048576                 # 1MB
 
-mcp_servers: []
+mcp_servers:
+  - name: "db-mcp-test"
+    transport: "stdio"
+    command: "java"
+    args:
+      - "-Dfile.encoding=UTF-8"
+      - "-Dmcp.instance=kingbase-test"
+      - "-jar"
+      - "C:/Users/flying/.zcode/mcp-servers/db-mcp/db-mcp.jar"
+    env:
+      KINGBASE_URL: "jdbc:kingbase8://172.28.50.221:9010/insurance?currentSchema=insurance&zeroDateTimeBehavior=convertToNull&useUnicode=true&characterEncoding=utf-8"
+      KINGBASE_USER: "system"
+      KINGBASE_PASSWORD: "Anxin@64464835"
+      KINGBASE_SCHEMA: "insurance"
+      ENCRYPT_CONFIG: "C:/Users/flying/.zcode/mcp-servers/db-mcp/encrypt-fields.json"
+      DBTE_CONFIG_PATH: "C:/Users/flying/.zcode/mcp-servers/db-mcp/dbte.app.yml"
+
   # - name: "filesystem"
   #   transport: "stdio"
   #   command: "npx"

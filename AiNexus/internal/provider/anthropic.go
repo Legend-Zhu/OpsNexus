@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // AnthropicProvider Anthropic 兼容 API 客户端
@@ -32,7 +33,7 @@ func NewAnthropicProvider(name, baseURL, apiKey string, models []string) *Anthro
 		apiKey:  apiKey,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		models:  models,
-		client:  &http.Client{},
+		client:  &http.Client{Timeout: 120 * time.Second},
 	}
 }
 

@@ -144,22 +144,30 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, ag *agent.Agent, conv *agen
 			c.Writer.(http.Flusher).Flush()
 
 		case agent.AgentEventToolEnd:
-			resp := openaiStreamResponse{
-				ID: msgID, Object: "chat.completion.chunk", Created: created, Model: model,
-				Choices: []openaiStreamChoice{{
-					Index: 0,
-					Delta: openaiStreamDelta{
-						ToolCalls: []openaiToolCallDelta{{
-							Index: toolCallIndex,
-							Function: &openaiFuncDelta{Arguments: event.ToolCall.Arguments},
-						}},
-					},
-				}},
-			}
-			data, _ := json.Marshal(resp)
-			fmt.Fprintf(c.Writer, "data: %s\n\n", data)
-			c.Writer.(http.Flusher).Flush()
-			toolCallIndex++
+				delta := openaiToolCallDelta{
+					Index: toolCallIndex,
+					Function: &openaiFuncDelta{Arguments: event.ToolCall.Arguments},
+				}
+				if event.ToolResult != nil {
+					delta.ToolResult = &openaiToolResult{
+						Name:    event.ToolCall.Name,
+						Content: event.ToolResult.Content,
+						IsError: event.ToolResult.IsError,
+					}
+				}
+				resp := openaiStreamResponse{
+					ID: msgID, Object: "chat.completion.chunk", Created: created, Model: model,
+					Choices: []openaiStreamChoice{{
+						Index: 0,
+						Delta: openaiStreamDelta{
+							ToolCalls: []openaiToolCallDelta{delta},
+						},
+					}},
+				}
+				data, _ := json.Marshal(resp)
+				fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+				c.Writer.(http.Flusher).Flush()
+				toolCallIndex++
 
 		case agent.AgentEventDone:
 			finishReason := "stop"
@@ -264,10 +272,17 @@ type openaiStreamDelta struct {
 }
 
 type openaiToolCallDelta struct {
-	Index    int             `json:"index"`
-	ID       string          `json:"id,omitempty"`
-	Type     string          `json:"type,omitempty"`
-	Function *openaiFuncDelta `json:"function"`
+	Index      int               `json:"index"`
+	ID         string            `json:"id,omitempty"`
+	Type       string            `json:"type,omitempty"`
+	Function   *openaiFuncDelta  `json:"function,omitempty"`
+	ToolResult *openaiToolResult `json:"tool_result,omitempty"`
+}
+
+type openaiToolResult struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+	IsError bool   `json:"is_error"`
 }
 
 type openaiFuncDelta struct {

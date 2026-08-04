@@ -400,6 +400,39 @@ function escapeHtml(str) {
   return d.innerHTML;
 }
 
+// 格式化工具名: mcp_db-mcp-test_query → [db-mcp-test] query
+function formatToolName(name) {
+  // 匹配 mcp_{server}_{tool} 格式
+  const mcpMatch = name.match(/^mcp_(.+?)_(.+)$/);
+  if (mcpMatch) {
+    return `<span style="color:#888">[${mcpMatch[1]}]</span> ${mcpMatch[2]}`;
+  }
+  return name;
+}
+
+// 更新工具调用的状态和结果
+function updateToolCallDiv(toolDiv, result, isError) {
+  const statusSpan = toolDiv.querySelector('.tool-status');
+  if (statusSpan) {
+    if (isError) {
+      statusSpan.innerHTML = '<span style="color:#f44336">❌ 失败</span>';
+    } else {
+      statusSpan.innerHTML = '<span style="color:#4caf50">✅ 完成</span>';
+    }
+  }
+  // 追加结果展示
+  if (result) {
+    const existingResult = toolDiv.querySelector('.tool-result');
+    if (!existingResult) {
+      const resultDiv = document.createElement('div');
+      resultDiv.className = 'tool-result';
+      const truncated = result.length > 500 ? result.substring(0, 500) + '\n... (已截断)' : result;
+      resultDiv.textContent = truncated;
+      toolDiv.appendChild(resultDiv);
+    }
+  }
+}
+
 // ========== 发送消息 ==========
 async function sendMessage() {
   if (isStreaming) {
@@ -496,6 +529,15 @@ async function sendMessage() {
                 if (tc.function.name) toolCallsMap[idx].name = tc.function.name;
                 if (tc.function.arguments) toolCallsMap[idx].arguments += tc.function.arguments;
               }
+              // 工具结果：更新已渲染的工具调用卡片
+              if (tc.tool_result) {
+                toolCallsMap[idx].result = tc.tool_result.content;
+                toolCallsMap[idx].isError = tc.tool_result.is_error;
+                const toolDiv = assistantDiv.querySelector(`.tool-call[data-index="${idx}"]`);
+                if (toolDiv) {
+                  updateToolCallDiv(toolDiv, tc.tool_result.content, tc.tool_result.is_error);
+                }
+              }
             }
           }
 
@@ -504,10 +546,33 @@ async function sendMessage() {
             // 展示工具调用
             if (Object.keys(toolCallsMap).length > 0) {
               const bubble = assistantDiv.querySelector('.bubble');
-              Object.values(toolCallsMap).forEach(tc => {
+              Object.entries(toolCallsMap).forEach(([idx, tc]) => {
+                // 检查是否已经渲染过
+                if (assistantDiv.querySelector(`.tool-call[data-index="${idx}"]`)) return;
                 const toolDiv = document.createElement('div');
                 toolDiv.className = 'tool-call';
-                toolDiv.innerHTML = `<span class="tool-name">🔧 ${tc.name}</span><div style="color:#777;margin-top:4px;font-size:11px">调用中...</div>`;
+                toolDiv.setAttribute('data-index', idx);
+                let html = `<span class="tool-name">🔧 ${formatToolName(tc.name)}</span>`;
+                html += `<div class="tool-status" style="color:#777;margin-top:4px;font-size:11px">调用中...</div>`;
+                // 如果已有结果（可能已在 tool_result 中收到），立即展示
+                if (tc.result !== undefined) {
+                  updateToolCallDiv(toolDiv, tc.result, tc.isError);
+                  // updateToolCallDiv 已经改了 innerHTML，需要重新构建
+                  toolDiv.innerHTML = `<span class="tool-name">🔧 ${formatToolName(tc.name)}</span>`;
+                  const statusSpan = document.createElement('div');
+                  statusSpan.className = 'tool-status';
+                  statusSpan.style.cssText = 'margin-top:4px;font-size:11px';
+                  statusSpan.innerHTML = tc.isError ? '<span style="color:#f44336">❌ 失败</span>' : '<span style="color:#4caf50">✅ 完成</span>';
+                  toolDiv.appendChild(statusSpan);
+                  if (tc.result) {
+                    const resultDiv = document.createElement('div');
+                    resultDiv.className = 'tool-result';
+                    resultDiv.textContent = tc.result.length > 500 ? tc.result.substring(0, 500) + '\n... (已截断)' : tc.result;
+                    toolDiv.appendChild(resultDiv);
+                  }
+                } else {
+                  toolDiv.innerHTML = html;
+                }
                 bubble.insertBefore(toolDiv, bubble.querySelector('.text-content'));
               });
             }

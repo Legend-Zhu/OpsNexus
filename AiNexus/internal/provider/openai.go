@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // OpenAIProvider OpenAI 兼容 API 客户端
@@ -28,7 +29,7 @@ func NewOpenAIProvider(name, baseURL, apiKey string, models []string) *OpenAIPro
 		apiKey:  apiKey,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		models:  models,
-		client:  &http.Client{},
+		client:  &http.Client{Timeout: 120 * time.Second},
 	}
 }
 

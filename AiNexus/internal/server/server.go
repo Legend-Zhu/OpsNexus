@@ -283,8 +283,11 @@ func (s *Server) Run() error {
 	r := s.SetupRouter()
 
 	s.httpServer = &http.Server{
-		Addr:    s.config.Server.Addr,
-		Handler: r,
+		Addr:         s.config.Server.Addr,
+		Handler:      r,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() {

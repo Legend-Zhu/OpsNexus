@@ -1,0 +1,22 @@
+- generic [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - heading "⚡ AiNexus Chat" [level=1] [ref=f1e3]
+    - generic [ref=f1e4]: ✅ 在线 | 1 模型 | 3 工具
+  - generic [ref=f1e5]:
+    - generic [ref=f1e6]: 模型
+    - combobox [ref=f1e7]:
+      - option "deepseek-v4-flash (deepseek)" [selected]
+    - generic [ref=f1e8]: API 地址
+    - textbox "http://localhost:8080" [ref=f1e9]
+    - generic [ref=f1e10]: API Key
+    - textbox "网关鉴权 key（可选）" [ref=f1e11]
+    - generic [ref=f1e12]: MaxTokens
+    - spinbutton [ref=f1e13]: "4096"
+  - generic [ref=f1e14]:
+    - generic [ref=f1e22]:
+      - generic [ref=f1e23]: 👤
+      - generic [ref=f1e24]: 你好
+    - generic [ref=f1e26]: 🤖
+  - generic [ref=f1e19]:
+    - textbox "输入消息，Enter 发送，Shift+Enter 换行..." [active] [ref=f1e20]
+    - button "发送" [ref=f1e21] [cursor=pointer]

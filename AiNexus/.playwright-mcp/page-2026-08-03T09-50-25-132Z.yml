@@ -1,0 +1,24 @@
+- generic [ref=f3e1]:
+  - generic [ref=f3e2]:
+    - heading "⚡ AiNexus Chat" [level=1] [ref=f3e3]
+    - generic [ref=f3e4]: ✅ 在线 | 1 模型 | 3 工具
+  - generic [ref=f3e5]:
+    - generic [ref=f3e6]: 模型
+    - combobox [ref=f3e7]:
+      - option "deepseek-v4-flash (deepseek)" [selected]
+    - generic [ref=f3e8]: API 地址
+    - textbox "http://localhost:8080" [ref=f3e9]
+    - generic [ref=f3e10]: API Key
+    - textbox "网关鉴权 key（可选）" [ref=f3e11]
+    - generic [ref=f3e12]: MaxTokens
+    - spinbutton [ref=f3e13]: "4096"
+  - generic [ref=f3e14]:
+    - generic [ref=f3e22]:
+      - generic [ref=f3e23]: 👤
+      - generic [ref=f3e24]: 你好
+    - generic [ref=f3e25]:
+      - generic [ref=f3e26]: 🤖
+      - generic [ref=f3e27]: 你好！很高兴见到你。😊 我是你的AI助手，可以帮你完成各种任务，比如： - **运行命令** — 执行 Shell 命令、运行脚本或程序 - **读写文件** — 查看或修改本地文件 - **发送 HTTP 请求** — 调用 API 或访问网页 请问有什么我可以帮你的吗？
+  - generic [ref=f3e19]:
+    - textbox "输入消息，Enter 发送，Shift+Enter 换行..." [active] [ref=f3e20]
+    - button "发送" [ref=f3e21] [cursor=pointer]
