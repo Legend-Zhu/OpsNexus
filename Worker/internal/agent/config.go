@@ -8,6 +8,7 @@ package agent
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -30,6 +31,15 @@ type Config struct {
 	Worker        WorkerConfig  `yaml:"worker" json:"worker"`
 	CommandPolicy CommandPolicy `yaml:"commandPolicy" json:"commandPolicy"`
 	Webhooks      []string      `yaml:"webhooks" json:"webhooks,omitempty"`
+	Auth          AuthConfig    `yaml:"auth" json:"auth"`
+}
+
+// AuthConfig controls access to the HTTP API and MCP endpoint.
+type AuthConfig struct {
+	// Enabled turns on bearer-token auth (both /api/* and /mcp).
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Tokens maps a token name -> secret. The name is used as the audit actor.
+	Tokens map[string]string `yaml:"tokens" json:"tokens,omitempty"`
 }
 
 // WorkerConfig identifies this instance's role and connectivity.
@@ -105,7 +115,8 @@ var DefaultBlacklist = []string{
 }
 
 // Load reads the agent config from a YAML file, applying defaults for missing
-// fields and validating it.
+// fields and validating it, then applies environment overrides (for
+// centralized distribution via orchestration platforms / config maps).
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -119,7 +130,60 @@ func Load(path string) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	cfg.ApplyEnvOverrides()
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("after env overrides: %w", err)
+	}
 	return cfg, nil
+}
+
+// ApplyEnvOverrides lets an orchestrator (swarm stack environment, K8s
+// configmap, ...) centrally distribute the critical policy knobs without
+// touching the per-node file:
+//
+//	WORKER_ROLE            worker.role
+//	WORKER_ALLOW_HOST_EXEC allowHostExec (true/false)
+//	WORKER_ALLOW_CONTAINER allowContainerExec (true/false)
+//	WORKER_COMMAND_TIMEOUT commandPolicy.timeout
+//	WORKER_WEBHOOKS        comma-separated webhook URLs
+//	WORKER_TOKENS          "name=secret,name2=secret2" (auth tokens)
+func (c *Config) ApplyEnvOverrides() {
+	if v := os.Getenv("WORKER_ROLE"); v != "" {
+		c.Worker.Role = v
+	}
+	if v := os.Getenv("WORKER_ALLOW_HOST_EXEC"); v != "" {
+		c.CommandPolicy.AllowHostExec = v == "true" || v == "1"
+	}
+	if v := os.Getenv("WORKER_ALLOW_CONTAINER"); v != "" {
+		c.CommandPolicy.AllowContainerExec = v == "true" || v == "1"
+	}
+	if v := os.Getenv("WORKER_COMMAND_TIMEOUT"); v != "" {
+		c.CommandPolicy.Timeout = v
+	}
+	if v := os.Getenv("WORKER_WEBHOOKS"); v != "" {
+		c.Webhooks = splitCSV(v)
+	}
+	if v := os.Getenv("WORKER_TOKENS"); v != "" {
+		c.Auth.Enabled = true
+		if c.Auth.Tokens == nil {
+			c.Auth.Tokens = map[string]string{}
+		}
+		for _, pair := range strings.Split(v, ",") {
+			if k, val, ok := strings.Cut(pair, "="); ok && k != "" && val != "" {
+				c.Auth.Tokens[strings.TrimSpace(k)] = strings.TrimSpace(val)
+			}
+		}
+	}
+}
+
+func splitCSV(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // ApplyDefaults fills zero values.

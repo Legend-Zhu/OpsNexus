@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/audit"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
 )
@@ -20,6 +21,7 @@ type Orchestrator struct {
 	log          *slog.Logger
 	readyTimeout time.Duration
 	mon          MonitorRegistrar // optional P2 hook; nil disables
+	audit        *audit.Store     // optional audit log; nil disables
 }
 
 // MonitorRegistrar is the P2 monitoring hook implemented by monitor.Manager.
@@ -44,6 +46,47 @@ func New(cli docker.Client, store *OperationStore, log *slog.Logger) *Orchestrat
 	}
 }
 
+// AmILeader reports whether this daemon is the current swarm Raft leader
+// (manager nodes only; worker nodes return false).
+func (o *Orchestrator) AmILeader(ctx context.Context) (bool, error) {
+	si, err := o.Self(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !si.SwarmManager {
+		return false, nil
+	}
+	return si.Leader, nil
+}
+
+// LeaderAddr returns the address of the current swarm leader (manager with
+// ManagerStatus.Leader). Used by non-leader instances to proxy write ops.
+func (o *Orchestrator) LeaderAddr(ctx context.Context) (string, error) {
+	nodes, err := o.cli.ListNodes(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	for _, n := range nodes {
+		if n.ManagerStatus != nil && n.ManagerStatus.Leader {
+			return n.Status.Addr, nil
+		}
+	}
+	return "", fmt.Errorf("no swarm leader found")
+}
+
+// ProxyWriteToLeader forwards a write request to the leader's HTTP API.
+// Returns the leader's status code and response body. Used by non-leader
+// manager instances: the leader is the only one that performs control-plane
+// writes, so followers proxy /api/v1/services* mutations to it.
+func (o *Orchestrator) ProxyWriteToLeader(ctx context.Context, method, path string, body []byte) (int, []byte, error) {
+	addr, err := o.LeaderAddr(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	nc := NewNodeClient(addr)
+	return nc.Proxy(method, path, body)
+}
+
 // SetReadyTimeout overrides the readiness polling deadline (e.g. for tests).
 func (o *Orchestrator) SetReadyTimeout(d time.Duration) {
 	if d > 0 {
@@ -54,6 +97,25 @@ func (o *Orchestrator) SetReadyTimeout(d time.Duration) {
 // SetMonitor wires the P2 monitoring registrar (nil disables).
 func (o *Orchestrator) SetMonitor(m MonitorRegistrar) {
 	o.mon = m
+}
+
+// SetAudit wires the audit log (nil disables).
+func (o *Orchestrator) SetAudit(a *audit.Store) {
+	o.audit = a
+}
+
+// auditAction records a lifecycle action in the audit log.
+func (o *Orchestrator) auditAction(ctx context.Context, action audit.Action, service string, ok bool, detail string) {
+	if o.audit == nil {
+		return
+	}
+	o.audit.Add(audit.Entry{
+		Actor:   audit.ActorFromContext(ctx),
+		Action:  action,
+		Service: service,
+		OK:      ok,
+		Detail:  detail,
+	})
 }
 
 // SelfInfo describes the local node and its swarm role. Used by the HTTP API
@@ -137,6 +199,7 @@ func (o *Orchestrator) Deploy(ctx context.Context, cfg *config.Config) (*Operati
 	o.store.Put(op)
 	go o.pollReadiness(op, id, configHasHealth(cfg))
 	o.registerMonitor(cfg)
+	o.auditAction(ctx, audit.ActionDeploy, cfg.Service.Name, true, "service="+cfg.Service.Image)
 	return op, nil
 }
 
@@ -171,6 +234,7 @@ func (o *Orchestrator) Update(ctx context.Context, name string, cfg *config.Conf
 	o.store.Put(op)
 	go o.pollReadiness(op, svc.ID, configHasHealth(cfg))
 	o.registerMonitor(cfg)
+	o.auditAction(ctx, audit.ActionUpdate, name, true, "image="+cfg.Service.Image)
 	return op, nil
 }
 
@@ -193,6 +257,7 @@ func (o *Orchestrator) Scale(ctx context.Context, name string, replicas uint64) 
 	op.AppendStep(fmt.Sprintf("scaled to %d replicas", replicas))
 	o.store.Put(op)
 	go o.pollReadiness(op, svc.ID, serviceHasHealth(svc))
+	o.auditAction(ctx, audit.ActionScale, name, true, fmt.Sprintf("replicas=%d", replicas))
 	return op, nil
 }
 
@@ -214,6 +279,7 @@ func (o *Orchestrator) Restart(ctx context.Context, name string) (*Operation, er
 	op.AppendStep(fmt.Sprintf("force-updated (id=%s)", svc.ID))
 	o.store.Put(op)
 	go o.pollReadiness(op, svc.ID, serviceHasHealth(svc))
+	o.auditAction(ctx, audit.ActionRestart, name, true, "force")
 	return op, nil
 }
 
@@ -232,6 +298,7 @@ func (o *Orchestrator) Remove(ctx context.Context, name string) (*Operation, err
 	if o.mon != nil {
 		o.mon.Unregister(name)
 	}
+	o.auditAction(ctx, audit.ActionRemove, name, true, "removed")
 	return op, nil
 }
 

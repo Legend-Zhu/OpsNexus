@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/audit"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/monitor"
 )
@@ -16,6 +17,7 @@ import (
 type API struct {
 	orch   *Orchestrator
 	events func(service string, typ monitor.EventType, limit int) []monitor.Event
+	audit  *audit.Store
 }
 
 // NewAPI wraps an Orchestrator with HTTP handlers.
@@ -26,6 +28,11 @@ func NewAPI(orch *Orchestrator) *API {
 // SetEvents wires the P2 event query function (typically monitor.Manager.Events).
 func (a *API) SetEvents(fn func(service string, typ monitor.EventType, limit int) []monitor.Event) {
 	a.events = fn
+}
+
+// SetAudit wires the audit store (nil disables the endpoint's data).
+func (a *API) SetAudit(s *audit.Store) {
+	a.audit = s
 }
 
 // Routes returns the HTTP routes served by this API. The caller registers them
@@ -43,12 +50,35 @@ func (a *API) Routes() map[string]http.HandlerFunc {
 		"GET /api/v1/operations/{id}":         a.getOp,
 		"GET /api/v1/events":                  a.listEvents,
 		"GET /api/v1/self":                    a.self,
+		"GET /api/v1/audit":                   a.listAudit,
 	}
 }
 
 // ---- handlers ----
 
+// maybeProxyWrite forwards a write request to the leader when this instance
+// is a non-leader manager (the leader owns control-plane writes). Returns
+// (proxied, status, body) — when proxied, the caller must not continue.
+func (a *API) maybeProxyWrite(w http.ResponseWriter, r *http.Request, path string) bool {
+	leader, err := a.orch.AmILeader(r.Context())
+	if err != nil || leader {
+		return false // we are the leader (or unknown): handle locally
+	}
+	body, _ := io.ReadAll(r.Body)
+	code, resp, err := a.orch.ProxyWriteToLeader(r.Context(), r.Method, path, body)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err)
+		return true
+	}
+	w.WriteHeader(code)
+	_, _ = w.Write(resp)
+	return true
+}
+
 func (a *API) deploy(w http.ResponseWriter, r *http.Request) {
+	if a.maybeProxyWrite(w, r, "/api/v1/services") {
+		return
+	}
 	cfg, ok := decodeConfig(w, r)
 	if !ok {
 		return
@@ -63,6 +93,9 @@ func (a *API) deploy(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) update(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if a.maybeProxyWrite(w, r, "/api/v1/services/"+name) {
+		return
+	}
 	cfg, ok := decodeConfig(w, r)
 	if !ok {
 		return
@@ -77,6 +110,9 @@ func (a *API) update(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) scale(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if a.maybeProxyWrite(w, r, "/api/v1/services/"+name+"/scale") {
+		return
+	}
 	var body struct {
 		Replicas uint64 `json:"replicas"`
 	}
@@ -94,6 +130,9 @@ func (a *API) scale(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) restart(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if a.maybeProxyWrite(w, r, "/api/v1/services/"+name+"/restart") {
+		return
+	}
 	op, err := a.orch.Restart(r.Context(), name)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -104,6 +143,9 @@ func (a *API) restart(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) remove(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if a.maybeProxyWrite(w, r, "/api/v1/services/"+name) {
+		return
+	}
 	op, err := a.orch.Remove(r.Context(), name)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -154,6 +196,17 @@ func (a *API) self(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, si)
+}
+
+// listAudit returns audit entries (newest-first), optionally filtered by action.
+func (a *API) listAudit(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if a.audit == nil {
+		writeJSON(w, http.StatusOK, []audit.Entry{})
+		return
+	}
+	writeJSON(w, http.StatusOK, a.audit.List(audit.Action(q.Get("action")), limit))
 }
 
 // listEvents returns monitoring events, optionally filtered by service and

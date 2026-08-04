@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/audit"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/monitor"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/orchestrator"
@@ -26,19 +27,25 @@ import (
 // Handler bundles the MCP server with its backends (orchestrator for
 // lifecycle, monitor for events, docker client for nodes/logs).
 type Handler struct {
-	srv  *mcp.Server
-	orch *orchestrator.Orchestrator
-	mon  *monitor.Manager
-	cli  docker.Client
-	log  *slog.Logger
+	srv   *mcp.Server
+	orch  *orchestrator.Orchestrator
+	mon   *monitor.Manager
+	cli   docker.Client
+	log   *slog.Logger
+	audit *audit.Store
 }
 
 // New constructs the MCP server and registers all tools and resources.
 func New(orch *orchestrator.Orchestrator, mon *monitor.Manager, cli docker.Client, log *slog.Logger) (*Handler, error) {
+	return NewWithAudit(orch, mon, cli, log, nil)
+}
+
+// NewWithAudit builds the server with an optional audit store.
+func NewWithAudit(orch *orchestrator.Orchestrator, mon *monitor.Manager, cli docker.Client, log *slog.Logger, auditStore *audit.Store) (*Handler, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	h := &Handler{orch: orch, mon: mon, cli: cli, log: log}
+	h := &Handler{orch: orch, mon: mon, cli: cli, log: log, audit: auditStore}
 
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "opsguard-worker",

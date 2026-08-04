@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/agent"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/audit"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/authz"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/logging"
@@ -134,6 +136,12 @@ func main() {
 		store := orchestrator.NewOperationStore(1000)
 		orch = orchestrator.New(cli, store, log)
 
+		// Audit log: record every lifecycle action + command execution
+		// (queryable via GET /api/v1/audit; webhook forwarding is a future
+		// extension since the audit Entry shape differs from monitor events).
+		auditStore := audit.NewStore(5000)
+		orch.SetAudit(auditStore)
+
 		// P2 monitoring: wire the manager in; log/resource checks with
 		// action=restart call back into the orchestrator.
 		evStore := monitor.NewEventStore(10000)
@@ -153,9 +161,10 @@ func main() {
 
 		api = orchestrator.NewAPI(orch)
 		api.SetEvents(monMgr.Events)
+		api.SetAudit(auditStore)
 
 		// P3 MCP: expose the same capabilities to LLM agents over Streamable HTTP.
-		mcpHandler, err = mcp.New(orch, monMgr, cli, log)
+		mcpHandler, err = mcp.NewWithAudit(orch, monMgr, cli, log, auditStore)
 		if err != nil {
 			log.Error("mcp init failed", "err", err)
 			os.Exit(1)
@@ -194,9 +203,22 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
+	// Auth: bearer-token middleware wraps the whole API (incl. /mcp and the
+	// local node endpoints, which can execute host commands). OAuth 2.1
+	// protected-resource metadata and /healthz are public for discovery.
+	authzMW := authz.New(&agCfg.Auth)
+	authzMW.PublicPaths = []string{
+		"/.well-known/oauth-protected-resource",
+		"/healthz",
+	}
+	if agCfg.Auth.Enabled {
+		log.Info("auth enabled", "tokens", len(agCfg.Auth.Tokens))
+		mux.Handle("GET /.well-known/oauth-protected-resource", authz.MetadataHandler(authzMW))
+	}
+
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      authzMW.Wrap(mux),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 	}

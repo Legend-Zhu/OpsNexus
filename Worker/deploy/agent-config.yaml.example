@@ -17,6 +17,17 @@ worker:
 webhooks:
   # - "http://opsguard-web:8080/api/v1/events"
 
+# Bearer-token auth for the HTTP API and MCP endpoint.
+# Enable in production — the API can run host commands. Tokens can also be
+# distributed centrally via WORKER_TOKENS="name=secret,..." (env), which
+# enables auth automatically.
+auth:
+  enabled: false
+  # tokens map a name -> secret; the name becomes the audit actor:
+  # tokens:
+  #   admin: "change-me"
+  #   ops: "change-me-too"
+
 commandPolicy:
   # blacklist: reject commands matching `blacklist` substrings, allow the rest.
   # whitelist: allow only commands starting with a `whitelist` entry.

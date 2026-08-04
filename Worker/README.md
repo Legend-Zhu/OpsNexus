@@ -117,8 +117,14 @@ monitoring:
 | POST | `/api/v1/services/{name}/restart` | Force re-create tasks |
 | GET | `/api/v1/operations[/{id}]` | Operation tracking |
 | GET | `/api/v1/events` | Monitoring events (`?service=&type=&limit=`) |
+| GET | `/api/v1/audit` | Audit log (lifecycle + command executions, `?action=&limit=`) |
 | GET | `/api/v1/self` | This node's swarm role |
-| GET | `/healthz` | Liveness |
+| GET | `/.well-known/oauth-protected-resource` | OAuth 2.1 resource metadata (public) |
+| GET | `/healthz` | Liveness (public) |
+
+> **Auth**: when `auth.enabled=true` (agent config), every endpoint above except
+> the public ones requires `Authorization: Bearer <token>` (token name becomes
+> the audit actor). Tokens can be distributed centrally via `WORKER_TOKENS`.
 
 **Per-node local (every node; used by the manager for cross-node calls):**
 
@@ -159,5 +165,7 @@ deploy/            Dockerfile + swarm stack (global, privileged) + agent-config 
 
 - [x] P0 scaffold · P1 orchestration API · P2 monitoring · P3 MCP
 - [x] P4 per-node workers + cross-node proxy (stats/exec/host) · P5 hardening
-      (redaction, TLS, command policy, SSE logs)
-- [ ] OAuth 2.1 on `/mcp`, leader-failover proxy, webhook push, audit log
+      (redaction, TLS, command policy, SSE logs, bearer auth + OAuth metadata,
+      audit log, leader-failover write proxy, env-based config distribution)
+- [ ] OAuth 2.1 authorization-code flow (external AS), webhook push for audit,
+      `subscriptions/listen`, mTLS two-way, swarm autolock

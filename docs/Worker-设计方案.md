@@ -586,7 +586,7 @@ commandPolicy:
 > - **Resources（3 个）**：`worker://services`、`worker://services/{name}`（template）、`worker://events`。
 > - **协议能力**：go-sdk 自动实现 `server/discover`、版本协商（2026-07-28/2025-11-25）、每请求 `_meta` 能力声明；客户端 e2e 确认 `InitializeResult().ProtocolVersion=2026-07-28`。2026-07-28 要求请求体 `_meta` 携带 `io.modelcontextprotocol/protocolVersion`（手写 JSON-RPC 需显式带，SDK 客户端自动带）。
 > - **跨节点**：manager 按任务所在节点路由到 node worker 的 `/api/v1/local/*`，聚合 stats、代理 exec、广播 host 命令（真机双节点验证）。
-> - **未做（记入风险）**：OAuth 2.1（当前无鉴权，生产需在代理层加 mTLS/OAuth）；`subscriptions/listen` 长连接订阅（go-sdk 已内置能力，未启用）；Elicitation MRTR 用户确认（以 confirm 参数代替）。
+> - **未做（记入风险）**：`subscriptions/listen` 长连接订阅（go-sdk 已内置能力，未启用）；Elicitation MRTR 用户确认（以 confirm 参数代替）；OAuth 2.1 完整授权码流（当前为 **bearer-token 鉴权**，`internal/authz`，已含 RFC 9728 Protected Resource Metadata 发现端点，见 §七）。
 
 ---
 
@@ -604,8 +604,9 @@ commandPolicy:
 3. **mTLS**（管理端↔Worker、Worker↔Docker daemon）：复用 swarm 2376 体系，`ca.pem`/`cert.pem`/`key.pem` 权限 `0444`/`0400`，证书 `extKeyUsage` 区分 `serverAuth`/`clientAuth`，`subjectAltName` 含所有节点。
 4. **Swarm 端口**：2377/TCP（manager 间）、7946/TCP+UDP（节点发现）、4789/UDP（VXLAN，仅可信网络，必要时 `--opt encrypted` 启用 IPsec ESP）。daemon 远程 API 走 2376/TLS，**禁用 2375 明文**。
 5. **autolock**：`docker swarm update --autolock=true` 保护 Raft 密钥，manager 重启需 `swarm unlock`，防密钥落盘泄露。
-6. **MCP OAuth 2.1**：Worker 作 OAuth 2.1 资源服务器；token 走 `Authorization: Bearer`，按 RFC8707 校验 `resource` 受众；scope 细化 `worker:read` / `worker:write`。高危工具额外要 elicitation 确认。
+6. **API/MCP 鉴权（Bearer Token）**：`auth.enabled` + `auth.tokens`（name→secret，name 作审计 actor）；中间件用常量时间比较校验 `Authorization: Bearer`，包住 `/api/*`、`/api/v1/local/*`（可执行宿主机命令）与 `/mcp`；`/.well-known/oauth-protected-resource`（RFC 9728）与 `/healthz` 公开。生产通过 `WORKER_TOKENS` env 集中分发 token。完整 OAuth 2.1 授权码流（PKCE + AS）留待接外部授权服务器。
 7. **配置脱敏**：config 中的 `env`/`secrets` 值、`registryAuth` 凭证不得进日志/事件；`slog` 统一脱敏过滤器（`internal/logging`）。
+8. **审计日志**：所有编排写操作（deploy/update/scale/restart/remove）与命令执行（exec_in_container/exec_host_command）记入 `internal/audit`（ring buffer），含 actor（token 名）、操作、目标、结果，`GET /api/v1/audit` 查询；审计与业务日志相互独立。
 
 ---
 
@@ -646,7 +647,7 @@ Worker/
 | **P2 监控** | 四类 checker + EventStore + 事件 API + 探活修复 | `internal/monitor/*`、监控集成测试 | ✅ |
 | **P3 MCP** | Tools/Resources + Streamable HTTP（go-sdk v1.7.0，协议 2026-07-28，stateless） | `internal/mcp/*`、MCP e2e（官方 SDK 客户端 + 真机双节点） | ✅ |
 | **P4 HA** | 节点身份识别（/info NodeID）+ manager 写守卫 + `/self` + get_self + **per-node worker（global）** + **跨节点代理**（stats 聚合/exec 路由/host 广播） | `internal/nodeagent`、`orchestrator/proxy`、真机双节点验证 | ✅ |
-| **P5 生产化** | 日志脱敏（`internal/logging`）+ TLS（`-tls-cert/-tls-key`）+ 部署 stack + README + **命令执行入口 + 黑白名单策略（agent config）** + **SSE 流式日志** | `internal/agent`、`deploy/*`、真机验证 | ✅（OAuth 2.1、mTLS 双向、autolock 未做，记入风险） |
+| **P5 生产化** | 日志脱敏（`internal/logging`）+ TLS（`-tls-cert/-tls-key`）+ 部署 stack + README + **命令执行入口 + 黑白名单策略（agent config）** + **SSE 流式日志** + **鉴权（Bearer token + OAuth metadata）** + **审计日志** + **leader 故障切换代理** + **env 集中分发** | `internal/agent`、`internal/authz`、`internal/audit`、`deploy/*`、真机验证 | ✅（OAuth 2.1 授权码流、mTLS 双向、autolock 未做，记入风险） |
 
 每个阶段配套：单元测试 + `docker testcontainers` 集成测试 + 文档更新。
 

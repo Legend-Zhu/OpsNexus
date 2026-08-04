@@ -4,13 +4,20 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"time"
 
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/audit"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/orchestrator"
 
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func joinArgs(cmd []string) string { return strings.Join(cmd, " ") }
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 // ---- get_resource_usage ----
 
@@ -98,8 +105,10 @@ func (h *Handler) registerToolsMetrics(s *mcp.Server) {
 		}
 		out, err := h.execInContainer(context.Background(), in.Service, in.Slot, in.Command)
 		if err != nil {
+			h.auditAction(audit.ActionExec, joinArgs(in.Command), in.Service, false, err.Error())
 			return nil, execOut{}, err
 		}
+		h.auditAction(audit.ActionExec, joinArgs(in.Command), in.Service, true, "slot="+itoa(out.Slot)+" node="+out.Node)
 		return nil, out, nil
 	})
 
@@ -118,7 +127,27 @@ func (h *Handler) registerToolsMetrics(s *mcp.Server) {
 		if err != nil {
 			return nil, hostOut{}, err
 		}
+		h.auditAction(audit.ActionHostExec, in.Command, in.Node, true, "")
 		return nil, out, nil
+	})
+}
+
+// auditAction records a command-execution action in the audit log.
+func (h *Handler) auditAction(action audit.Action, command, target string, ok bool, detail string) {
+	if h.audit == nil {
+		return
+	}
+	cmd := command
+	if len(cmd) > 200 {
+		cmd = cmd[:200] + "..."
+	}
+	h.audit.Add(audit.Entry{
+		Actor:   "mcp",
+		Action:  action,
+		Command: cmd,
+		Target:  target,
+		OK:      ok,
+		Detail:  detail,
 	})
 }
 

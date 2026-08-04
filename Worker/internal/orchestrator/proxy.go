@@ -103,6 +103,24 @@ func (n *NodeClient) Host(ctx context.Context, command string) (HostResult, erro
 	return out, nil
 }
 
+// Proxy forwards an arbitrary request to this node worker's HTTP API and
+// returns the status code + body (used by non-leader managers to forward
+// write operations to the leader).
+func (n *NodeClient) Proxy(method, path string, body []byte) (int, []byte, error) {
+	req, err := http.NewRequest(method, n.base+path, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := n.hc.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, data, nil
+}
+
 // ---- http helpers ----
 
 func (n *NodeClient) getJSON(ctx context.Context, path string, out any) error {
