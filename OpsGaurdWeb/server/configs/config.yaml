@@ -5,6 +5,10 @@ server:
   addr: ":8090"
   api_key: ""                # 网关鉴权 key，空则不启用
 
+# 持久化：LevelDB 数据目录（嵌入式 KV，拷贝目录即备份）
+store:
+  path: "./data"
+
 # AiNexus 异常排查网关（内嵌进后端，非独立服务）
 # providers/tools/MCP 客户端/ReAct Agent 与管理端同进程，原生端点挂载 /ainexus/*
 ainexus:

@@ -13,6 +13,8 @@ import (
 // Config is the management-plane server configuration.
 type Config struct {
 	Server ServerConfig `yaml:"server" json:"server"`
+	// Store 持久化配置（LevelDB 数据目录）。
+	Store StoreConfig `yaml:"store" json:"store"`
 	// AINexus embeds the AiNexus AI 网关 into this process (vendored under
 	// internal/ainexus). No standalone service, no separate port — providers,
 	// tools, MCP clients and the ReAct agent run in-process; the /ainexus/*
@@ -21,6 +23,11 @@ type Config struct {
 	// Clusters registry: name -> management-plane reachable Worker base URL.
 	// Each cluster is managed via its Worker's HTTP API + MCP endpoint.
 	Clusters map[string]ClusterConfig `yaml:"clusters" json:"clusters"`
+}
+
+// StoreConfig holds the LevelDB data directory.
+type StoreConfig struct {
+	Path string `yaml:"path" json:"path"` // 数据目录，如 ./data
 }
 
 // ServerConfig holds HTTP listen settings.
@@ -58,6 +65,9 @@ func Load(path string) (*Config, error) {
 func (c *Config) applyDefaults() {
 	if c.Server.Addr == "" {
 		c.Server.Addr = ":8090"
+	}
+	if c.Store.Path == "" {
+		c.Store.Path = "./data"
 	}
 }
 

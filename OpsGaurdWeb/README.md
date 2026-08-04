@@ -38,20 +38,16 @@ OpsGaurdWeb/
 │   │   └── types/                # 领域类型
 │   └── vite.config.ts            # dev 代理 /api → :8090
 └── server/                       # 后端（Go + Gin）
-    ├── cmd/server/main.go        # 入口（初始化内嵌 AiNexus 网关）
+    ├── cmd/server/main.go        # 入口（初始化 LevelDB + 集群服务 + 内嵌 AiNexus）
     ├── internal/
-    │   ├── api/                  # handlers（骨架占位 + ainexus 内嵌端点）
+    │   ├── api/                  # handlers（clusters 已接真逻辑）
     │   ├── ainexus/              # AiNexus 内嵌网关（vendor 自仓库根 ./AiNexus）
-    │   │   ├── config/           #   网关配置（providers/tools/mcp_servers/agent）
-    │   │   ├── provider/         #   多模型 Provider（openai/anthropic 兼容）
-    │   │   ├── tool/             #   工具注册中心 + 内置工具
-    │   │   ├── mcp/              #   MCP 客户端管理（stdio/SSE/Streamable HTTP）
-    │   │   ├── agent/            #   ReAct Agent
-    │   │   ├── handler/          #   OpenAI/Anthropic 格式 gin handlers
-    │   │   └── server/           #   内嵌网关（无独立 HTTP 层，直接挂载路由）
+    │   ├── cluster/              # 集群注册表服务（CRUD + Worker 健康探测）
+    │   ├── workerproxy/          # Worker HTTP 代理客户端
+    │   ├── store/                # LevelDB 持久化（版本迁移 + 集群表 + 序列）
     │   ├── config/               # 管理端配置加载
     │   └── router/               # 路由注册（含 /ainexus/* 原生端点）
-    └── configs/config.yaml       # 配置示例（ainexus.providers / mcp_servers）
+    └── configs/config.yaml       # 配置示例（store.path / ainexus.providers / mcp_servers）
 ```
 
 ## 快速开始
@@ -84,4 +80,4 @@ npm run build      # 产物 dist/
 | 后端 | Go + Gin |
 | AI 排查 | AiNexus（**内嵌进后端**，vendor 自仓库根 `./AiNexus`，单进程运行） |
 
-> 当前为**骨架**：路由/页面/API 签名已就位，内嵌 AiNexus 网关已可运行；业务逻辑（集群接入、Worker 代理、深度排查闭环）待迭代。
+> 当前进度：**P1 集群接入已完成** —— 集群注册表（LevelDB 持久化）+ Worker 健康探测（接入时探测 + 列表联查）+ 前端集群页接真数据（列表/接入/移除/在线状态）。内嵌 AiNexus 网关可运行；工作负载（P2）/监控告警（P3）/深度排查闭环（P4）待迭代。

@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 )
 
 // Response is the standard envelope for all management-plane endpoints.
@@ -25,18 +26,20 @@ func fail(c *gin.Context, status int, message string) {
 	c.JSON(status, Response{Code: status, Message: message})
 }
 
-// Handlers groups the HTTP handlers. It is a skeleton holder for the
-// dependencies (config, worker proxy client) that the business logic will
-// need; AINexus holds the embedded AI gateway (nil when disabled).
+// Handlers groups the HTTP handlers. Cluster registry + Worker proxying are
+// wired in P1; AINexus holds the embedded AI gateway (nil when disabled).
 type Handlers struct {
-	// future deps: config *config.Config, workerProxy *proxy.Client
-	AINexus *ainexusserver.Server // 内嵌 AiNexus 网关（config 未启用时为 nil）
+	clusters *cluster.Service
+	AINexus  *ainexusserver.Server // 内嵌 AiNexus 网关（config 未启用时为 nil）
 }
 
 // NewHandlers constructs the handler set.
 func NewHandlers() *Handlers {
 	return &Handlers{}
 }
+
+// SetClusterService wires the cluster registry service (P1).
+func (h *Handlers) SetClusterService(s *cluster.Service) { h.clusters = s }
 
 // Health godoc: GET /healthz
 func (h *Handlers) Health(c *gin.Context) {

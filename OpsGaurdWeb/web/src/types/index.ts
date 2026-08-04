@@ -2,24 +2,28 @@
  * 管理端领域类型（骨架）：与后端路由/模型对应，业务迭代时扩充字段。
  */
 
-/** 集群摘要（列表项） */
+/** 集群摘要（列表项，与后端 store.Cluster.Public() 对应） */
 export interface ClusterSummary {
   name: string
+  worker_url: string
+  mcp_url?: string
   desc?: string
   status: 'online' | 'offline' | 'unknown'
-  workerUrl?: string
-  nodeCount?: number
-  serviceCount?: number
+  last_seen: string
 }
 
 /** 集群详情 */
-export interface Cluster {
+export interface Cluster extends ClusterSummary {
+  // 后端返回即 Public() 视图：无 token 字段
+}
+
+/** 接入集群请求体 */
+export interface AddClusterPayload {
   name: string
-  desc?: string
-  workerUrl: string
-  mcpUrl?: string
+  worker_url: string
+  mcp_url?: string
   token?: string
-  status: 'online' | 'offline' | 'unknown'
+  desc?: string
 }
 
 /** 工作负载（swarm service 视图） */

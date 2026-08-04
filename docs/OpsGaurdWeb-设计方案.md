@@ -140,16 +140,16 @@ OpsGaurdWeb 是**多集群管理控制台**（类 Rancher）：纳管多个 swar
 
 ```
 server/internal/
-├── api/            # handlers（骨架已有 clusters/workloads/events/audit/ainexus）
-├── config/         # 集群注册表 + AiNexus 内嵌配置（骨架已有）
-├── router/         # 路由（骨架已有，挂载 ainexus 组）
+├── api/            # handlers（clusters 已接真逻辑；workloads/events/audit 待 P2/P3）
+├── config/         # 集群注册表 + AiNexus 内嵌配置 + store 路径
+├── router/         # 路由（含 ainexus 组）
 ├── ainexus/        # 【内嵌】AiNexus 网关代码（从仓库 ./AiNexus vendor 进本模块，
 │                   #        providers/tools/mcp/agent/handler/server 全套，单进程运行）
-├── cluster/        # 集群管理：注册表 CRUD + Worker 连接状态探测（新增）
-├── workerproxy/    # Worker HTTP 代理客户端：services/events/audit/local/*（新增）
+├── cluster/        # 集群管理：注册表 CRUD + Worker 连接状态探测（✅ P1）
+├── workerproxy/    # Worker HTTP 代理客户端：healthz/self/services/events/audit/local/stats（✅ P1）
 ├── patrol/         # 巡检：YAML 流程定义存储 + 内置调度引擎（新增）
 ├── notify/         # 通知：渠道/策略/发送记录（新增）
-└── store/          # 持久化（SQLite/BoltDB 起步，管理端自身数据）
+└── store/          # 持久化（LevelDB/goleveldb 嵌入式 KV，✅ P1：集群表 + 版本迁移 + 序列）
 ```
 
 ### 4.2 API 规划（骨架基础上扩展）
@@ -250,36 +250,57 @@ GET/POST    /api/v1/users                       # 用户管理
 
 ## 六、关键设计决策
 
-> **已确认（2026-08-04）**：① 资源模型按集群+swarm 服务，裸机 Agent 留扩展；② **AiNexus 集成进平台**（随管理端一起交付部署）；③ 内置调度 **单实例**；④ 通知渠道**可配置不预设**，**必须支持飞书或短信**，且**服务部署在内网、短信/飞书等外呼需经互联网服务器代理**；⑤ 用户认证走 **SSO**；⑥ 存储用 **PostgreSQL**；⑦ 告警规则**管理 Worker 的 monitoring config**（单一事实来源）。
+> **已确认（2026-08-04）**：① 资源模型按集群+swarm 服务，裸机 Agent 留扩展；② **AiNexus 整合进后端**（单进程，非独立服务）；③ 内置调度 **单实例**；④ 通知渠道**可配置不预设**，**必须支持飞书或短信**，且**服务部署在内网、短信/飞书等外呼需经互联网服务器代理**；⑤ 用户认证走 **SSO**；⑥ 存储用 **LevelDB**（嵌入式 KV，goleveldb）；⑦ 告警规则**管理 Worker 的 monitoring config**（单一事实来源）。
 
 1. **资源模型：集群 + swarm 服务为第一公民**（类 Rancher），原型的"服务器/应用/中间件"视图在 v1 以"节点/服务/端口服务"呈现；裸机 Agent（JAR 进程/中间件专项）列为扩展，复用 Worker 的 nsenter 宿主机能力与容器 stats。✅ 已确认
 2. **AiNexus 整合进后端**：AiNexus 的 Go 代码 **vendor 进 `server/internal/ainexus/`**（Go `internal` 可见性规则下不能跨模块 import，故代码级集成），与管理端同进程运行——无独立服务、无独立端口、无进程间 HTTP；`/ainexus/*` 原生端点挂载进管理端路由，网关自身 APIKey 鉴权关闭（统一走管理端鉴权）。✅ 已确认
 3. **告警数据入口 = Worker webhook**：Worker 已支持事件/审计 webhook 推送，管理端开 ingest 端点落库，天然获得多集群告警汇聚。
 4. **巡检编排 v1 简化**：YAML 流程存储 + **内置调度引擎（单实例，Go cron，不做分布式/并发控制）**，按流程调 AiNexus 生成告警/报告；与 Worker 实时探针互补。✅ 已确认
 5. **SSE 透传**：AI 对话与日志流均以 SSE 从前端直连体验，后端只做代理不做缓冲。
-6. **存储 PostgreSQL**：管理端自身数据（集群注册表、告警、巡检、通知、用户）落 PostgreSQL；连接配置走环境变量/配置文件，不硬编码。✅ 已确认
+6. **存储 LevelDB**：管理端自身数据（集群注册表、告警、巡检、通知、用户）落 **LevelDB（goleveldb，嵌入式 KV）**——单文件目录、零外部服务、零运维，契合单实例 + 内网离线部署；数据模式（追加时序写 + 按 key 有序范围扫）正是 KV 强项；`meta/version` + 迁移函数自管版本，数据目录拷走即备份。✅ 已确认（原 PostgreSQL，改用 LevelDB）
 7. **SSO 认证**：管理端用户认证对接企业 SSO（OIDC/SAML 网关），本地账号仅作 fallback；用户/角色与 SSO 目录同步。✅ 已确认
 8. **通知渠道可配置 + 互联网代理**：渠道（飞书/短信/钉钉/企微/邮件）均为可配置项，不预设默认；**内网部署约束**——外呼类渠道（短信、飞书等需访问公网）一律经**互联网转发代理**（独立部署在可访问公网的服务器上，内网管理端 → 代理 → 公网渠道 API），代理凭据不入内网库。✅ 已确认
 9. **告警规则管理 Worker monitoring config**：管理端告警规则页 = 编辑目标集群 Worker 的服务 monitoring 配置（单一事实来源），不在管理端做独立规则引擎。✅ 已确认
 
 ---
 
-## 七、数据模型（管理端存储，PostgreSQL）
+## 七、数据模型（管理端存储，LevelDB KV）
+
+LevelDB 无表/SQL：数据按 **桶（bucket）前缀 + 主键** 组织，值为 JSON 编码；按 key 字节序有序，`seq`/`ts` 前缀天然支持时间序分页；过滤靠复合索引 key。
 
 ```
-Cluster { id, name, worker_url, mcp_url, worker_token, desc, status(online/offline), last_seen }
-IngestEvent { id, ts, cluster_id, service, type, level, msg, detail }   // 来自 Worker webhook
-Alert { id, cluster_id, service, level, title, status(active/acked/recovered), count, first_ts, last_ts }
-Patrol { id, name, description, cron, enabled, yaml }
-PatrolRun { id, patrol_id, started_at, finished_at, result, anomalies(jsonb) }
-Report { id, patrol_run_id, ai_summary }
-NotifyChannel { id, type(feishu/sms/dingtalk/wecom/email), name, config(jsonb), via_proxy(bool), enabled }
-NotifyPolicy { id, level, channel_ids[], receivers(jsonb), escalate(jsonb) }
-NotifyRecord { id, ts, channel_id, alert_id, target, status, error }
-User { id, sso_sub, username, name, role, phone, feishu_id, notify_channels(jsonb), enabled }
+key 结构: <bucket>/<pk>  → JSON 值
+
+meta/version                      -> 数据版本号（迁移用，整数递增）
+
+cluster/<name>                    -> Cluster{name, worker_url, mcp_url, worker_token,
+                                       desc, status(online/offline), last_seen}
+cluster/idx/status/<status>       -> ""  （按状态枚举，可选）
+
+event/<seq>                       -> IngestEvent{id, ts, cluster_id, service, type,
+                                       level, msg, detail}   // 来自 Worker webhook
+event/idx/cluster/<cluster>/<seq> -> ""  （按集群过滤，可选）
+
+alert/<id>                        -> Alert{id, cluster_id, service, level, title,
+                                       status(active/acked/recovered), count, first_ts, last_ts}
+alert/idx/<status>/<cluster>/<ts>/<id> -> ""  （告警列表过滤/排序索引）
+
+patrol/<id>                       -> Patrol{id, name, description, cron, enabled, yaml}
+patrolrun/<id>                    -> PatrolRun{id, patrol_id, started_at, finished_at,
+                                       result, anomalies}
+report/<id>                       -> Report{id, patrol_run_id, ai_summary}
+
+notify/channel/<id>               -> NotifyChannel{id, type, name, config, via_proxy, enabled}
+notify/policy/<level>             -> NotifyPolicy{level, channel_ids, receivers, escalate}
+notify/record/<seq>               -> NotifyRecord{id, ts, channel_id, alert_id, target, status, error}
+
+user/<id>                         -> User{id, sso_sub, username, name, role, phone,
+                                       feishu_id, notify_channels, enabled}
+
+seq/<kind>                        -> 自增序列（告警 id、事件 seq 等）
 ```
 
-> 表结构经 golang-migrate 管理；连接串（含口令）经环境变量注入，不落配置文件。
+> 写入模式：单实例 + goleveldb **WriteBatch 原子批量**；读-改-写（如告警 count 累加）用进程内互斥锁串行化。备份 = 停写后拷贝数据目录；升级 = `meta/version` 比对 + 顺序执行迁移函数。
 
 ---
 
@@ -288,7 +309,7 @@ User { id, sso_sub, username, name, role, phone, feishu_id, notify_channels(json
 | 阶段 | 里程碑 | 交付物 |
 |---|---|---|
 | **P0 骨架** ✅ | 前后端骨架 + 路由占位 | `OpsGaurdWeb/web` + `server`（已提交 f2900f2） |
-| **P1 集群接入** | 集群注册表 CRUD + Worker 健康探测 + Worker 代理客户端 + **PostgreSQL 存储层** | `cluster/`、`workerproxy/`、`store/`、前端集群页接真数据 |
+| **P1 集群接入** ✅ | 集群注册表 CRUD + Worker 健康探测 + Worker 代理客户端 + **LevelDB 存储层** | `cluster/`、`workerproxy/`、`store/`、前端集群页接真数据（已提交，双节点 swarm 联调待做） |
 | **P2 工作负载** | 服务列表/详情/部署/缩放/回滚 + SSE 日志 | 前端 workloads 页 + 后端代理 |
 | **P3 监控告警** | webhook ingest 端点 + 告警落库/列表/认领 + 节点资源视图 + 告警规则（管理 Worker monitoring config） | `ingest`、`Alert`、前端 alerts/monitor 页 |
 | **P4 AiNexus 整合** | **vendor AiNexus 进后端**（`internal/ainexus/`）+ `/ainexus/*` 原生端点挂载 + /ainexus/chat 进程内 SSE + 模型选择 + 深度排查（上下文注入 + MCP 闭环） | `ainexus/` 内嵌网关、前端 troubleshoot 页 |
@@ -301,11 +322,11 @@ User { id, sso_sub, username, name, role, phone, feishu_id, notify_channels(json
 
 ## 九、风险与待确认
 
-> **已确认（2026-08-04）**：资源模型口径 ✅、AiNexus 集成进平台 ✅、巡检单实例 ✅、通知可配置+飞书/短信+互联网代理 ✅、SSO ✅、PostgreSQL ✅、告警规则管理 Worker config ✅。以下为剩余实施期关注点：
+> **已确认（2026-08-04）**：资源模型口径 ✅、AiNexus 整合进后端 ✅、巡检单实例 ✅、通知可配置+飞书/短信+互联网代理 ✅、SSO ✅、存储 LevelDB ✅、告警规则管理 Worker config ✅。以下为剩余实施期关注点：
 
 1. **SSO 落地方式**：对接哪种 SSO（OIDC? 企业网关? 自建?）；本地账号 fallback 的边界（v1 是否保留本地登录入口）。
 2. **通知互联网代理**：代理服务的形态（独立小服务 HTTP 转发？还是复用现有网关？）；短信服务商（阿里云/腾讯云）与飞书 Webhook 的凭据存放（代理侧）。
-3. **PostgreSQL 连接**：库名/账号/密码经环境变量注入；是否需要迁移工具（golang-migrate）。
+3. **LevelDB 数据量/备份**：单实例 KV 在告警/事件量级增长后的压缩与归档策略（`alert/idx/*` 索引修剪、数据目录备份窗口）；是否需要定期 compact 与冷备。
 4. **AiNexus 内嵌边界**：vendor 时保留 AiNexus 的 providers/tools/MCP/Agent 全部能力；管理端与内嵌网关共享一个 gin 引擎后，需确认 `/ainexus/*` 原生端点与 `/api/v1/ainexus/*` 的业务化包装不冲突；内嵌后关闭网关自身 APIKey 校验，鉴权收敛到管理端。
 5. **告警规则管理范围**：管理端编辑 Worker monitoring config 时的校验/下发链路（复用 Worker deploy/update 的 config 通道）。
 6. **巡检调度**：单实例 Go cron 的持久化（进程重启后 cron 恢复）与执行记录保留策略。

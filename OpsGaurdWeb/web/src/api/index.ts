@@ -1,5 +1,5 @@
 import { get, post, del } from './http'
-import type { Cluster, ClusterSummary, Workload, EventItem, AuditItem, AINexusModel } from '@/types'
+import type { AddClusterPayload, Cluster, ClusterSummary, Workload, EventItem, AuditItem, AINexusModel } from '@/types'
 
 /**
  * API 模块骨架：函数签名已按后端路由定义，业务实现待迭代。
@@ -7,10 +7,10 @@ import type { Cluster, ClusterSummary, Workload, EventItem, AuditItem, AINexusMo
 
 // ---- 集群管理（多集群，类 Rancher） ----
 export const clusterApi = {
-  list: () => get<ClusterSummary[]>('/v1/clusters'),
+  list: () => get<{ items: ClusterSummary[] }>('/v1/clusters'),
   get: (name: string) => get<Cluster>(`/v1/clusters/${name}`),
-  add: (body: Partial<Cluster>) => post<Cluster>('/v1/clusters', body),
-  remove: (name: string) => del<void>(`/v1/clusters/${name}`),
+  add: (body: AddClusterPayload) => post<Cluster>('/v1/clusters', body),
+  remove: (name: string) => del<{ removed: string }>(`/v1/clusters/${name}`),
 }
 
 // ---- 工作负载（经 Worker） ----
