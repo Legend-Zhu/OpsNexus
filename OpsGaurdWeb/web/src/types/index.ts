@@ -160,3 +160,10 @@ export interface AINexusModel {
   object: string
   owned_by: string
 }
+
+/** 模型选择器数据（/ainexus/api/models：name/provider/type） */
+export interface AINexusModelInfo {
+  name: string
+  provider: string
+  type: string
+}

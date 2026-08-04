@@ -151,6 +151,35 @@ func (s *Server) Models() []string {
 // MCPNames 返回已连接的 MCP Server 名称
 func (s *Server) MCPNames() []string { return s.mcpMgr.ServerNames() }
 
+// AddMCPCluster 动态连接一个集群的 Worker MCP（streamable-http + Bearer
+// token），使 ReAct Agent 在排查时可调用该集群 Worker 的 16 工具采集证据。
+// 幂等：同名集群已连接则直接返回。Worker /mcp 即 Streamable HTTP 传输。
+// 连接成功后把该 server 的工具注册进 registry（RegisterAllTools 幂等，
+// 已注册的同名工具跳过）。
+func (s *Server) AddMCPCluster(name, url, token string) error {
+	serverName := "cluster:" + name
+	for _, n := range s.mcpMgr.ServerNames() {
+		if n == serverName {
+			return nil // 已连接
+		}
+	}
+	if url == "" {
+		return fmt.Errorf("mcp url is empty for cluster %q", name)
+	}
+	cfg := ainexuscfg.MCPServerConfig{
+		Name:      serverName,
+		Transport: "streamable-http",
+		URL:       url,
+	}
+	if token != "" {
+		cfg.Headers = map[string]string{"Authorization": "Bearer " + token}
+	}
+	if err := s.mcpMgr.AddServer(context.Background(), cfg); err != nil {
+		return err
+	}
+	return s.mcpMgr.RegisterAllTools(s.registry)
+}
+
 // ToolCount 返回已注册工具数
 func (s *Server) ToolCount() int { return s.registry.ToolCount() }
 

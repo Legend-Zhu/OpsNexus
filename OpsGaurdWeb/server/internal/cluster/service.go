@@ -176,6 +176,23 @@ func (s *Service) RecoverAlert(id string) (*store.Alert, error) {
 	return s.store.SetAlertStatus(id, store.AlertRecovered, "admin")
 }
 
+// Alert 按 id 读取单个告警（P4 深度排查入口）。
+func (s *Service) Alert(id string) (*store.Alert, error) {
+	return s.store.GetAlert(id)
+}
+
+// MCPEndpoint 返回集群的 MCP 端点与 token（P4 按需连接 Worker /mcp）。
+func (s *Service) MCPEndpoint(name string) (url, token string, err error) {
+	c, err := s.store.GetCluster(name)
+	if err != nil {
+		return "", "", err
+	}
+	if c == nil {
+		return "", "", ErrNotFound{Name: name}
+	}
+	return c.MCPURL, c.Token, nil
+}
+
 // probe 探测单个集群并就地更新其 status/lastSeen/err（不写库，读时快照）。
 func (s *Service) probe(ctx context.Context, c *store.Cluster) {
 	probeCtx, cancel := context.WithTimeout(ctx, s.probeTimeout)

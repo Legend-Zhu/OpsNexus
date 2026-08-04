@@ -80,6 +80,7 @@ func New(h *api.Handlers) *gin.Engine {
 			ainexus.GET("/health", h.AINexusHealth)
 			ainexus.GET("/models", h.ListAINexusModels)
 			ainexus.POST("/chat", h.AINexusChat)
+			ainexus.POST("/investigate", h.AINexusInvestigate)
 		}
 	}
 

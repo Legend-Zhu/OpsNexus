@@ -1,8 +1,8 @@
 import { get, post, del } from './http'
 import type {
   AddClusterPayload,
+  AINexusModelInfo,
   Alert,
-  AINexusModel,
   AuditItem,
   Cluster,
   ClusterSummary,
@@ -68,6 +68,8 @@ export const monitorApi = {
 // ---- AiNexus 异常排查 ----
 export const ainexusApi = {
   health: () => get<{ status: string }>('/v1/ainexus/health'),
-  models: () => get<AINexusModel[]>('/v1/ainexus/models'),
+  models: () => get<{ models: AINexusModelInfo[] }>('/v1/ainexus/models'),
   chat: (body: unknown) => post<unknown>('/v1/ainexus/chat', body),
+  // 深度排查：告警 → 上下文注入 → 内嵌 Agent（SSE 流式）
+  investigateUrl: () => '/api/v1/ainexus/investigate',
 }
