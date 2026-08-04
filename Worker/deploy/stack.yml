@@ -1,0 +1,48 @@
+# Deploy the OpsGaurd Worker to a Docker Swarm.
+#
+# The Worker runs as a global service on every swarm node so each node can
+# report its local containers' stats and logs to the manager-role Worker
+# (P4 multi-node wiring is the operator's responsibility: only run the
+# orchestration API / MCP on manager nodes, e.g. via placement constraints).
+#
+# Deploy:
+#   docker build -t opsguard-worker:1.0.0 -f Dockerfile .
+#   docker stack deploy -c stack.yml opsguard
+#
+# Required: the swarm must be initialized (`docker swarm init`).
+
+version: "3.8"
+
+services:
+  worker:
+    image: opsguard-worker:1.0.0
+    hostname: "{{.Node.Hostname}}"
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          # Run on manager nodes only (control-plane + aggregation).
+          # Remove this constraint to run on all nodes (per-node monitoring).
+          - node.role == manager
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 128M
+    environment:
+      # Docker daemon access: unix socket mount below is the default; for a
+      # remote manager use DOCKER_HOST=tcp://manager:2376 with TLS.
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      # Orchestration API + MCP Streamable HTTP. Put a TLS-terminating proxy
+      # in front for production (self-hosted mTLS/TLS or OAuth).
+      - "8080:8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
