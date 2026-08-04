@@ -12,9 +12,9 @@ const (
 	ToolFormatAnthropic ToolFormat = "anthropic"
 
 	// MaxStreamChunkRunes 单条流式 chunk 的最大字符数：上游模型/网关可能
-	// 一次吐超长文本（如推理模型一次性输出），Agent 会把它累积进对话，
-	// 超出即截断，防单条输出打爆上下文。
-	MaxStreamChunkRunes = 4000
+	// 一次吐超长文本，Agent 会把它累积进对话。1M 上下文下允许较大单条
+	// （32K rune），仅防极端单条塞爆窗口。
+	MaxStreamChunkRunes = 32 << 10
 )
 
 // Role 消息角色

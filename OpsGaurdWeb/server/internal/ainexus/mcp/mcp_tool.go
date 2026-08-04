@@ -12,9 +12,10 @@ import (
 )
 
 // MaxToolResultBytes 单次工具调用的结果上限（rune 计）。
-// 命令/日志类工具（如 exec_host_command）可能返回海量输出，超出即截断并
-// 标注，避免一次工具结果打爆上下文（防长排查失控的核心防线）。
-const MaxToolResultBytes = 8000
+// 命令/日志类工具（如 exec_host_command）可能返回海量输出。1M 上下文下
+// 允许工具结果全文进入（128KB），仅防单次调用把整个窗口塞爆；超限截断并
+// 标注，保留头部（内容）与尾部（报错/摘要）。
+const MaxToolResultBytes = 128 << 10 // 128KB
 
 // MCPTool 封装 MCP 远程工具，实现 tool.Tool 接口
 type MCPTool struct {
@@ -72,7 +73,8 @@ func (t *MCPTool) Execute(ctx context.Context, params map[string]any) (tool.Tool
 		return tool.NewErrorResult(fmt.Sprintf("MCP tool call failed: %s", err)), nil
 	}
 
-	// 将结果内容转换为字符串（截断到 MaxToolResultBytes，防上下文打爆）
+	// 将结果内容转换为字符串（上限 MaxToolResultBytes，1M 上下文下全文进
+	// 上下文；超限保留头尾、截断中部，并标注）
 	var contentStr string
 	for _, c := range result.Content {
 		var s string
@@ -90,7 +92,10 @@ func (t *MCPTool) Execute(ctx context.Context, params map[string]any) (tool.Tool
 		}
 		rs := []rune(s)
 		if len(rs) > remain {
-			contentStr += string(rs[:remain]) + "\n…[output truncated]"
+			// 保留头 + 尾，中部省略
+			head := rs[:remain/2]
+			tail := rs[len(rs)-remain/2:]
+			contentStr += string(head) + fmt.Sprintf("\n…[中间省略 %d 字符]\n", len(rs)-remain) + string(tail)
 			break
 		}
 		contentStr += s

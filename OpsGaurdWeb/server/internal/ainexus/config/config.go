@@ -128,8 +128,10 @@ func DefaultConfig() *Config {
 		Agent: AgentConfig{
 			MaxToolRounds:     10,
 			ParallelToolCalls: true,
-			MaxContextTokens:  32000, // 默认上下文预算，防长排查对话无限膨胀
-			KeepToolRounds:    3,
+			// 深度排查模型上下文 1M：预算对齐窗口（预留工具定义/系统提示余量）。
+			// 超预算时优先摘要压缩旧轮次（类 Trae Memory），非硬删。
+			MaxContextTokens: 800000,
+			KeepToolRounds:   5,
 		},
 	}
 }

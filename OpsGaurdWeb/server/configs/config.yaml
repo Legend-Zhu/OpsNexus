@@ -37,8 +37,8 @@ ainexus:
   agent:
     max_tool_rounds: 10
     parallel_tool_calls: true
-    max_context_tokens: 32000   # 上下文预算：长排查对话超预算时按完整轮次裁剪旧历史
-    keep_tool_rounds: 3         # 裁剪时保留最近多少个工具轮次
+    max_context_tokens: 800000    # 对齐深度排查模型 1M 窗口；超预算时摘要压缩旧轮次（类 Trae Memory），非硬删
+    keep_tool_rounds: 5           # 压缩时完整保留最近多少个工具轮次（更早的走摘要）
   # MCP 客户端：连接各集群 Worker 的 /mcp（streamable-http），AI 排查时采集证据
   # 每个集群一条，transport=streamable-http，url 指向该集群 Worker
   mcp_servers:

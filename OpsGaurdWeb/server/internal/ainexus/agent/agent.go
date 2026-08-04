@@ -35,26 +35,34 @@ type AgentEvent struct {
 
 // Agent ReAct Agent
 type Agent struct {
-	provider provider.Provider
-	registry *tool.Registry
-	config   config.AgentConfig
-	logger   *log.Logger
+	provider   provider.Provider
+	registry   *tool.Registry
+	config     config.AgentConfig
+	logger     *log.Logger
+	compressor Compressor // 旧轮次摘要压缩器（nil=仅硬删）
 }
 
 // New 创建 Agent
 func New(p provider.Provider, registry *tool.Registry, cfg config.AgentConfig, logger *log.Logger) *Agent {
-	return &Agent{
+	a := &Agent{
 		provider: p,
 		registry: registry,
 		config:   cfg,
 		logger:   logger,
 	}
+	// 配置了上下文预算 → 用同一 provider 做旧轮次摘要（类 Trae Memory）。
+	// 不额外消耗：仅在每次裁剪前调用；失败自动退化为硬删。
+	if cfg.MaxContextTokens > 0 && p != nil {
+		a.compressor = NewLLMCompressor(p, 6000)
+	}
+	return a
 }
 
-// trimContext 在每次请求前把对话裁剪到上下文预算内（按完整轮次，防无限膨胀）。
+// trimContext 在每次请求前把对话裁剪到上下文预算内。
+// 优先摘要压缩（保留根因/关键操作/观测），未配置预算或摘要失败则硬删。
 func (a *Agent) trimContext(conv *Conversation) {
 	if a.config.MaxContextTokens > 0 {
-		conv.Trim(a.config.MaxContextTokens, a.config.KeepToolRounds)
+		conv.Compress(a.compressor, a.config.MaxContextTokens, a.config.KeepToolRounds)
 	}
 }
 

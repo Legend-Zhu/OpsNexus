@@ -167,8 +167,9 @@ func BuildInvestigateMessages(
 	}
 }
 
-// evidenceBytes 单个证据源（事件/审计/日志）的字节预算，防注入打爆上下文。
-const evidenceBytes = 16 << 10 // 16KB
+// evidenceBytes 单个证据源（事件/审计/日志）的字节预算。
+// 1M 上下文下证据可完整注入（256KB），仅防多源海量证据挤占分析空间。
+const evidenceBytes = 256 << 10 // 256KB
 
 // capEvidence 将证据 JSON 截断到字节上限（超出替换为截断标记）。
 func capEvidence(raw json.RawMessage, limit int) json.RawMessage {
