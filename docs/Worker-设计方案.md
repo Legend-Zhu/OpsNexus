@@ -601,7 +601,7 @@ commandPolicy:
    - 命令黑白名单由 agent config 下发（见 §4.7）；
    - 高风险动作（`exec_host_command`/`exec_in_container`/`remove_service`/`scale=0`）在 MCP 层强制 `confirm=true`；
    - 生产应将该 API 置于仅内网/带鉴权的反向代理后，避免未授权访问特权 Worker。
-3. **mTLS**（管理端↔Worker、Worker↔Docker daemon）：复用 swarm 2376 体系，`ca.pem`/`cert.pem`/`key.pem` 权限 `0444`/`0400`，证书 `extKeyUsage` 区分 `serverAuth`/`clientAuth`，`subjectAltName` 含所有节点。
+3. **mTLS 双向认证**（管理端↔Worker）：`-tls-cert/-tls-key/-tls-ca` 三参齐备时强制客户端证书（`RequireAndVerifyClientCert`，TLS 1.2+）。`ca.pem`/`cert.pem`/`key.pem` 权限 `0444`/`0400`，证书 `extKeyUsage` 区分 `serverAuth`/`clientAuth`，`subjectAltName` 含所有节点。与 Bearer token 可叠加（证书鉴身份 + token 鉴权限）。
 4. **Swarm 端口**：2377/TCP（manager 间）、7946/TCP+UDP（节点发现）、4789/UDP（VXLAN，仅可信网络，必要时 `--opt encrypted` 启用 IPsec ESP）。daemon 远程 API 走 2376/TLS，**禁用 2375 明文**。
 5. **autolock**：`docker swarm update --autolock=true` 保护 Raft 密钥，manager 重启需 `swarm unlock`，防密钥落盘泄露。
 6. **API/MCP 鉴权（Bearer Token）**：`auth.enabled` + `auth.tokens`（name→secret，name 作审计 actor）；中间件用常量时间比较校验 `Authorization: Bearer`，包住 `/api/*`、`/api/v1/local/*`（可执行宿主机命令）与 `/mcp`；`/.well-known/oauth-protected-resource`（RFC 9728）与 `/healthz` 公开。生产通过 `WORKER_TOKENS` env 集中分发 token。完整 OAuth 2.1 授权码流（PKCE + AS）留待接外部授权服务器。
@@ -647,7 +647,7 @@ Worker/
 | **P2 监控** | 四类 checker + EventStore + 事件 API + 探活修复 | `internal/monitor/*`、监控集成测试 | ✅ |
 | **P3 MCP** | Tools/Resources + Streamable HTTP（go-sdk v1.7.0，协议 2026-07-28，stateless） | `internal/mcp/*`、MCP e2e（官方 SDK 客户端 + 真机双节点） | ✅ |
 | **P4 HA** | 节点身份识别（/info NodeID）+ manager 写守卫 + `/self` + get_self + **per-node worker（global）** + **跨节点代理**（stats 聚合/exec 路由/host 广播） | `internal/nodeagent`、`orchestrator/proxy`、真机双节点验证 | ✅ |
-| **P5 生产化** | 日志脱敏（`internal/logging`）+ TLS（`-tls-cert/-tls-key`）+ 部署 stack + README + **命令执行入口 + 黑白名单策略（agent config）** + **SSE 流式日志** + **鉴权（Bearer token + OAuth metadata）** + **审计日志** + **leader 故障切换代理** + **env 集中分发** | `internal/agent`、`internal/authz`、`internal/audit`、`deploy/*`、真机验证 | ✅（OAuth 2.1 授权码流、mTLS 双向、autolock 未做，记入风险） |
+| **P5 生产化** | 日志脱敏（`internal/logging`）+ TLS/（**mTLS 双向** `-tls-ca`）+ 部署 stack + README + **命令执行入口 + 黑白名单策略（agent config）** + **SSE 流式日志** + **鉴权（Bearer token + OAuth metadata）** + **审计日志（含 webhook 推送）** + **leader 故障切换代理** + **env 集中分发** | `internal/agent`、`internal/authz`、`internal/audit`、`deploy/*`、真机验证 | ✅（OAuth 2.1 授权码流、autolock 未做，记入风险） |
 
 每个阶段配套：单元测试 + `docker testcontainers` 集成测试 + 文档更新。
 

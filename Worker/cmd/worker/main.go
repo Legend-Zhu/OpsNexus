@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"log/slog"
 	"net/http"
@@ -28,14 +30,15 @@ import (
 
 func main() {
 	var (
-		addr       string
-		cfgPath    string
-		agentCfg   string
-		logJSON    bool
-		logLevel   string
-		stdio      bool // MCP over stdio instead of HTTP
-		tlsCert    string
-		tlsKey     string
+		addr     string
+		cfgPath  string
+		agentCfg string
+		logJSON  bool
+		logLevel string
+		stdio    bool // MCP over stdio instead of HTTP
+		tlsCert  string
+		tlsKey   string
+		tlsCA    string
 	)
 	flag.StringVar(&addr, "addr", ":8080", "HTTP listen address for the orchestration API")
 	flag.StringVar(&cfgPath, "config", "", "optional worker config (yaml/json) to validate at startup")
@@ -45,6 +48,7 @@ func main() {
 	flag.BoolVar(&stdio, "mcp-stdio", false, "serve MCP over stdio (local agents) instead of the HTTP API")
 	flag.StringVar(&tlsCert, "tls-cert", "", "TLS certificate file (PEM); enables HTTPS when set with -tls-key")
 	flag.StringVar(&tlsKey, "tls-key", "", "TLS private key file (PEM)")
+	flag.StringVar(&tlsCA, "tls-ca", "", "CA file (PEM) to verify client certificates; enables mutual TLS (mTLS) when set with -tls-cert/-tls-key")
 	flag.Parse()
 
 	var level slog.Level
@@ -152,10 +156,12 @@ func main() {
 		})
 		orch.SetMonitor(monMgr)
 
-		// Webhook event forwarding (agent config `webhooks` list).
+		// Webhook event forwarding (agent config `webhooks` list): monitor
+		// events + audit entries share the same pusher.
 		if len(agCfg.Webhooks) > 0 {
 			pusher := monitor.NewWebhookPusher(agCfg.Webhooks, log)
 			evStore.AddSink(pusher.Sink())
+			auditStore.AddSink(func(e audit.Entry) { pusher.SendJSON(e) })
 			log.Info("webhook forwarding enabled", "urls", len(agCfg.Webhooks))
 		}
 
@@ -221,6 +227,22 @@ func main() {
 		Handler:      authzMW.Wrap(mux),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
+	}
+
+	// Mutual TLS: when a CA is supplied, require and verify client certs.
+	if tlsCert != "" && tlsKey != "" && tlsCA != "" {
+		caPEM, err := os.ReadFile(tlsCA)
+		if err != nil {
+			log.Error("read tls-ca", "err", err)
+			os.Exit(1)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			log.Error("no valid certs in tls-ca", "path", tlsCA)
+			os.Exit(1)
+		}
+		srv.TLSConfig = &tls.Config{ClientCAs: pool, ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS12}
+		log.Info("mutual TLS enabled (client certs required)", "ca", tlsCA)
 	}
 
 	go func() {

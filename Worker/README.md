@@ -26,8 +26,9 @@ LLM agents. Design doc: `docs/Worker-设计方案.md`.
 - **私有仓库**：`registryAuth`（inline 或 swarm secret）经 `X-Registry-Auth` 传引擎；
   `imagePullPolicy=always` 预拉取。
 - **安全**：日志脱敏（env/auth/secret 值 → `[REDACTED]`）；写操作要求 manager 节点
-  （swarm control-plane）；宿主机执行需显式开启 `allowHostExec`；TLS 可选
-  （`-tls-cert/-tls-key`）。
+  （swarm control-plane）；宿主机执行需显式开启 `allowHostExec`；Bearer token 鉴权
+  （`auth.tokens` + OAuth metadata 端点）；**mTLS 双向**（`-tls-ca` 强制客户端证书）；
+  **审计日志**（编排/命令打点，`GET /api/v1/audit`，可 webhook 推送）。
 
 ## Build
 

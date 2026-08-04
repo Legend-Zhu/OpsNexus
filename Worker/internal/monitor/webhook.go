@@ -48,20 +48,26 @@ func NewWebhookPusher(urls []string, log *slog.Logger) *WebhookPusher {
 // Sink returns an EventStore-compatible callback.
 func (w *WebhookPusher) Sink() func(Event) {
 	return func(e Event) {
-		if w == nil || len(w.urls) == 0 {
-			return
-		}
-		w.wg.Add(1)
-		go w.push(e)
+		w.SendJSON(e)
 	}
 }
 
-// push delivers one event to all URLs with retries.
-func (w *WebhookPusher) push(e Event) {
+// SendJSON delivers an arbitrary JSON-serializable payload (monitor event,
+// audit entry, ...) to every configured URL with retries.
+func (w *WebhookPusher) SendJSON(v any) {
+	if w == nil || len(w.urls) == 0 {
+		return
+	}
+	w.wg.Add(1)
+	go w.pushPayload(v)
+}
+
+// pushPayload marshals v and delivers it to all URLs.
+func (w *WebhookPusher) pushPayload(v any) {
 	defer w.wg.Done()
-	body, err := json.Marshal(e)
+	body, err := json.Marshal(v)
 	if err != nil {
-		w.log.Error("webhook marshal failed", "event", e.ID, "err", err)
+		w.log.Error("webhook marshal failed", "err", err)
 		return
 	}
 	for _, u := range w.urls {
