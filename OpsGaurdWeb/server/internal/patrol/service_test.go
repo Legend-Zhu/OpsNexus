@@ -77,6 +77,42 @@ func mockWorker(t *testing.T) *httptest.Server {
 			"tasks": []any{}, "running": 2, "desired": 2, "healthy": 2,
 		})
 	})
+	// 节点级检查 mock：n1 一切正常，n2 全失败（端口不通/HTTP 503/无 java 进程）
+	mux.HandleFunc("GET /api/v1/nodes", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"id": "n1", "hostname": "h1", "state": "ready", "role": "manager"},
+			{"id": "n2", "hostname": "h2", "state": "ready", "role": "worker"},
+		})
+	})
+	mux.HandleFunc("GET /api/v1/nodes/{id}/check/port", func(w http.ResponseWriter, r *http.Request) {
+		ok := r.PathValue("id") == "n1"
+		out := map[string]any{"node": r.PathValue("id"), "host": r.URL.Query().Get("host"),
+			"port": r.URL.Query().Get("port"), "ok": ok, "latencyMs": 1}
+		if !ok {
+			out["error"] = "dial tcp: connection refused"
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
+	mux.HandleFunc("POST /api/v1/nodes/{id}/check/http", func(w http.ResponseWriter, r *http.Request) {
+		ok := r.PathValue("id") == "n1"
+		out := map[string]any{"node": r.PathValue("id"), "url": "http://x/healthz", "ok": ok, "status": 200, "latencyMs": 1}
+		if !ok {
+			out["status"] = 503
+			out["error"] = "status 503 not 2xx"
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
+	mux.HandleFunc("GET /api/v1/nodes/{id}/processes", func(w http.ResponseWriter, r *http.Request) {
+		procs := []map[string]any{}
+		if r.PathValue("id") == "n1" && r.URL.Query().Get("filter") == "java" {
+			procs = append(procs,
+				map[string]any{"pid": 100, "name": "java", "cmdline": "java -jar app.jar"},
+				map[string]any{"pid": 101, "name": "java", "cmdline": "java -jar worker.jar"})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"node": r.PathValue("id"), "total": len(procs), "processes": procs,
+		})
+	})
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts
@@ -154,6 +190,92 @@ func TestRunValidation(t *testing.T) {
 	}
 	if _, err := svc.Create("bad2", "", "not a cron", "name: x\nchecks:\n  - type: resource\n    cluster: c\n    service: s", false); err == nil {
 		t.Fatal("invalid cron should be rejected")
+	}
+}
+
+// TestNodeLevelChecks port/http/process 检查：node 空 = 全部 ready 节点，
+// 每个失败节点一条异常（n2 全失败，n1 全通过）。
+func TestNodeLevelChecks(t *testing.T) {
+	svc, _ := newTestPatrol(t)
+
+	p, err := svc.Create("node-checks", "", "0 2 * * *", `
+name: node-checks
+checks:
+  - type: port
+    cluster: dev
+    host: 10.0.0.1
+    port: 3306
+  - type: http
+    cluster: dev
+    url: http://10.0.0.1:8080/healthz
+  - type: process
+    cluster: dev
+    filter: java
+  - type: port
+    cluster: dev
+    node: h1
+    host: 10.0.0.1
+    port: 6379
+`, true)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	run, err := svc.Run(context.Background(), p.ID)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// port(全部节点)/http/process 各产出 n2 一条失败；port(node=h1) 通过
+	if len(run.Anomalies) != 4 {
+		t.Fatalf("anomalies len=%d, want 4: %+v", len(run.Anomalies), run.Anomalies)
+	}
+	for i, a := range run.Anomalies[:3] {
+		if a.OK || !contains(a.Message, "h2") {
+			t.Fatalf("anomalies[%d] 应为 h2 的失败: %+v", i, a)
+		}
+	}
+	last := run.Anomalies[3]
+	if !last.OK || !contains(last.Message, "6379") {
+		t.Fatalf("单节点 port 检查应通过: %+v", last)
+	}
+}
+
+// TestParseFlowNodeChecks 新检查类型的字段校验。
+func TestParseFlowNodeChecks(t *testing.T) {
+	valid := `
+name: x
+checks:
+  - type: port
+    cluster: dev
+    host: 10.0.0.1
+    port: 3306
+    timeout: 5s
+  - type: http
+    cluster: dev
+    url: http://a/healthz
+    expected_status: [200, 204]
+  - type: process
+    cluster: dev
+    filter: java
+    min_count: 2
+`
+	f, err := ParseFlow(valid)
+	if err != nil {
+		t.Fatalf("valid flow rejected: %v", err)
+	}
+	if f.Checks[2].MinCount != 2 || f.Checks[1].ExpectedStatus[1] != 204 {
+		t.Fatalf("unexpected flow: %+v", f.Checks)
+	}
+
+	for _, bad := range []string{
+		"name: x\nchecks:\n  - type: port\n    cluster: c",                                             // 缺 host/port
+		"name: x\nchecks:\n  - type: http\n    cluster: c",                                             // 缺 url
+		"name: x\nchecks:\n  - type: process\n    cluster: c",                                          // 缺 filter
+		"name: x\nchecks:\n  - type: resource\n    cluster: c",                                         // resource 缺 service
+		"name: x\nchecks:\n  - type: port\n    cluster: c\n    host: h\n    port: 1\n    timeout: bad", // timeout 非法
+	} {
+		if _, err := ParseFlow(bad); err == nil {
+			t.Fatalf("invalid flow accepted: %q", bad)
+		}
 	}
 }
 

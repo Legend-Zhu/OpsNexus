@@ -40,8 +40,8 @@ func (e *ErrUnreachable) Error() string {
 
 // Client 是对单个 Worker 的 HTTP 客户端。
 type Client struct {
-	baseURL string   // e.g. http://<管理节点IP>:8080
-	token   string   // bearer token（可空）
+	baseURL string // e.g. http://<管理节点IP>:8080
+	token   string // bearer token（可空）
 	http    *http.Client
 }
 
@@ -112,9 +112,9 @@ func truncate(s string, n int) string {
 type SelfInfo struct {
 	NodeID       string `json:"nodeId"`
 	Hostname     string `json:"hostname"`
-	Role         string `json:"role"`        // manager | worker
-	Leader       bool   `json:"leader"`      // manager-only: swarm Raft leader
-	State        string `json:"state"`       // node Status.State
+	Role         string `json:"role"`         // manager | worker
+	Leader       bool   `json:"leader"`       // manager-only: swarm Raft leader
+	State        string `json:"state"`        // node Status.State
 	SwarmManager bool   `json:"swarmManager"` // 该 daemon 是否运行 swarm 控制面
 	Addr         string `json:"addr,omitempty"`
 }
@@ -141,13 +141,13 @@ type ContainerStat struct {
 type Node struct {
 	ID             string  `json:"id"`
 	Hostname       string  `json:"hostname"`
-	Role           string  `json:"role"`            // manager | worker
-	State          string  `json:"state"`           // ready | down | ...
-	Availability   string  `json:"availability"`    // active | pause | drain
+	Role           string  `json:"role"`         // manager | worker
+	State          string  `json:"state"`        // ready | down | ...
+	Availability   string  `json:"availability"` // active | pause | drain
 	Addr           string  `json:"addr"`
 	Leader         bool    `json:"leader"`
 	ManagerReach   string  `json:"managerReachability,omitempty"`
-	Reachable      bool    `json:"reachable"`       // 节点 Worker 可达
+	Reachable      bool    `json:"reachable"` // 节点 Worker 可达
 	CPUCores       float64 `json:"cpuCores"`
 	MemBytes       uint64  `json:"memBytes"`
 	CPUPercent     float64 `json:"cpuPercent"`
@@ -170,6 +170,36 @@ type ProcessesResp struct {
 	Node      string    `json:"node"`
 	Total     int       `json:"total"`
 	Processes []Process `json:"processes"`
+}
+
+// PortCheckResult 对应 Worker GET /api/v1/nodes/{id}/check/port 的响应。
+type PortCheckResult struct {
+	Node      string `json:"node"`
+	Host      string `json:"host"`
+	Port      string `json:"port"`
+	OK        bool   `json:"ok"`
+	LatencyMS int64  `json:"latencyMs"`
+	Error     string `json:"error,omitempty"`
+}
+
+// HTTPCheckRequest 对应 Worker POST /api/v1/nodes/{id}/check/http 的请求体。
+type HTTPCheckRequest struct {
+	URL            string            `json:"url"`
+	Method         string            `json:"method,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	ExpectedStatus []int             `json:"expectedStatus,omitempty"` // 空 = 任意 2xx
+	ExpectedBody   string            `json:"expectedBody,omitempty"`   // 正则
+	Timeout        string            `json:"timeout,omitempty"`
+}
+
+// HTTPCheckResult 对应 Worker POST /api/v1/nodes/{id}/check/http 的响应。
+type HTTPCheckResult struct {
+	Node      string `json:"node"`
+	URL       string `json:"url"`
+	OK        bool   `json:"ok"`
+	Status    int    `json:"status"`
+	LatencyMS int64  `json:"latencyMs"`
+	Error     string `json:"error,omitempty"`
 }
 
 // --- 方法 ---
@@ -209,13 +239,33 @@ func (c *Client) ListNodes(ctx context.Context) ([]Node, error) {
 }
 
 // ListProcesses 获取指定节点的宿主机进程（GET /api/v1/nodes/{id}/processes）。
-func (c *Client) ListProcesses(ctx context.Context, nodeID, top string, limit int) (ProcessesResp, error) {
+// filter 为名称/cmdline 子串（大小写不敏感），空 = 不过滤。
+func (c *Client) ListProcesses(ctx context.Context, nodeID, top string, limit int, filter string) (ProcessesResp, error) {
 	var out ProcessesResp
-	q := map[string]string{"top": top}
+	q := map[string]string{"top": top, "filter": filter}
 	if limit > 0 {
 		q["limit"] = fmt.Sprintf("%d", limit)
 	}
 	err := c.do(ctx, http.MethodGet, "/api/v1/nodes/"+nodeID+"/processes", q, nil, &out)
+	return out, err
+}
+
+// CheckPort 从指定节点发起一次性 TCP 探测（GET /api/v1/nodes/{id}/check/port）。
+func (c *Client) CheckPort(ctx context.Context, nodeID, host string, port int, timeout string) (PortCheckResult, error) {
+	var out PortCheckResult
+	q := map[string]string{"host": host, "port": fmt.Sprintf("%d", port), "timeout": timeout}
+	err := c.do(ctx, http.MethodGet, "/api/v1/nodes/"+nodeID+"/check/port", q, nil, &out)
+	return out, err
+}
+
+// CheckHTTP 从指定节点发起一次性 HTTP 探测（POST /api/v1/nodes/{id}/check/http）。
+func (c *Client) CheckHTTP(ctx context.Context, nodeID string, req HTTPCheckRequest) (HTTPCheckResult, error) {
+	var out HTTPCheckResult
+	body, err := json.Marshal(req)
+	if err != nil {
+		return out, err
+	}
+	err = c.do(ctx, http.MethodPost, "/api/v1/nodes/"+nodeID+"/check/http", nil, body, &out)
 	return out, err
 }
 

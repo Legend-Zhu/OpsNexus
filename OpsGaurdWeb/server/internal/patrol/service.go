@@ -32,14 +32,29 @@ type Flow struct {
 
 // Check 单个检查项。
 type Check struct {
-	Type    string  `yaml:"type"` // resource | health
-	Cluster string  `yaml:"cluster"`
-	Service string  `yaml:"service"`
+	Type    string `yaml:"type"` // resource | health | port | http | process
+	Cluster string `yaml:"cluster"`
+	Service string `yaml:"service"` // resource/health 必填
 	// resource 阈值
 	CPUThreshold float64 `yaml:"cpu_threshold,omitempty"` // 百分比
 	MemThreshold float64 `yaml:"mem_threshold,omitempty"`
 	// health 期望副本（0=全部）
 	MinReplicas int `yaml:"min_replicas,omitempty"`
+	// port/http/process 目标节点（node ID/hostname，空 = 全部 ready 节点）
+	Node string `yaml:"node,omitempty"`
+	// port 检查（宿主机中间件端口，如 MySQL 3306）
+	Host string `yaml:"host,omitempty"` // 目标主机/IP（探宿主机服务用节点 IP，勿用 127.0.0.1）
+	Port int    `yaml:"port,omitempty"`
+	// http 检查
+	URL            string `yaml:"url,omitempty"`
+	Method         string `yaml:"method,omitempty"`          // 默认 GET
+	ExpectedStatus []int  `yaml:"expected_status,omitempty"` // 空 = 任意 2xx
+	ExpectedBody   string `yaml:"expected_body,omitempty"`   // body 正则
+	// process 检查（宿主机进程发现，如 java / redis-server）
+	Filter   string `yaml:"filter,omitempty"`    // 名称/cmdline 子串（大小写不敏感）
+	MinCount int    `yaml:"min_count,omitempty"` // 每节点最少匹配数（默认 1，少于即异常）
+	// port/http 探测超时（如 3s，默认 3s）
+	Timeout string `yaml:"timeout,omitempty"`
 }
 
 // ErrInvalidFlow 流程定义校验失败。
@@ -70,14 +85,31 @@ func ParseFlow(yamlText string) (*Flow, error) {
 	for i, c := range f.Checks {
 		switch c.Type {
 		case "resource", "health":
+			if c.Service == "" {
+				return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d].service is required for %s", i, c.Type)}
+			}
+		case "port":
+			if c.Host == "" || c.Port <= 0 {
+				return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d]: port check requires host and port", i)}
+			}
+		case "http":
+			if c.URL == "" {
+				return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d]: http check requires url", i)}
+			}
+		case "process":
+			if c.Filter == "" {
+				return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d]: process check requires filter", i)}
+			}
 		default:
-			return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d].type must be resource|health, got %q", i, c.Type)}
+			return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d].type must be resource|health|port|http|process, got %q", i, c.Type)}
 		}
 		if c.Cluster == "" {
 			return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d].cluster is required", i)}
 		}
-		if c.Service == "" {
-			return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d].service is required", i)}
+		if c.Timeout != "" {
+			if _, err := time.ParseDuration(c.Timeout); err != nil {
+				return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d].timeout invalid: %v", i, err)}
+			}
 		}
 	}
 	return &f, nil
@@ -309,17 +341,16 @@ func (s *Service) Run(ctx context.Context, patrolID string) (*store.PatrolRun, e
 	return run, nil
 }
 
-// runChecks 逐个执行检查项，收集异常。
+// runChecks 逐个执行检查项，收集异常（节点级检查一个检查项可产生多条）。
 func (s *Service) runChecks(ctx context.Context, flow *Flow) []store.Anomaly {
 	var out []store.Anomaly
 	for _, c := range flow.Checks {
-		a := s.runCheck(ctx, c)
-		out = append(out, a)
+		out = append(out, s.runCheck(ctx, c)...)
 	}
 	return out
 }
 
-func (s *Service) runCheck(ctx context.Context, c Check) store.Anomaly {
+func (s *Service) runCheck(ctx context.Context, c Check) []store.Anomaly {
 	base := store.Anomaly{
 		Check:   c.Type + "/" + c.Service,
 		Cluster: c.Cluster,
@@ -329,17 +360,23 @@ func (s *Service) runCheck(ctx context.Context, c Check) store.Anomaly {
 	if err != nil {
 		base.OK = false
 		base.Message = "集群不可用: " + err.Error()
-		return base
+		return []store.Anomaly{base}
 	}
 	switch c.Type {
 	case "resource":
-		return s.checkResource(ctx, cli, base, c)
+		return []store.Anomaly{s.checkResource(ctx, cli, base, c)}
 	case "health":
-		return s.checkHealth(ctx, cli, base, c)
+		return []store.Anomaly{s.checkHealth(ctx, cli, base, c)}
+	case "port":
+		return s.checkPort(ctx, cli, c)
+	case "http":
+		return s.checkHTTP(ctx, cli, c)
+	case "process":
+		return s.checkProcess(ctx, cli, c)
 	default:
 		base.OK = false
 		base.Message = "未知检查类型 " + c.Type
-		return base
+		return []store.Anomaly{base}
 	}
 }
 
@@ -407,6 +444,135 @@ func (s *Service) checkHealth(ctx context.Context, cli *workerproxy.Client, base
 	base.OK = true
 	base.Message = fmt.Sprintf("服务健康 %d/%d", d.Running, d.Desired)
 	return base
+}
+
+// --- 节点级检查（port/http/process）：node 空 = 全部 ready 节点，
+// 每个失败节点一条异常；全部通过时聚合为一条正常。 ---
+
+// checkPort 从各节点探测任意 host:port（宿主机中间件端口，如 MySQL 3306）。
+func (s *Service) checkPort(ctx context.Context, cli *workerproxy.Client, c Check) []store.Anomaly {
+	base := store.Anomaly{Check: fmt.Sprintf("port/%s:%d", c.Host, c.Port), Cluster: c.Cluster}
+	targets, err := patrolTargetNodes(ctx, cli, c.Node)
+	if err != nil {
+		base.Message = err.Error()
+		return []store.Anomaly{base}
+	}
+	var fails []store.Anomaly
+	for _, n := range targets {
+		res, err := cli.CheckPort(ctx, n.ID, c.Host, c.Port, c.Timeout)
+		if err != nil {
+			res.Error = err.Error()
+		}
+		if !res.OK {
+			a := base
+			a.Message = fmt.Sprintf("节点 %s 探测 %s:%d 不通: %s", n.Hostname, c.Host, c.Port, res.Error)
+			a.Data = fmt.Sprintf("node=%s latency=%dms", n.ID, res.LatencyMS)
+			fails = append(fails, a)
+		}
+	}
+	if len(fails) > 0 {
+		return fails
+	}
+	base.OK = true
+	base.Message = fmt.Sprintf("%d 个节点探测 %s:%d 均连通", len(targets), c.Host, c.Port)
+	return []store.Anomaly{base}
+}
+
+// checkHTTP 从各节点探测任意 URL（状态码 + body 正则）。
+func (s *Service) checkHTTP(ctx context.Context, cli *workerproxy.Client, c Check) []store.Anomaly {
+	base := store.Anomaly{Check: "http/" + c.URL, Cluster: c.Cluster}
+	targets, err := patrolTargetNodes(ctx, cli, c.Node)
+	if err != nil {
+		base.Message = err.Error()
+		return []store.Anomaly{base}
+	}
+	req := workerproxy.HTTPCheckRequest{
+		URL:            c.URL,
+		Method:         c.Method,
+		ExpectedStatus: c.ExpectedStatus,
+		ExpectedBody:   c.ExpectedBody,
+		Timeout:        c.Timeout,
+	}
+	var fails []store.Anomaly
+	for _, n := range targets {
+		res, err := cli.CheckHTTP(ctx, n.ID, req)
+		if err != nil {
+			res.Error = err.Error()
+		}
+		if !res.OK {
+			a := base
+			a.Message = fmt.Sprintf("节点 %s 探测 %s 失败: %s", n.Hostname, c.URL, res.Error)
+			a.Data = fmt.Sprintf("node=%s status=%d latency=%dms", n.ID, res.Status, res.LatencyMS)
+			fails = append(fails, a)
+		}
+	}
+	if len(fails) > 0 {
+		return fails
+	}
+	base.OK = true
+	base.Message = fmt.Sprintf("%d 个节点探测 %s 均正常", len(targets), c.URL)
+	return []store.Anomaly{base}
+}
+
+// checkProcess 检查各节点宿主机进程（名称/cmdline 子串），匹配数少于 min_count 即异常。
+func (s *Service) checkProcess(ctx context.Context, cli *workerproxy.Client, c Check) []store.Anomaly {
+	minCount := c.MinCount
+	if minCount <= 0 {
+		minCount = 1
+	}
+	base := store.Anomaly{Check: "process/" + c.Filter, Cluster: c.Cluster}
+	targets, err := patrolTargetNodes(ctx, cli, c.Node)
+	if err != nil {
+		base.Message = err.Error()
+		return []store.Anomaly{base}
+	}
+	var fails []store.Anomaly
+	for _, n := range targets {
+		procs, err := cli.ListProcesses(ctx, n.ID, "", 0, c.Filter)
+		if err != nil {
+			a := base
+			a.Message = fmt.Sprintf("节点 %s 获取进程列表失败: %s", n.Hostname, err.Error())
+			fails = append(fails, a)
+			continue
+		}
+		if len(procs.Processes) < minCount {
+			a := base
+			a.Message = fmt.Sprintf("节点 %s 匹配 %q 的进程 %d 个，少于期望 %d 个", n.Hostname, c.Filter, len(procs.Processes), minCount)
+			fails = append(fails, a)
+		}
+	}
+	if len(fails) > 0 {
+		return fails
+	}
+	base.OK = true
+	base.Message = fmt.Sprintf("%d 个节点均存在匹配 %q 的进程（≥%d 个）", len(targets), c.Filter, minCount)
+	return []store.Anomaly{base}
+}
+
+// patrolTargetNodes 解析检查目标节点：node 空 = 全部 ready 节点，否则按 ID/hostname 匹配单个。
+func patrolTargetNodes(ctx context.Context, cli *workerproxy.Client, node string) ([]workerproxy.Node, error) {
+	nodes, err := cli.ListNodes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("获取节点列表失败: %w", err)
+	}
+	if node == "" {
+		var out []workerproxy.Node
+		for _, n := range nodes {
+			if n.State == "ready" {
+				out = append(out, n)
+			}
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("集群无 ready 节点")
+		}
+		return out, nil
+	}
+	for _, n := range nodes {
+		if n.ID == node || n.Hostname == node {
+			return []workerproxy.Node{n}, nil
+		}
+	}
+	return nil, fmt.Errorf("目标节点 %q 不存在", node)
 }
 
 // buildReport 生成巡检报告：AI 摘要（可用时）或保底文本。
