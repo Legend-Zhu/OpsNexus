@@ -22,7 +22,7 @@ const (
 
 // Cluster 是集群注册表条目（对应设计方案 §七 cluster/<name>）。
 type Cluster struct {
-	Name      string        `json:"name"`
+	Name string `json:"name"`
 	// ProjectID 所属项目（管理层级「项目 → 集群」）；空 = 未归属。
 	ProjectID string        `json:"project_id,omitempty"`
 	WorkerURL string        `json:"worker_url"`

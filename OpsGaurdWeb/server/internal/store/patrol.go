@@ -20,9 +20,9 @@ type Patrol struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
 	Description string    `json:"description,omitempty"`
-	Cron        string    `json:"cron"`              // 5 字段 cron 表达式
+	Cron        string    `json:"cron"` // 5 字段 cron 表达式
 	Enabled     bool      `json:"enabled"`
-	YAML        string    `json:"yaml"`              // 流程定义原文（校验/解析在 patrol 服务）
+	YAML        string    `json:"yaml"` // 流程定义原文（校验/解析在 patrol 服务）
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -54,9 +54,10 @@ type PatrolRun struct {
 
 // Anomaly 单个检查项的结果。
 type Anomaly struct {
-	Check   string `json:"check"`   // 检查项标识，如 "resource/web/cpu>85"
+	Check   string `json:"check"` // 检查项标识，如 "resource/web/cpu>85"
 	Cluster string `json:"cluster,omitempty"`
 	Service string `json:"service,omitempty"`
+	Node    string `json:"node,omitempty"` // 节点级检查（port/http/process）失败节点 hostname
 	OK      bool   `json:"ok"`
 	Message string `json:"message,omitempty"`
 	Data    string `json:"data,omitempty"` // 检查原始数据（截断）

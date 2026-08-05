@@ -7,6 +7,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy"
 )
@@ -47,24 +50,11 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 		return
 	}
 
-	// 1. 告警
-	alert, err := h.clusters.Alert(req.AlertID)
-	if err != nil {
-		fail(c, http.StatusInternalServerError, "get alert: "+err.Error())
+	// 1. 告警 + 目标集群 Worker 客户端
+	alert, cli, ok := h.alertAndClient(c, req.AlertID)
+	if !ok {
 		return
 	}
-	if alert == nil {
-		fail(c, http.StatusNotFound, "alert not found")
-		return
-	}
-
-	// 2. 目标集群 Worker 客户端
-	cli, err := h.clusters.WorkerClient(alert.Cluster)
-	if err != nil {
-		proxyErr(c, "worker client", err)
-		return
-	}
-	ctx := c.Request.Context()
 	maxEvents := req.MaxEvents
 	if maxEvents <= 0 {
 		maxEvents = 20
@@ -74,38 +64,13 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 		logTail = 50
 	}
 
-	// 3. 拉上下文（证据：近期事件 + 审计 + 服务日志；失败不阻塞排查）
-	//    每个证据源都有字节上限，防海量证据一次性打爆模型上下文。
-	events, _ := cli.Events(ctx, alert.Service, "", maxEvents)
-	audit, _ := cli.Audit(ctx, "", 10)
-	events = capEvidence(events, evidenceBytes)
-	audit = capEvidence(audit, evidenceBytes)
-	var logs []workerproxy.LogLine
-	logBytes := 0
-	_ = cli.StreamLogs(ctx, alert.Service, false, logTail, "", func(ll workerproxy.LogLine) bool {
-		logBytes += len(ll.Line) + 32
-		if logBytes > evidenceBytes {
-			logs = append(logs, workerproxy.LogLine{Line: "…[logs truncated]"})
-			return false
-		}
-		logs = append(logs, ll)
-		return true
-	})
+	// 2. 拉上下文（证据：近期事件 + 审计 + 服务日志；失败不阻塞排查）
+	events, audit, logs := gatherEvidence(c.Request.Context(), cli, alert.Service, maxEvents, logTail)
 
-	// 4. 可选：连接该集群 Worker MCP，供 ReAct Agent 采证
-	useMCP := req.UseMCP
-	if useMCP {
-		if url, tok, merr := h.clusters.MCPEndpoint(alert.Cluster); merr == nil && url != "" {
-			if aerr := srv.AddMCPCluster(alert.Cluster, url, tok); aerr != nil {
-				// 连接失败不阻断排查，仅降级为纯上下文分析
-				useMCP = false
-			}
-		} else {
-			useMCP = false
-		}
-	}
+	// 3. 可选：连接该集群 Worker MCP，供 ReAct Agent 采证
+	useMCP := req.UseMCP && connectClusterMCP(srv, h.clusters, alert.Cluster)
 
-	// 5. 组装注入上下文后的请求体，进程内 SSE 直通
+	// 4. 组装注入上下文后的请求体，进程内 SSE 直通
 	model := srv.ResolveModel(req.Model)
 	messages := BuildInvestigateMessages(alert, events, audit, logs, useMCP)
 	body, err := json.Marshal(map[string]any{
@@ -120,6 +85,55 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	c.Request.ContentLength = int64(len(body))
 	srv.OpenAIHandler().ChatCompletions(c)
+}
+
+// alertAndClient 取告警及其集群 Worker 客户端（investigate/chat 共用）。
+func (h *Handlers) alertAndClient(c *gin.Context, alertID string) (*store.Alert, *workerproxy.Client, bool) {
+	alert, err := h.clusters.Alert(alertID)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "get alert: "+err.Error())
+		return nil, nil, false
+	}
+	if alert == nil {
+		fail(c, http.StatusNotFound, "alert not found")
+		return nil, nil, false
+	}
+	cli, err := h.clusters.WorkerClient(alert.Cluster)
+	if err != nil {
+		proxyErr(c, "worker client", err)
+		return nil, nil, false
+	}
+	return alert, cli, true
+}
+
+// gatherEvidence 拉取告警上下文证据（近期事件 + 审计 + 服务日志）。
+// 每个证据源都有字节上限，防海量证据一次性打爆模型上下文；失败不阻塞。
+func gatherEvidence(ctx context.Context, cli *workerproxy.Client, service string, maxEvents, logTail int) (json.RawMessage, json.RawMessage, []workerproxy.LogLine) {
+	events, _ := cli.Events(ctx, service, "", maxEvents)
+	audit, _ := cli.Audit(ctx, "", 10)
+	events = capEvidence(events, evidenceBytes)
+	audit = capEvidence(audit, evidenceBytes)
+	var logs []workerproxy.LogLine
+	logBytes := 0
+	_ = cli.StreamLogs(ctx, service, false, logTail, "", func(ll workerproxy.LogLine) bool {
+		logBytes += len(ll.Line) + 32
+		if logBytes > evidenceBytes {
+			logs = append(logs, workerproxy.LogLine{Line: "…[logs truncated]"})
+			return false
+		}
+		logs = append(logs, ll)
+		return true
+	})
+	return events, audit, logs
+}
+
+// connectClusterMCP 按需连接集群 Worker MCP（失败降级为 false，不阻断排查）。
+func connectClusterMCP(srv *ainexusserver.Server, clusters *cluster.Service, clusterName string) bool {
+	url, tok, err := clusters.MCPEndpoint(clusterName)
+	if err != nil || url == "" {
+		return false
+	}
+	return srv.AddMCPCluster(clusterName, url, tok) == nil
 }
 
 // BuildInvestigateMessages 组装深度排查 prompt（纯函数，可测）。

@@ -35,6 +35,9 @@ const (
 	EventLogMatch        EventType = "log_match"
 	EventResourceOver    EventType = "resource_over"
 	EventResourceRecover EventType = "resource_recovered"
+	// EventPatrolFailed 巡检异常转告警（非 Worker 事件，由 patrol syncAlerts 产生，
+	// 告警 ID 用 AlertIDWithKey 按检查项细分）。
+	EventPatrolFailed EventType = "patrol_failed"
 )
 
 // Level 事件级别。
@@ -71,19 +74,23 @@ const (
 
 // Alert 是按 (cluster, service, type) 聚合后的告警。
 type Alert struct {
-	ID       string      `json:"id"`
-	Cluster  string      `json:"cluster"`
-	Service  string      `json:"service"`
-	Type     EventType   `json:"type"`
-	Level    Level       `json:"level"`
-	Title    string      `json:"title"`
-	Status   AlertStatus `json:"status"`
-	Count    int         `json:"count"`
-	FirstTS  time.Time   `json:"first_ts"`
-	LastTS   time.Time   `json:"last_ts"`
-	AckedBy  string      `json:"acked_by,omitempty"`
-	AckedAt  *time.Time  `json:"acked_at,omitempty"`
-	RecoverAt *time.Time `json:"recovered_at,omitempty"`
+	ID        string      `json:"id"`
+	Cluster   string      `json:"cluster"`
+	Service   string      `json:"service"`
+	Type      EventType   `json:"type"`
+	Level     Level       `json:"level"`
+	Title     string      `json:"title"`
+	Status    AlertStatus `json:"status"`
+	Count     int         `json:"count"`
+	FirstTS   time.Time   `json:"first_ts"`
+	LastTS    time.Time   `json:"last_ts"`
+	AckedBy   string      `json:"acked_by,omitempty"`
+	AckedAt   *time.Time  `json:"acked_at,omitempty"`
+	RecoverAt *time.Time  `json:"recovered_at,omitempty"`
+	// Investigations/LastInvestigationID 排查回写（对话式 troubleshoot 落库后
+	// 关联）：告警列表展示「已排查」标记，形成告警→排查闭环。
+	Investigations      int    `json:"investigations,omitempty"`
+	LastInvestigationID string `json:"last_investigation_id,omitempty"`
 	// LastEventID 最近一次归并事件的 id（webhook 幂等去重用，不对外返回）。
 	LastEventID string `json:"-"`
 }
@@ -272,6 +279,72 @@ func (s *Store) UpsertAlert(a *Alert) error {
 	a.Status = AlertActive
 	a.Count = 1
 	return s.putAlertLocked(a)
+}
+
+// UpsertKeyedAlert 以 a.ID 为确定键 upsert 告警（巡检按检查项维护生命周期用）。
+// 与 UpsertAlert 的差异：recovered 后复发**原地重激活**（保留确定 ID，不换新 id），
+// 便于调用方按固定 ID 做恢复/重激活配对。返回 created=true 表示新建或复发
+// 重激活（调用方据此决定是否通知）。
+func (s *Store) UpsertKeyedAlert(a *Alert) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, err := s.get(alertKey(a.ID))
+	if err != nil && err != leveldb.ErrNotFound {
+		return false, err
+	}
+	if err == leveldb.ErrNotFound || len(existing) == 0 {
+		return true, s.putAlertLocked(a)
+	}
+	var old Alert
+	if err := json.Unmarshal(existing, &old); err != nil {
+		return false, fmt.Errorf("decode existing alert: %w", err)
+	}
+	if old.Status == AlertActive || old.Status == AlertAcked {
+		old.Count++
+		if old.FirstTS.IsZero() {
+			old.FirstTS = a.FirstTS
+		}
+		old.LastTS = a.LastTS
+		if a.Level != "" {
+			old.Level = a.Level
+		}
+		old.Title = a.Title
+		return false, s.putAlertLocked(&old)
+	}
+	// recovered 复发 → 原地重激活（保留确定 ID，清理 ack/recover 痕迹）
+	old.Status = AlertActive
+	old.Count = 1
+	old.FirstTS = a.FirstTS
+	old.LastTS = a.LastTS
+	old.Title = a.Title
+	if a.Level != "" {
+		old.Level = a.Level
+	}
+	old.AckedBy = ""
+	old.AckedAt = nil
+	old.RecoverAt = nil
+	return true, s.putAlertLocked(&old)
+}
+
+// MarkAlertInvestigated 回写告警的排查关联（次数+1、最近排查 id）。
+// 告警不存在时静默成功（告警可能已被清理，不阻断排查落库）。
+func (s *Store) MarkAlertInvestigated(id, invID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, err := s.GetAlert(id)
+	if err != nil || a == nil {
+		return err
+	}
+	a.Investigations++
+	a.LastInvestigationID = invID
+	return s.putAlertLocked(a)
+}
+
+// AlertIDWithKey 带附加标识的告警 ID（巡检按检查项细分告警，避免同
+// (cluster, service, type) 的不同检查项聚成一条）。
+func AlertIDWithKey(cluster, service string, typ EventType, key string) string {
+	h := sha256.Sum256([]byte(cluster + "|" + service + "|" + string(typ) + "|" + key))
+	return "al-" + hex.EncodeToString(h[:6])
 }
 
 // SetAlertStatus 原子更新告警状态（认领/恢复/重激活），维护索引。

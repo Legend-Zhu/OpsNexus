@@ -106,7 +106,20 @@ func New(h *api.Handlers) *gin.Engine {
 			alerts.GET("", h.ListAlerts)
 			alerts.POST("/:id/ack", h.AckAlert)
 			alerts.POST("/:id/recover", h.RecoverAlert)
+			alerts.GET("/:id/investigations", h.ListAlertInvestigations)
 		}
+
+		// 排查会话（对话式 troubleshoot 落库）
+		invs := v1.Group("/investigations")
+		{
+			invs.POST("", h.SaveInvestigation)
+			invs.PUT("/:id", h.UpdateInvestigation)
+			invs.GET("/:id", h.GetInvestigation)
+		}
+
+		// 全局设置（巡检报告投递策略等）
+		v1.GET("/settings/patrol-report", h.GetPatrolReportSetting)
+		v1.PUT("/settings/patrol-report", h.PutPatrolReportSetting)
 
 		// 智能巡检（YAML 流程 + 内置调度 + AI 报告）
 		patrols := v1.Group("/patrols")

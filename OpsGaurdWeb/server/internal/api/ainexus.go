@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -18,12 +21,67 @@ import (
 
 // AINexusChat godoc: POST /api/v1/ainexus/chat
 // 进程内调用内嵌 AiNexus 网关的 OpenAI 格式对话接口（SSE 流式）。
+// OpsGaurd 扩展字段（可选）：alert_id —— 关联告警时服务端拉取证据
+// （事件/审计/日志）组装会话前缀注入，支持多轮追问（每轮前置，证据上下文
+// 不丢失）；use_mcp —— 动态连接该集群 Worker MCP 供 Agent 采证。
+// model 可空（走网关 default_model/模型池兜底）。
 func (h *Handlers) AINexusChat(c *gin.Context) {
 	srv := h.gateway()
 	if srv == nil {
 		fail(c, http.StatusServiceUnavailable, "ainexus gateway is not enabled in config")
 		return
 	}
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
+		return
+	}
+
+	// OpsGaurd 扩展字段（剥离后再透传给网关）
+	alertID, _ := req["alert_id"].(string)
+	delete(req, "alert_id")
+	useMCP, _ := req["use_mcp"].(bool)
+	delete(req, "use_mcp")
+
+	// 模型兜底（显式指定优先，否则 default_model → 模型池首个）
+	model, _ := req["model"].(string)
+	req["model"] = srv.ResolveModel(model)
+
+	if alertID != "" {
+		if h.clusters == nil {
+			fail(c, http.StatusServiceUnavailable, "cluster service not initialized")
+			return
+		}
+		alert, cli, ok := h.alertAndClient(c, alertID)
+		if !ok {
+			return
+		}
+		events, audit, logs := gatherEvidence(c.Request.Context(), cli, alert.Service, 20, 50)
+		mcpOK := useMCP && connectClusterMCP(srv, h.clusters, alert.Cluster)
+		seed := BuildInvestigateMessages(alert, events, audit, logs, mcpOK)
+		// 证据前缀 + 客户端消息（首轮客户端消息可空 → 仅种子即完整提问）
+		var msgs []any
+		for _, m := range seed {
+			msgs = append(msgs, m)
+		}
+		if arr, ok := req["messages"].([]any); ok {
+			msgs = append(msgs, arr...)
+		}
+		req["messages"] = msgs
+	}
+
+	newBody, err := json.Marshal(req)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "marshal request: "+err.Error())
+		return
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(newBody))
+	c.Request.ContentLength = int64(len(newBody))
 	srv.OpenAIHandler().ChatCompletions(c)
 }
 

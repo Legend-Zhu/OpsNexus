@@ -72,15 +72,16 @@ func main() {
 	}
 	h.SetAINexusRT(ainexusRT)
 
-	// 智能巡检服务（P5：YAML 流程 + 单实例 cron 调度 + AI 报告）
-	patrolSvc := patrol.New(st, clusterSvc, ainexusRT)
-	h.SetPatrolService(patrolSvc)
-	patrolSvc.Start()
-	defer patrolSvc.Stop()
-
 	// 通知服务（P6：渠道/策略/记录）
 	notifySvc := notify.New(st)
 	h.SetNotifyService(notifySvc)
+
+	// 智能巡检服务（P5：YAML 流程 + 单实例 cron 调度 + AI 报告 +
+	// 报告渠道投递/异常转告警闭环）
+	patrolSvc := patrol.New(st, clusterSvc, ainexusRT, notifySvc)
+	h.SetPatrolService(patrolSvc)
+	patrolSvc.Start()
+	defer patrolSvc.Stop()
 
 	// 告警规则服务（P6：管理 Worker monitoring config）
 	h.SetAlertRuleService(alertrule.New(st, clusterSvc))

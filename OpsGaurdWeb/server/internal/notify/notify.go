@@ -225,6 +225,80 @@ func (s *Service) sendAndRecord(ctx context.Context, ch *store.NotifyChannel, al
 	_ = s.st.SaveNotifyRecord(rec)
 }
 
+// Send 向指定渠道发送任意内容（巡检报告等非告警场景）。
+// 逐渠道发送并记录；不存在/禁用的渠道跳过；单渠道失败不阻断其余渠道，
+// 返回首个错误（逐渠道明细见发送记录）。
+func (s *Service) Send(ctx context.Context, channelIDs []string, title, content string) error {
+	var firstErr error
+	for _, cid := range channelIDs {
+		ch, err := s.st.GetChannel(cid)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if ch == nil || !ch.Enabled {
+			continue
+		}
+		if err := s.sendAndRecordGeneric(ctx, ch, title, content); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// sendAndRecordGeneric 通用内容发送并记录（alert_id 留空），返回发送错误。
+func (s *Service) sendAndRecordGeneric(ctx context.Context, ch *store.NotifyChannel, title, content string) error {
+	rec := &store.NotifyRecord{
+		ID:        fmt.Sprintf("nr-%d", time.Now().UnixNano()),
+		TS:        time.Now().UTC(),
+		ChannelID: ch.ID,
+		Title:     title,
+		Target:    ch.Name,
+		Status:    "success",
+	}
+	err := s.sendGeneric(ctx, ch, title, content)
+	if err != nil {
+		rec.Status = "failed"
+		rec.Error = err.Error()
+	}
+	seq, serr := s.st.NextSeq("notify")
+	if serr == nil {
+		return err
+	}
+	rec.Seq = seq
+	_ = s.st.SaveNotifyRecord(rec)
+	return err
+}
+
+// sendGeneric 按渠道类型发送通用内容（与告警负载区分开：webhook 为
+// {title, content} 而非内嵌告警对象；文本类渠道为「标题+正文」纯文本）。
+func (s *Service) sendGeneric(ctx context.Context, ch *store.NotifyChannel, title, content string) error {
+	text := title + "\n\n" + content
+	if ch.ViaProxy {
+		payload := map[string]any{
+			"channel_type": ch.Type,
+			"config":       ch.Config,
+			"content":      text,
+		}
+		body, _ := json.Marshal(payload)
+		return s.postJSON(ctx, ch.ProxyURL, body)
+	}
+	switch ch.Type {
+	case store.ChannelFeishu:
+		url, _ := ch.Config["webhook_url"].(string)
+		body, _ := json.Marshal(map[string]any{"msg_type": "text", "content": map[string]any{"text": text}})
+		return s.postJSON(ctx, url, body)
+	case store.ChannelWebhook:
+		url, _ := ch.Config["url"].(string)
+		body, _ := json.Marshal(map[string]any{"title": title, "content": content})
+		return s.postJSON(ctx, url, body)
+	default:
+		return ErrInvalid{"unsupported channel type " + string(ch.Type)}
+	}
+}
+
 // send 按渠道类型发送。
 func (s *Service) send(ctx context.Context, ch *store.NotifyChannel, content string, alert *store.Alert) error {
 	// 互联网代理转发：内网管理端不直连公网，payload POST 给代理（代理带自身

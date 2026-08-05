@@ -280,6 +280,29 @@ func (s *Service) Alert(id string) (*store.Alert, error) {
 	return s.store.GetAlert(id)
 }
 
+// --- 排查会话（对话式 troubleshoot 落库，关联告警形成闭环） ---
+
+// SaveInvestigation 保存（或更新）排查会话，并在关联告警时回写排查标记。
+func (s *Service) SaveInvestigation(inv *store.Investigation) error {
+	if err := s.store.SaveInvestigation(inv); err != nil {
+		return err
+	}
+	if inv.AlertID != "" {
+		return s.store.MarkAlertInvestigated(inv.AlertID, inv.ID)
+	}
+	return nil
+}
+
+// Investigation 按 id 读取排查会话。
+func (s *Service) Investigation(id string) (*store.Investigation, error) {
+	return s.store.GetInvestigation(id)
+}
+
+// Investigations 按告警列出排查会话（最新在前）。
+func (s *Service) Investigations(alertID string, limit int) ([]*store.Investigation, error) {
+	return s.store.ListInvestigations(alertID, limit)
+}
+
 // MCPEndpoint 返回集群的 MCP 端点与 token（P4 按需连接 Worker /mcp）。
 func (s *Service) MCPEndpoint(name string) (url, token string, err error) {
 	c, err := s.store.GetCluster(name)

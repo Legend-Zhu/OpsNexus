@@ -32,9 +32,9 @@ const (
 
 // NotifyChannel 通知渠道定义。
 type NotifyChannel struct {
-	ID      string      `json:"id"`
-	Type    ChannelType `json:"type"`
-	Name    string      `json:"name"`
+	ID   string      `json:"id"`
+	Type ChannelType `json:"type"`
+	Name string      `json:"name"`
 	// Config 渠道参数（feishu: webhook_url；webhook: url/headers；sms: 经代理）。
 	// 走 via_proxy 时，Config 不含公网凭据（凭据在代理侧）。
 	Config   map[string]any `json:"config"`
@@ -76,18 +76,18 @@ type NotifyRecord struct {
 
 // AlertRule 某集群某服务的监控配置（管理端持久化副本 + 下发源）。
 type AlertRule struct {
-	Cluster    string       `json:"cluster"`
-	Service    string       `json:"service"`
-	Monitoring Monitoring   `json:"monitoring"`
-	UpdatedAt  time.Time    `json:"updated_at"`
+	Cluster    string     `json:"cluster"`
+	Service    string     `json:"service"`
+	Monitoring Monitoring `json:"monitoring"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // Monitoring 对应 Worker config.Monitoring（JSON 契约一致）。
 type Monitoring struct {
-	Enabled            bool               `json:"enabled,omitempty"`
-	PortChecks         []PortCheck        `json:"portChecks,omitempty"`
-	HTTPChecks         []HTTPCheck        `json:"httpChecks,omitempty"`
-	LogChecks          []LogCheck         `json:"logChecks,omitempty"`
+	Enabled            bool                `json:"enabled,omitempty"`
+	PortChecks         []PortCheck         `json:"portChecks,omitempty"`
+	HTTPChecks         []HTTPCheck         `json:"httpChecks,omitempty"`
+	LogChecks          []LogCheck          `json:"logChecks,omitempty"`
 	ResourceThresholds []ResourceThreshold `json:"resourceThresholds,omitempty"`
 }
 

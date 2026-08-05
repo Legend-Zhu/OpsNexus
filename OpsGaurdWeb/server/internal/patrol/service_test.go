@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 )
 
@@ -131,7 +132,7 @@ func newTestPatrol(t *testing.T) (*Service, string) {
 	if err := st.PutCluster(&store.Cluster{Name: "dev", WorkerURL: url, Status: store.ClusterOnline}); err != nil {
 		t.Fatalf("put cluster: %v", err)
 	}
-	return New(st, cs, nil), url
+	return New(st, cs, nil, nil), url
 }
 
 // TestCreateAndRun 创建流程 → 立即执行 → 异常采集 + 保底报告。
@@ -275,6 +276,127 @@ checks:
 	} {
 		if _, err := ParseFlow(bad); err == nil {
 			t.Fatalf("invalid flow accepted: %q", bad)
+		}
+	}
+}
+
+// TestClosedLoop 巡检闭环：异常转告警（新建→持续→恢复）+ 报告按设置投递。
+func TestClosedLoop(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ogw-test"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	// 渠道接收端（webhook）：同时收告警通知（带 alert 字段）与报告（带 content 字段）
+	var captured []map[string]any
+	capSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		captured = append(captured, m)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	t.Cleanup(capSrv.Close)
+
+	// 可切换成败的单节点 Worker mock
+	failPort := true
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/nodes", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"id": "n1", "hostname": "h1", "state": "ready", "role": "manager"},
+		})
+	})
+	mux.HandleFunc("GET /api/v1/nodes/{id}/check/port", func(w http.ResponseWriter, r *http.Request) {
+		out := map[string]any{"node": "h1", "host": r.URL.Query().Get("host"),
+			"port": r.URL.Query().Get("port"), "ok": !failPort, "latencyMs": 1}
+		if failPort {
+			out["error"] = "connection refused"
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
+	wSrv := httptest.NewServer(mux)
+	t.Cleanup(wSrv.Close)
+
+	cs := cluster.New(st)
+	if err := st.PutCluster(&store.Cluster{Name: "dev", WorkerURL: wSrv.URL, Status: store.ClusterOnline}); err != nil {
+		t.Fatalf("put cluster: %v", err)
+	}
+	notifySvc := notify.New(st)
+	ch, err := notifySvc.CreateChannel(store.ChannelWebhook, "hook", map[string]any{"url": capSrv.URL}, false, "", true)
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	// warn 级策略（巡检异常告警的通知路由）+ 报告投递设置（仅有异常时）
+	if err := notifySvc.UpsertPolicy(&store.NotifyPolicy{Level: "warn", ChannelIDs: []string{ch.ID}}); err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+	if err := st.PutSetting(SettingReportDelivery, ReportDelivery{Mode: "anomaly", ChannelIDs: []string{ch.ID}}); err != nil {
+		t.Fatalf("setting: %v", err)
+	}
+
+	svc := New(st, cs, nil, notifySvc)
+	p, err := svc.Create("pl", "", "0 2 * * *", `
+name: pl
+checks:
+  - type: port
+    cluster: dev
+    host: 10.0.0.1
+    port: 3306
+`, true)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Run 1（端口不通）：产生 patrol_failed 告警 + 告警通知 + 报告投递
+	if _, err := svc.Run(context.Background(), p.ID); err != nil {
+		t.Fatalf("run1: %v", err)
+	}
+	alertID := store.AlertIDWithKey("dev", "", store.EventPatrolFailed, "port/10.0.0.1:3306|h1")
+	a, err := st.GetAlert(alertID)
+	if err != nil || a == nil || a.Status != store.AlertActive {
+		t.Fatalf("alert after run1: %+v err=%v", a, err)
+	}
+	var gotAlertNotify, gotReport bool
+	for _, m := range captured {
+		if _, ok := m["alert"]; ok {
+			gotAlertNotify = true
+		}
+		if _, ok := m["content"]; ok {
+			gotReport = true
+		}
+	}
+	if !gotAlertNotify || !gotReport {
+		t.Fatalf("run1 captured=%v, want alert notify + report", captured)
+	}
+
+	// Run 2（持续不通）：告警计数累加，不重复通知
+	captured = nil
+	if _, err := svc.Run(context.Background(), p.ID); err != nil {
+		t.Fatalf("run2: %v", err)
+	}
+	a, _ = st.GetAlert(alertID)
+	if a.Count != 2 || a.Status != store.AlertActive {
+		t.Fatalf("alert after run2: %+v", a)
+	}
+	for _, m := range captured {
+		if _, ok := m["alert"]; ok {
+			t.Fatal("run2 should not re-notify an already-active alert")
+		}
+	}
+
+	// Run 3（恢复）：告警自动 recovered；无异常不投递报告
+	failPort = false
+	captured = nil
+	if _, err := svc.Run(context.Background(), p.ID); err != nil {
+		t.Fatalf("run3: %v", err)
+	}
+	a, _ = st.GetAlert(alertID)
+	if a.Status != store.AlertRecovered {
+		t.Fatalf("alert after recovery: %+v", a)
+	}
+	for _, m := range captured {
+		if _, ok := m["content"]; ok {
+			t.Fatal("run3 (all ok) should not deliver report in anomaly mode")
 		}
 	}
 }

@@ -19,16 +19,18 @@ import (
 
 // Key prefixes (buckets). Each maps to a Go type in this package.
 const (
-	BucketMeta      = "meta"
-	BucketProject   = "project"
-	BucketCluster   = "cluster"
-	BucketEvent     = "event"
-	BucketAlert     = "alert"
-	BucketPatrol    = "patrol"
-	BucketPatrolRun = "patrolrun"
-	BucketReport    = "report"
-	BucketAINexus   = "ainexus" // AiNexus 网关运行时配置（页面保存的热重载配置）
-	BucketSeq       = "seq"
+	BucketMeta          = "meta"
+	BucketProject       = "project"
+	BucketCluster       = "cluster"
+	BucketEvent         = "event"
+	BucketAlert         = "alert"
+	BucketPatrol        = "patrol"
+	BucketPatrolRun     = "patrolrun"
+	BucketReport        = "report"
+	BucketAINexus       = "ainexus" // AiNexus 网关运行时配置（页面保存的热重载配置）
+	BucketSeq           = "seq"
+	BucketSettings      = "settings"      // 全局设置（如巡检报告投递策略）
+	BucketInvestigation = "investigation" // 排查会话落库（对话式 troubleshoot）
 )
 
 // schemaVersion 当前数据版本；每次不兼容变更 +1 并追加 migrate 函数。

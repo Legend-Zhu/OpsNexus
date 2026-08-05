@@ -15,6 +15,7 @@ import (
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexusrt"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy"
 )
@@ -132,14 +133,15 @@ type Service struct {
 	st       *store.Store
 	clusters *cluster.Service
 	ainxRT   *ainexusrt.Service // 内嵌 AiNexus 运行时（Server() 为空 = 无报告生成）
+	notify   *notify.Service    // 报告投递 + 异常转告警通知（nil = 不投递）
 	sched    *cron.Cron
 	// onRun 调度触发的执行（供测试注入/替换）。
 	onRun func(patrolID string)
 }
 
 // New 创建巡检服务。sched 为 nil 时自动创建（单实例调度器）。
-func New(st *store.Store, clusters *cluster.Service, ainxRT *ainexusrt.Service) *Service {
-	s := &Service{st: st, clusters: clusters, ainxRT: ainxRT}
+func New(st *store.Store, clusters *cluster.Service, ainxRT *ainexusrt.Service, notifySvc *notify.Service) *Service {
+	s := &Service{st: st, clusters: clusters, ainxRT: ainxRT, notify: notifySvc}
 	// 5 字段标准 cron（与 ValidCron 的 ParseStandard 一致）
 	s.sched = cron.New()
 	s.onRun = func(id string) { _, _ = s.Run(context.Background(), id) }
@@ -314,6 +316,9 @@ func (s *Service) Run(ctx context.Context, patrolID string) (*store.PatrolRun, e
 	anomalies := s.runChecks(ctx, flow)
 	run.Anomalies = anomalies
 
+	// 巡检异常转告警（新增/复发通知，恢复自动关闭；失败不阻断巡检）
+	s.syncAlerts(ctx, p, run)
+
 	// 报告阶段（AI 可用时生成，否则保底文本）
 	report := s.buildReport(p, flow, anomalies)
 	if report != "" {
@@ -329,6 +334,10 @@ func (s *Service) Run(ctx context.Context, patrolID string) (*store.PatrolRun, e
 			run.Error = "save report: " + err.Error()
 		} else {
 			run.ReportID = rep.ID
+			// 报告投递到通知渠道（按全局设置；失败仅记入 run.Error）
+			if derr := s.deliverReport(ctx, p, report, anomalies); derr != "" {
+				run.Error = derr
+			}
 		}
 	}
 
@@ -465,6 +474,7 @@ func (s *Service) checkPort(ctx context.Context, cli *workerproxy.Client, c Chec
 		}
 		if !res.OK {
 			a := base
+			a.Node = n.Hostname
 			a.Message = fmt.Sprintf("节点 %s 探测 %s:%d 不通: %s", n.Hostname, c.Host, c.Port, res.Error)
 			a.Data = fmt.Sprintf("node=%s latency=%dms", n.ID, res.LatencyMS)
 			fails = append(fails, a)
@@ -501,6 +511,7 @@ func (s *Service) checkHTTP(ctx context.Context, cli *workerproxy.Client, c Chec
 		}
 		if !res.OK {
 			a := base
+			a.Node = n.Hostname
 			a.Message = fmt.Sprintf("节点 %s 探测 %s 失败: %s", n.Hostname, c.URL, res.Error)
 			a.Data = fmt.Sprintf("node=%s status=%d latency=%dms", n.ID, res.Status, res.LatencyMS)
 			fails = append(fails, a)
@@ -531,12 +542,14 @@ func (s *Service) checkProcess(ctx context.Context, cli *workerproxy.Client, c C
 		procs, err := cli.ListProcesses(ctx, n.ID, "", 0, c.Filter)
 		if err != nil {
 			a := base
+			a.Node = n.Hostname
 			a.Message = fmt.Sprintf("节点 %s 获取进程列表失败: %s", n.Hostname, err.Error())
 			fails = append(fails, a)
 			continue
 		}
 		if len(procs.Processes) < minCount {
 			a := base
+			a.Node = n.Hostname
 			a.Message = fmt.Sprintf("节点 %s 匹配 %q 的进程 %d 个，少于期望 %d 个", n.Hostname, c.Filter, len(procs.Processes), minCount)
 			fails = append(fails, a)
 		}
@@ -573,6 +586,152 @@ func patrolTargetNodes(ctx context.Context, cli *workerproxy.Client, node string
 		}
 	}
 	return nil, fmt.Errorf("目标节点 %q 不存在", node)
+}
+
+// --- 闭环：报告投递 + 异常转告警 ---
+
+// SettingReportDelivery 巡检报告投递配置的 settings key（系统设置「巡检报告」tab 维护）。
+const SettingReportDelivery = "patrol-report"
+
+// ReportDelivery 巡检报告投递配置。
+type ReportDelivery struct {
+	Mode       string   `json:"mode"`        // always | anomaly | off
+	ChannelIDs []string `json:"channel_ids"` // notify 渠道
+}
+
+// ReportDeliveryConfig 读取投递配置（未设置返回 off 默认）。
+func (s *Service) ReportDeliveryConfig() (ReportDelivery, error) {
+	var cfg ReportDelivery
+	found, err := s.st.GetSetting(SettingReportDelivery, &cfg)
+	if err != nil || !found {
+		return ReportDelivery{Mode: "off"}, err
+	}
+	return cfg, nil
+}
+
+// SaveReportDeliveryConfig 校验并保存投递配置（渠道必须存在）。
+func (s *Service) SaveReportDeliveryConfig(cfg ReportDelivery) error {
+	switch cfg.Mode {
+	case "always", "anomaly", "off":
+	default:
+		return ErrInvalidFlow{"report delivery mode must be always|anomaly|off"}
+	}
+	if len(cfg.ChannelIDs) > 0 && s.notify != nil {
+		channels, err := s.notify.ListChannels()
+		if err != nil {
+			return err
+		}
+		existing := map[string]bool{}
+		for _, ch := range channels {
+			existing[ch.ID] = true
+		}
+		for _, id := range cfg.ChannelIDs {
+			if !existing[id] {
+				return ErrInvalidFlow{"notify channel not found: " + id}
+			}
+		}
+	}
+	return s.st.PutSetting(SettingReportDelivery, cfg)
+}
+
+// deliverReport 按全局设置把巡检报告投递到通知渠道。
+// 返回错误描述（空 = 未投递或投递成功）；投递失败不阻断巡检，由调用方记入 run.Error。
+func (s *Service) deliverReport(ctx context.Context, p *store.Patrol, report string, anomalies []store.Anomaly) string {
+	if s.notify == nil {
+		return ""
+	}
+	var cfg ReportDelivery
+	found, err := s.st.GetSetting(SettingReportDelivery, &cfg)
+	if err != nil {
+		return "read report delivery setting: " + err.Error()
+	}
+	if !found || cfg.Mode == "" || cfg.Mode == "off" || len(cfg.ChannelIDs) == 0 {
+		return ""
+	}
+	okCount, failCount := 0, 0
+	for _, a := range anomalies {
+		if a.OK {
+			okCount++
+		} else {
+			failCount++
+		}
+	}
+	if cfg.Mode == "anomaly" && failCount == 0 {
+		return ""
+	}
+	title := fmt.Sprintf("巡检报告「%s」：正常 %d / 异常 %d", p.Name, okCount, failCount)
+	if err := s.notify.Send(ctx, cfg.ChannelIDs, title, report); err != nil {
+		return "deliver report: " + err.Error()
+	}
+	return ""
+}
+
+// syncAlerts 巡检异常转告警：每个失败检查项（按 集群/服务/检查项/节点 细分）
+// upsert 一条确定键告警；新增或恢复后复发才通知（避免每次 cron 重复推送）。
+// 与上一已完成 run 对比，本轮不再失败的检查项 → 对应告警自动 recovered。
+func (s *Service) syncAlerts(ctx context.Context, p *store.Patrol, cur *store.PatrolRun) {
+	curFail := map[string]store.Anomaly{}
+	for _, a := range cur.Anomalies {
+		if !a.OK {
+			curFail[patrolAlertKey(a)] = a
+		}
+	}
+	// 上一已完成 run 的失败集合（当前 run 仍是 running，跳过）
+	prevFail := map[string]store.Anomaly{}
+	if runs, err := s.st.ListPatrolRuns(p.ID, 5); err == nil {
+		for _, r := range runs {
+			if r.ID == cur.ID || r.Status == store.RunRunning {
+				continue
+			}
+			for _, a := range r.Anomalies {
+				if !a.OK {
+					prevFail[patrolAlertKey(a)] = a
+				}
+			}
+			break // 只对比最近一次
+		}
+	}
+
+	for _, a := range curFail {
+		now := time.Now().UTC()
+		alert := &store.Alert{
+			ID:      store.AlertIDWithKey(a.Cluster, a.Service, store.EventPatrolFailed, a.Check+"|"+a.Node),
+			Cluster: a.Cluster,
+			Service: a.Service,
+			Type:    store.EventPatrolFailed,
+			Level:   store.LevelWarn,
+			Title:   fmt.Sprintf("巡检异常：%s", a.Check),
+			Status:  store.AlertActive,
+			Count:   1,
+			FirstTS: now,
+			LastTS:  now,
+		}
+		created, err := s.st.UpsertKeyedAlert(alert)
+		if err != nil {
+			continue
+		}
+		if created && s.notify != nil {
+			subject := fmt.Sprintf("[%s] 巡检「%s」发现异常：%s — %s", a.Cluster, p.Name, a.Check, a.Message)
+			// 通知按告警级别策略路由；upsert 可能合并了旧计数，取库里最新告警
+			if latest, err := s.st.GetAlert(alert.ID); err == nil && latest != nil {
+				alert = latest
+			}
+			_ = s.notify.NotifyAlert(ctx, alert, subject)
+		}
+	}
+	for key, a := range prevFail {
+		if _, still := curFail[key]; still {
+			continue
+		}
+		id := store.AlertIDWithKey(a.Cluster, a.Service, store.EventPatrolFailed, a.Check+"|"+a.Node)
+		_, _ = s.st.SetAlertStatus(id, store.AlertRecovered, "patrol")
+	}
+}
+
+// patrolAlertKey 检查项的告警身份：集群/服务/检查项/节点（节点级检查同
+// 一检查项在不同节点的失败是不同告警）。
+func patrolAlertKey(a store.Anomaly) string {
+	return a.Cluster + "|" + a.Service + "|" + a.Check + "|" + a.Node
 }
 
 // buildReport 生成巡检报告：AI 摘要（可用时）或保底文本。
