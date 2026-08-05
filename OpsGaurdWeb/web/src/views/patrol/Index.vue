@@ -65,15 +65,25 @@
           <el-input v-model="form.yaml" type="textarea" :rows="14" class="mono"
             placeholder="name: nightly
 checks:
-  - type: resource
+  - type: resource      # 服务容器资源阈值
     cluster: dev
     service: web
     cpu_threshold: 85
     mem_threshold: 90
-  - type: health
+  - type: health        # 服务副本健康
     cluster: dev
     service: api
     min_replicas: 2
+  - type: port          # 从节点探测任意 host:port（node 空=全部 ready 节点）
+    cluster: dev
+    host: 10.0.0.11     # 探宿主机中间件用节点 IP，勿用 127.0.0.1
+    port: 3306
+  - type: http          # 从节点探测任意 URL（expected_status 空=2xx）
+    cluster: dev
+    url: http://10.0.0.11:8080/healthz
+  - type: process       # 宿主机进程（filter 匹配名称/命令行，少于 min_count=1 即异常）
+    cluster: dev
+    filter: java
 # report.model 由上方「报告模型」下拉自动写入（也可手写覆盖）" />
         </el-form-item>
       </el-form>

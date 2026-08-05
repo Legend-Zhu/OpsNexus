@@ -49,7 +49,7 @@ export const clusterApi = {
 // ---- 集群节点（管理层级：集群 → 节点 → 容器/进程） ----
 export const nodeApi = {
   list: (cluster: string) => get<{ items: ClusterNode[] }>(`/v1/clusters/${cluster}/nodes`),
-  processes: (cluster: string, nodeId: string, params?: { top?: string; limit?: number }) =>
+  processes: (cluster: string, nodeId: string, params?: { top?: string; limit?: number; filter?: string }) =>
     get<{ node: string; total: number; processes: ProcessInfo[] }>(
       `/v1/clusters/${cluster}/nodes/${nodeId}/processes`,
       { params },

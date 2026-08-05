@@ -64,6 +64,15 @@
 
             <div class="drawer-toolbar">
               <span class="og-dim">宿主机进程（Top N，按 CPU）</span>
+              <el-input
+                v-model="procFilter"
+                size="small"
+                clearable
+                placeholder="过滤名称/命令行，如 java、redis-server"
+                style="width: 230px; margin-left: auto; margin-right: 8px"
+                @keyup.enter="loadProcesses('cpu')"
+                @clear="loadProcesses('cpu')"
+              />
               <el-button size="small" :icon="Refresh" @click="loadProcesses('cpu')">刷新</el-button>
             </div>
             <el-table :data="processes" size="small" v-loading="procsLoading" max-height="480">
@@ -324,6 +333,7 @@ const nodes = ref<ClusterNode[]>([])
 const nodeVisible = ref(false)
 const currentNode = ref<ClusterNode | null>(null)
 const processes = ref<ProcessInfo[]>([])
+const procFilter = ref('')
 const procsLoading = ref(false)
 
 // 工作负载 / 中间件
@@ -402,6 +412,7 @@ async function loadNodes() {
 function openNode(n: ClusterNode) {
   currentNode.value = n
   processes.value = []
+  procFilter.value = ''
   nodeVisible.value = true
   void loadProcesses('cpu')
 }
@@ -410,7 +421,11 @@ async function loadProcesses(top: string) {
   if (!currentNode.value) return
   procsLoading.value = true
   try {
-    const resp = await nodeApi.processes(clusterName.value, currentNode.value.id, { top, limit: 100 })
+    const resp = await nodeApi.processes(clusterName.value, currentNode.value.id, {
+      top,
+      limit: 100,
+      filter: procFilter.value.trim() || undefined,
+    })
     processes.value = resp.processes ?? []
   } catch {
     processes.value = []
