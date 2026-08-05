@@ -86,21 +86,24 @@ func (s *Service) Apply(ctx context.Context, r *store.AlertRule) error {
 		return fmt.Errorf("get workload: %w", err)
 	}
 
-	// 拼装完整服务 config（monitoring 块替换为规则内容）
-	cfg := map[string]any{
-		"name":       r.Service,
-		"image":      d.Image,
-		"monitoring": r.Monitoring,
+	// 拼装完整服务 config（Worker 契约：service 块 + monitoring 块）
+	svc := map[string]any{
+		"name":  r.Service,
+		"image": d.Image,
 	}
 	if d.Mode == "replicated" && d.Desired > 0 {
-		cfg["replicas"] = d.Desired
+		svc["replicas"] = d.Desired
 	}
 	if len(d.Ports) > 0 {
 		var ports []map[string]any
 		for _, p := range d.Ports {
 			ports = append(ports, map[string]any{"target": p.TargetPort, "published": p.PublishedPort, "protocol": p.Protocol})
 		}
-		cfg["ports"] = ports
+		svc["ports"] = ports
+	}
+	cfg := map[string]any{
+		"service":    svc,
+		"monitoring": r.Monitoring,
 	}
 	yamlText, err := yaml.Marshal(cfg)
 	if err != nil {

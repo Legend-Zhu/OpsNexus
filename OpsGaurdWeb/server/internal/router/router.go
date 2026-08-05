@@ -1,7 +1,6 @@
 // Package router wires the management-plane HTTP routes.
 //
-// Route groups (skeletons — handlers return placeholders until business
-// logic lands):
+// Route groups:
 //
 //	/api/v1/clusters        多集群管理（类 Rancher）
 //	/api/v1/clusters/:name/workloads   工作负载（经 Worker 编排）
@@ -9,9 +8,14 @@
 //	/api/v1/clusters/:name/audit       审计
 //	/api/v1/ainexus/*       AiNexus 异常排查（内嵌网关，进程内直调）
 //	/ainexus/*              内嵌 AiNexus 网关原生端点（兼容其 URL 契约）
+//	/                       前端控制台（dist 静态托管 + SPA 回退）
 package router
 
 import (
+	"net/http"
+	"os"
+	"path/filepath"
+
 	"github.com/gin-gonic/gin"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/api"
@@ -136,6 +140,20 @@ func New(h *api.Handlers) *gin.Engine {
 			ainexus.POST("/chat", h.AINexusChat)
 			ainexus.POST("/investigate", h.AINexusInvestigate)
 		}
+	}
+
+	// 前端控制台静态托管（SPA）：dist/ 目录（存在时挂载），
+	// 未匹配的 GET 回退 index.html 支持前端路由（/dashboard /clusters …）。
+	dist := "./web"
+	if info, err := os.Stat(dist); err == nil && info.IsDir() {
+		r.Static("/assets", filepath.Join(dist, "assets"))
+		r.NoRoute(func(c *gin.Context) {
+			if c.Request.Method != http.MethodGet {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "not found"})
+				return
+			}
+			c.File(filepath.Join(dist, "index.html"))
+		})
 	}
 
 	return r

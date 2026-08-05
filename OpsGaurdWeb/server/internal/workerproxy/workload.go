@@ -243,6 +243,13 @@ func (c *Client) GetWorkload(ctx context.Context, name string) (WorkloadDetail, 
 		return WorkloadDetail{}, err
 	}
 	d := WorkloadDetail{Workload: mapWorkload(raw.Service), Healthy: raw.Healthy}
+	// 权威 running/desired 来自 Worker 顶层字段（真机 Inspect 的 service 无
+	// ServiceStatus）；仅在缺失时回退到 ServiceStatus 映射值。
+	if raw.Running > 0 || raw.Desired > 0 {
+		d.Running = uint64(raw.Running)
+		d.Desired = uint64(raw.Desired)
+		d.Replica = fmt.Sprintf("%d/%d", raw.Running, raw.Desired)
+	}
 	for _, t := range raw.Tasks {
 		d.Tasks = append(d.Tasks, TaskView{
 			ID:           t.ID,
