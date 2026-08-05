@@ -39,20 +39,22 @@ func (a *API) SetAudit(s *audit.Store) {
 // on its own *http.ServeMux (so main can coexist with other handlers).
 func (a *API) Routes() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
-		"POST /api/v1/services":               a.deploy,
-		"GET /api/v1/services":                a.list,
-		"GET /api/v1/services/{name}":         a.inspect,
-		"POST /api/v1/services/{name}":        a.update,
-		"DELETE /api/v1/services/{name}":      a.remove,
-		"POST /api/v1/services/{name}/scale":  a.scale,
+		"POST /api/v1/services":                a.deploy,
+		"GET /api/v1/services":                 a.list,
+		"GET /api/v1/services/{name}":          a.inspect,
+		"POST /api/v1/services/{name}":         a.update,
+		"DELETE /api/v1/services/{name}":       a.remove,
+		"POST /api/v1/services/{name}/scale":   a.scale,
 		"POST /api/v1/services/{name}/restart": a.restart,
-		"GET /api/v1/operations":              a.listOps,
-		"GET /api/v1/operations/{id}":         a.getOp,
-		"GET /api/v1/events":                  a.listEvents,
-		"GET /api/v1/self":                    a.self,
-		"GET /api/v1/audit":                   a.listAudit,
-		"GET /api/v1/nodes":                   a.nodes,
-		"GET /api/v1/nodes/{id}/processes":    a.nodeProcesses,
+		"GET /api/v1/operations":               a.listOps,
+		"GET /api/v1/operations/{id}":          a.getOp,
+		"GET /api/v1/events":                   a.listEvents,
+		"GET /api/v1/self":                     a.self,
+		"GET /api/v1/audit":                    a.listAudit,
+		"GET /api/v1/nodes":                    a.nodes,
+		"GET /api/v1/nodes/{id}/processes":     a.nodeProcesses,
+		"GET /api/v1/nodes/{id}/check/port":    a.nodeCheckPort,
+		"POST /api/v1/nodes/{id}/check/http":   a.nodeCheckHTTP,
 	}
 }
 

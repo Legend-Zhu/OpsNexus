@@ -15,20 +15,20 @@ import (
 
 // nodeView 一个集群节点的管理面视图。
 type nodeView struct {
-	ID           string  `json:"id"`
-	Hostname     string  `json:"hostname"`
-	Role         string  `json:"role"`            // manager | worker
-	State        string  `json:"state"`           // ready | down | ...
-	Availability string  `json:"availability"`    // active | pause | drain
-	Addr         string  `json:"addr"`
-	Leader       bool    `json:"leader"`
-	ManagerReach string  `json:"managerReachability,omitempty"` // manager-only
-	Reachable    bool    `json:"reachable"`       // node worker 可达（stats 可读）
-	CPUCores     float64 `json:"cpuCores"`
-	MemBytes     uint64  `json:"memBytes"`
-	CPUPercent   float64 `json:"cpuPercent"` // swarm 容器聚合占用（相对节点总核）
-	MemPercent   float64 `json:"memPercent"`
-	ContainerCount int   `json:"containerCount"`
+	ID             string  `json:"id"`
+	Hostname       string  `json:"hostname"`
+	Role           string  `json:"role"`         // manager | worker
+	State          string  `json:"state"`        // ready | down | ...
+	Availability   string  `json:"availability"` // active | pause | drain
+	Addr           string  `json:"addr"`
+	Leader         bool    `json:"leader"`
+	ManagerReach   string  `json:"managerReachability,omitempty"` // manager-only
+	Reachable      bool    `json:"reachable"`                     // node worker 可达（stats 可读）
+	CPUCores       float64 `json:"cpuCores"`
+	MemBytes       uint64  `json:"memBytes"`
+	CPUPercent     float64 `json:"cpuPercent"` // swarm 容器聚合占用（相对节点总核）
+	MemPercent     float64 `json:"memPercent"`
+	ContainerCount int     `json:"containerCount"`
 }
 
 // nodes handles GET /api/v1/nodes.
@@ -78,31 +78,89 @@ func (a *API) nodes(w http.ResponseWriter, r *http.Request) {
 
 // nodeProcesses handles GET /api/v1/nodes/{id}/processes — proxies to the
 // node's local worker (the node-role worker must run /api/v1/local/processes).
+// id 可以是 node ID 或 hostname；top/limit/filter 原样转发。
 func (a *API) nodeProcesses(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	id := r.PathValue("id")
-	nodes, err := a.orch.cli.ListNodes(ctx, nil)
+	addr, err := a.nodeAddr(ctx, r.PathValue("id"))
+	if err != nil {
+		writeNodeErr(w, err)
+		return
+	}
+	q := r.URL.Query()
+	procs, err := a.orch.NodeClientByAddr(addr).Processes(ctx, q.Get("top"), q.Get("limit"), q.Get("filter"))
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err)
 		return
 	}
-	for _, n := range nodes {
-		if n.ID != id {
-			continue
-		}
-		if n.Status.State != "ready" || n.Status.Addr == "" {
-			writeErr(w, http.StatusNotFound, errNotFound("node", id))
-			return
-		}
-		procs, err := a.orch.NodeClientByAddr(n.Status.Addr).Processes(ctx, r.URL.Query().Get("top"), r.URL.Query().Get("limit"))
-		if err != nil {
-			writeErr(w, http.StatusBadGateway, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, procs)
+	writeJSON(w, http.StatusOK, procs)
+}
+
+// nodeCheckPort handles GET /api/v1/nodes/{id}/check/port — ad-hoc TCP probe
+// executed from that node's worker（host/port/timeout 原样转发）。
+func (a *API) nodeCheckPort(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	addr, err := a.nodeAddr(ctx, r.PathValue("id"))
+	if err != nil {
+		writeNodeErr(w, err)
 		return
 	}
-	writeErr(w, http.StatusNotFound, errNotFound("node", id))
+	q := r.URL.Query()
+	res, err := a.orch.NodeClientByAddr(addr).CheckPort(ctx, q.Get("host"), q.Get("port"), q.Get("timeout"))
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// nodeCheckHTTP handles POST /api/v1/nodes/{id}/check/http — ad-hoc HTTP probe
+// executed from that node's worker（JSON body 原样转发）。
+func (a *API) nodeCheckHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req HTTPCheckRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	addr, err := a.nodeAddr(ctx, r.PathValue("id"))
+	if err != nil {
+		writeNodeErr(w, err)
+		return
+	}
+	res, err := a.orch.NodeClientByAddr(addr).CheckHTTP(ctx, req)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// nodeAddr 把 id（node ID 或 hostname）解析为 ready 节点的 worker 地址。
+// 节点不存在/未 ready 返回 errNotFound；docker 失败返回原始错误。
+func (a *API) nodeAddr(ctx context.Context, id string) (string, error) {
+	nodes, err := a.orch.cli.ListNodes(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	for _, n := range nodes {
+		if n.ID != id && n.Description.Hostname != id {
+			continue
+		}
+		if n.Status.State == "ready" && n.Status.Addr != "" {
+			return n.Status.Addr, nil
+		}
+		break
+	}
+	return "", errNotFound("node", id)
+}
+
+// writeNodeErr 按 nodeAddr 的错误类型写响应：not found → 404，其余 → 502。
+func writeNodeErr(w http.ResponseWriter, err error) {
+	if _, nf := err.(simpleErr); nf {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	writeErr(w, http.StatusBadGateway, err)
 }
 
 // localNodeAggregate reads this daemon's running swarm-service containers and

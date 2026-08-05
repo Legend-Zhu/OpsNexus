@@ -31,13 +31,14 @@ type processInfo struct {
 }
 
 type processesResp struct {
-	Node       string        `json:"node"`
-	Total      int           `json:"total"`
-	Processes  []processInfo `json:"processes"`
+	Node      string        `json:"node"`
+	Total     int           `json:"total"`
+	Processes []processInfo `json:"processes"`
 }
 
-// processes handles GET /api/v1/local/processes?limit=100&top=cpu|mem.
-// top=cpu（默认）按两次采样的 CPU% 降序；top=mem 按 RSS 降序。
+// processes handles GET /api/v1/local/processes?limit=100&top=cpu|mem&filter=java.
+// top=cpu（默认）按两次采样的 CPU% 降序；top=mem 按 RSS 降序；
+// filter 为名称/cmdline 子串（大小写不敏感），先于 sort/limit 应用。
 func (a *API) processes(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
@@ -48,6 +49,7 @@ func (a *API) processes(w http.ResponseWriter, r *http.Request) {
 	if top == "" {
 		top = "cpu"
 	}
+	filter := strings.ToLower(q.Get("filter"))
 	host, _ := hostname()
 	first, err := snapshotProcesses()
 	if err != nil {
@@ -69,6 +71,9 @@ func (a *API) processes(w http.ResponseWriter, r *http.Request) {
 	for _, a0 := range first {
 		a1, ok := seen[a0.pid]
 		if !ok {
+			continue
+		}
+		if filter != "" && !matchProcess(filter, a1.name, a1.cmdline) {
 			continue
 		}
 		dTick := float64((a1.utime + a1.stime) - (a0.utime + a0.stime))
@@ -184,4 +189,10 @@ func parseProcStat(s string) (name string, fields []string, err error) {
 func mustUint(s string) uint64 {
 	v, _ := strconv.ParseUint(s, 10, 64)
 	return v
+}
+
+// matchProcess filter（已转小写）是否命中进程名或 cmdline（大小写不敏感子串）。
+func matchProcess(filter, name, cmdline string) bool {
+	return strings.Contains(strings.ToLower(name), filter) ||
+		strings.Contains(strings.ToLower(cmdline), filter)
 }

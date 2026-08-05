@@ -33,11 +33,13 @@ func New(cli docker.Client, policy *agent.CommandPolicy, log *slog.Logger) *API 
 // Routes returns the local endpoint handlers.
 func (a *API) Routes() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
-		"GET /api/v1/local/stats":      a.stats,
-		"GET /api/v1/local/processes":  a.processes,
-		"POST /api/v1/local/exec":      a.exec,
-		"POST /api/v1/local/host":      a.host,
-		"GET /api/v1/local/logs":       a.logs,
+		"GET /api/v1/local/stats":       a.stats,
+		"GET /api/v1/local/processes":   a.processes,
+		"POST /api/v1/local/exec":       a.exec,
+		"POST /api/v1/local/host":       a.host,
+		"GET /api/v1/local/logs":        a.logs,
+		"GET /api/v1/local/check/port":  a.checkPort,
+		"POST /api/v1/local/check/http": a.checkHTTP,
 	}
 }
 
@@ -98,10 +100,10 @@ func (a *API) stats(w http.ResponseWriter, r *http.Request) {
 // ---- exec (container) ----
 
 type execReq struct {
-	Container string   `json:"container"`           // container ID (or name)
-	Command   []string `json:"command"`             // e.g. ["cat","/etc/nginx/nginx.conf"]
-	Slot      int      `json:"slot,omitempty"`      // service task slot (alternative to container)
-	Service   string   `json:"service,omitempty"`   // service name, used with slot
+	Container string   `json:"container"`         // container ID (or name)
+	Command   []string `json:"command"`           // e.g. ["cat","/etc/nginx/nginx.conf"]
+	Slot      int      `json:"slot,omitempty"`    // service task slot (alternative to container)
+	Service   string   `json:"service,omitempty"` // service name, used with slot
 }
 
 type execResp struct {

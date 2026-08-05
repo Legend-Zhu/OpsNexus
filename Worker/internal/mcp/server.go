@@ -61,6 +61,7 @@ func NewWithAudit(orch *orchestrator.Orchestrator, mon *monitor.Manager, cli doc
 	h.registerTools(srv)
 	h.registerResources(srv)
 	h.registerToolsMetrics(srv)
+	h.registerToolsChecks(srv)
 	h.srv = srv
 	return h, nil
 }

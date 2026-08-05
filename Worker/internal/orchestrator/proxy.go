@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
@@ -40,7 +41,7 @@ func NewNodeClient(addr string) *NodeClient {
 
 // NodeStats is the response shape of GET /api/v1/local/stats.
 type NodeStats struct {
-	Node       string        `json:"node"`
+	Node       string              `json:"node"`
 	Containers []NodeContainerStat `json:"containers"`
 }
 
@@ -87,25 +88,78 @@ type ProcessesResp struct {
 	Processes []ProcessInfo `json:"processes"`
 }
 
-// Processes fetches the node's host process list (top=cpu|mem, limit=N).
-func (n *NodeClient) Processes(ctx context.Context, top, limit string) (ProcessesResp, error) {
+// PortCheckResult mirrors nodeagent.portCheckResp.
+type PortCheckResult struct {
+	Node      string `json:"node"`
+	Host      string `json:"host"`
+	Port      string `json:"port"`
+	OK        bool   `json:"ok"`
+	LatencyMS int64  `json:"latencyMs"`
+	Error     string `json:"error,omitempty"`
+}
+
+// HTTPCheckRequest mirrors nodeagent.httpCheckReq.
+type HTTPCheckRequest struct {
+	URL            string            `json:"url"`
+	Method         string            `json:"method,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	ExpectedStatus []int             `json:"expectedStatus,omitempty"`
+	ExpectedBody   string            `json:"expectedBody,omitempty"`
+	Timeout        string            `json:"timeout,omitempty"`
+}
+
+// HTTPCheckResult mirrors nodeagent.httpCheckResp.
+type HTTPCheckResult struct {
+	Node      string `json:"node"`
+	URL       string `json:"url"`
+	OK        bool   `json:"ok"`
+	Status    int    `json:"status"`
+	LatencyMS int64  `json:"latencyMs"`
+	Error     string `json:"error,omitempty"`
+}
+
+// Processes fetches the node's host process list (top=cpu|mem, limit=N;
+// filter matches name/cmdline substring, case-insensitive).
+func (n *NodeClient) Processes(ctx context.Context, top, limit, filter string) (ProcessesResp, error) {
+	q := url.Values{}
+	if top != "" {
+		q.Set("top", top)
+	}
+	if limit != "" {
+		q.Set("limit", limit)
+	}
+	if filter != "" {
+		q.Set("filter", filter)
+	}
 	path := "/api/v1/local/processes"
-	if top != "" || limit != "" {
-		q := "?"
-		if top != "" {
-			q += "top=" + top
-		}
-		if limit != "" {
-			if q != "?" {
-				q += "&"
-			}
-			q += "limit=" + limit
-		}
-		path += q
+	if len(q) > 0 {
+		path += "?" + q.Encode()
 	}
 	var out ProcessesResp
 	if err := n.getJSON(ctx, path, &out); err != nil {
 		return ProcessesResp{}, err
+	}
+	return out, nil
+}
+
+// CheckPort runs an ad-hoc TCP probe from the node worker.
+func (n *NodeClient) CheckPort(ctx context.Context, host, port, timeout string) (PortCheckResult, error) {
+	q := url.Values{"host": {host}, "port": {port}}
+	if timeout != "" {
+		q.Set("timeout", timeout)
+	}
+	var out PortCheckResult
+	if err := n.getJSON(ctx, "/api/v1/local/check/port?"+q.Encode(), &out); err != nil {
+		return PortCheckResult{}, err
+	}
+	return out, nil
+}
+
+// CheckHTTP runs an ad-hoc HTTP probe from the node worker.
+func (n *NodeClient) CheckHTTP(ctx context.Context, req HTTPCheckRequest) (HTTPCheckResult, error) {
+	var out HTTPCheckResult
+	if err := n.postJSON(ctx, "/api/v1/local/check/http", req, &out); err != nil {
+		return HTTPCheckResult{}, err
 	}
 	return out, nil
 }
