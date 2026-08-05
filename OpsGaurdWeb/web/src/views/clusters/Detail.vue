@@ -234,14 +234,18 @@
             :rows="14"
             class="mono"
             placeholder="Worker 服务配置（YAML/JSON），示例：
-name: web
-image: nginx:alpine
-replicas: 2
-labels:
-  category: service
-ports:
-  - target: 80
-    published: 8080"
+service:
+  name: web
+  image: nginx:alpine
+  replicas: 2
+  labels:
+    category: service
+  ports:
+    - { target: 80, published: 8080 }
+monitoring:
+  enabled: true
+  portChecks:
+    - { port: &quot;8080&quot; }"
           />
         </el-form-item>
       </el-form>
@@ -470,7 +474,7 @@ async function loadEvents() {
 
 // ---- 部署 ----
 function openDeploy() {
-  deployConfig.value = `name: web\nimage: nginx:alpine\nreplicas: 1\nlabels:\n  category: ${deployCategory.value}\nports:\n  - target: 80\n    published: 8080`
+  deployConfig.value = `service:\n  name: web\n  image: nginx:alpine\n  replicas: 1\n  labels:\n    category: ${deployCategory.value}\n  ports:\n    - { target: 80, published: 8080 }\n# monitoring:              # 可选：监控（端口/HTTP/日志/资源阈值）\n#   enabled: true\n#   portChecks:\n#     - { port: "8080" }\n#   httpChecks:\n#     - { url: "http://localhost:8080/health", expectedStatus: [200] }`
   deployVisible.value = true
 }
 
