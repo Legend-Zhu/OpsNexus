@@ -91,9 +91,14 @@
         </el-descriptions>
       </el-tab-pane>
 
-      <!-- AI 排查网关（P7：在线配置 + 热重载内嵌 AiNexus） -->
+      <!-- 模型配置（模型池：provider + 模型清单，唯一配置模型的地方） -->
+      <el-tab-pane label="模型配置" name="model-config">
+        <ModelConfig />
+      </el-tab-pane>
+
+      <!-- AI 排查网关（启用 + 从模型池选默认模型 + 工具/Agent/MCP） -->
       <el-tab-pane label="AI 排查网关" name="ainexus">
-        <AINexusConfig />
+        <AINexusGateway />
       </el-tab-pane>
     </el-tabs>
 
@@ -159,7 +164,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { alertRuleApi, authApi, clusterApi } from '@/api'
 import type { AlertRule, ClusterSummary, SSOStatus, User } from '@/types'
-import AINexusConfig from './AINexusConfig.vue'
+import AINexusGateway from './AINexusGateway.vue'
+import ModelConfig from './ModelConfig.vue'
 
 const tab = ref('rules')
 const rules = ref<AlertRule[]>([])

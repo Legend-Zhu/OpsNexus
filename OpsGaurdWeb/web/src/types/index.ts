@@ -325,6 +325,8 @@ export interface AINexusConfig {
   /** 网关是否已加载（enabled 且构建成功） */
   active: boolean
   providers: AINexusProvider[]
+  /** AI 排查网关默认模型（模型池之一；空 = 用首个可用） */
+  default_model?: string
   tools: AINexusTools
   agent: AINexusAgent
   mcp_servers: AINexusMCPServer[]
@@ -374,4 +376,6 @@ export interface AINexusMCPServer {
   env_keys?: string[]
   headers?: Record<string, string>
   headers_keys?: string[]
+  /** 集群 manager 的自动 MCP（服务端自动连接，页面只读） */
+  cluster?: boolean
 }

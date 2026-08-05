@@ -15,7 +15,7 @@
       :closable="false"
       class="mb"
       title="AiNexus 网关未启用"
-      description="请在 系统设置 → AI 排查网关 配置模型提供商并启用网关，保存后无需重启立即生效。"
+      description="请在 系统设置 → 模型配置 配置模型、AI 排查网关 启用网关并选择默认模型，保存后无需重启立即生效。"
     >
       <el-button size="small" type="primary" @click="router.push('/system')">前往配置</el-button>
     </el-alert>
@@ -28,9 +28,6 @@
           :label="`[${a.cluster}/${a.service}] ${a.title} (${a.status})`"
           :value="a.id"
         />
-      </el-select>
-      <el-select v-model="model" placeholder="模型（默认首个可用）" clearable style="width: 200px">
-        <el-option v-for="m in models" :key="m.name" :label="m.name" :value="m.name" />
       </el-select>
       <el-switch v-model="useMCP" active-text="启用 MCP 采证" />
       <el-button type="primary" :icon="Search" :loading="running" :disabled="!alertId" @click="investigate">
@@ -58,13 +55,11 @@ import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ainexusApi, alertApi } from '@/api'
-import type { AINexusModelInfo, Alert } from '@/types'
+import type { Alert } from '@/types'
 
 const router = useRouter()
 const alerts = ref<Alert[]>([])
 const alertId = ref('')
-const models = ref<AINexusModelInfo[]>([])
-const model = ref('')
 const useMCP = ref(true)
 
 const gatewayActive = ref(false)
@@ -108,15 +103,6 @@ async function loadAlerts() {
   }
 }
 
-async function loadModels() {
-  try {
-    const resp = await ainexusApi.models()
-    models.value = resp.models ?? []
-  } catch {
-    models.value = []
-  }
-}
-
 async function investigate() {
   if (!alertId.value) {
     ElMessage.warning('请选择告警')
@@ -129,10 +115,11 @@ async function investigate() {
   status.value = '正在采集证据并分析…'
 
   try {
+    // 模型不在此选择：用「AI 排查网关」配置的默认模型
     const resp = await fetch(ainexusApi.investigateUrl(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ alert_id: alertId.value, model: model.value || undefined, use_mcp: useMCP.value }),
+      body: JSON.stringify({ alert_id: alertId.value, use_mcp: useMCP.value }),
       signal: abort.signal,
     })
     if (!resp.ok || !resp.body) {
@@ -193,7 +180,7 @@ function authHeaders(): Record<string, string> {
 }
 
 onMounted(async () => {
-  // 先探测网关是否启用（配置可热重载）：未启用时跳过模型加载，避免 503 全局弹错
+  // 探测网关是否启用（配置可热重载），未启用时展示引导横幅
   configLoading.value = true
   try {
     const cfg = await ainexusApi.config()
@@ -203,11 +190,7 @@ onMounted(async () => {
   } finally {
     configLoading.value = false
   }
-  if (gatewayActive.value) {
-    await Promise.all([loadAlerts(), loadModels()])
-  } else {
-    await loadAlerts()
-  }
+  await loadAlerts()
 })
 onBeforeUnmount(() => abort?.abort())
 </script>

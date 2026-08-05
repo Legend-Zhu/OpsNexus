@@ -9,59 +9,16 @@
       <span class="muted ml">保存后立即热重载，无需重启进程</span>
     </div>
 
-    <!-- 模型提供商 -->
-    <el-divider content-position="left">模型提供商</el-divider>
-    <div v-for="(p, i) in form.providers" :key="i" class="provider-box">
-      <div class="provider-head">
-        <span class="provider-title">Provider {{ i + 1 }}</span>
-        <span>
-          <el-button link type="primary" :loading="testing === i" @click="testProvider(i)">测试连接</el-button>
-          <el-button link type="danger" @click="form.providers.splice(i, 1)">移除</el-button>
-        </span>
-      </div>
-      <el-form label-width="90px" class="provider-form">
-        <el-form-item label="名称">
-          <el-input v-model="p.name" placeholder="如 deepseek" />
-        </el-form-item>
-        <el-form-item label="类型">
-          <el-select v-model="p.type" style="width: 220px">
-            <el-option label="OpenAI 兼容" value="openai_compatible" />
-            <el-option label="Anthropic 兼容" value="anthropic_compatible" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="Base URL">
-          <el-input v-model="p.base_url" placeholder="如 https://api.deepseek.com/v1" class="mono" />
-        </el-form-item>
-        <el-form-item label="API Key">
-          <el-input
-            v-model="p.api_key"
-            type="password"
-            show-password
-            :placeholder="p.api_key_set ? '已设置（留空 = 保持）' : '必填'"
-            class="mono"
-          />
-        </el-form-item>
-        <el-form-item label="模型">
-          <div class="models-wrap">
-            <div v-for="(m, mi) in p.models" :key="mi" class="model-row">
-              <el-input v-model="m.name" placeholder="模型名，如 deepseek-chat" class="mono model-name" />
-              <el-input v-model="m.display_name" placeholder="显示名（可选）" class="model-display" />
-              <el-input-number v-model="m.max_tokens" :min="0" placeholder="max_tokens" controls-position="right" />
-              <el-input-number
-                v-model="m.temperature"
-                :min="0"
-                :max="2"
-                :step="0.1"
-                controls-position="right"
-              />
-              <el-button link type="danger" :icon="Delete" @click="p.models.splice(mi, 1)" />
-            </div>
-            <el-button size="small" :icon="Plus" @click="p.models.push({ name: '' })">添加模型</el-button>
-          </div>
-        </el-form-item>
-      </el-form>
-    </div>
-    <el-button class="mb" size="small" :icon="Plus" @click="addProvider">添加 Provider</el-button>
+    <!-- 默认模型（从模型池选择，模型池在「模型配置」tab 管理） -->
+    <el-divider content-position="left">默认模型</el-divider>
+    <el-form label-width="90px" class="default-model-form">
+      <el-form-item label="默认模型">
+        <el-select v-model="form.default_model" clearable filterable placeholder="默认（模型池首个可用）" style="width: 100%">
+          <el-option v-for="m in modelOptions" :key="m.name" :label="modelLabel(m)" :value="m.name" />
+        </el-select>
+        <span class="muted ml">异常排查直接使用该模型（排查页无需再选）；模型池见「模型配置」tab</span>
+      </el-form-item>
+    </el-form>
 
     <!-- 内置工具 -->
     <el-divider content-position="left">内置工具</el-divider>
@@ -107,8 +64,22 @@
       </el-form>
     </div>
 
-    <!-- MCP Servers -->
-    <el-divider content-position="left">MCP Servers（集群 Worker 采证）</el-divider>
+    <!-- 集群 MCP（自动连接，只读） -->
+    <el-divider content-position="left">集群 MCP（自动）</el-divider>
+    <el-alert type="info" :closable="false" class="mb"
+      title="各集群 Manager Worker 的 MCP 已自动连接"
+      description="网关加载/热重载时自动连接每个接入集群（有 mcp_url）的 /mcp，供 AI 排查与巡检采证，无需在此配置。" />
+    <div v-if="autoMcps.length" class="provider-box">
+      <div v-for="(m, i) in autoMcps" :key="i" class="auto-mcp-row">
+        <el-tag size="small" type="success" effect="plain">集群 manager</el-tag>
+        <span class="mono auto-mcp-name">{{ m.name.replace(/^cluster:/, '') }}</span>
+        <span class="mono og-dim">{{ m.url }}</span>
+      </div>
+    </div>
+    <p v-else class="og-dim mb">尚未接入带 mcp_url 的集群</p>
+
+    <!-- 自定义 MCP Servers -->
+    <el-divider content-position="left">自定义 MCP Servers</el-divider>
     <div v-for="(m, i) in form.mcp_servers" :key="i" class="provider-box">
       <div class="provider-head">
         <span class="provider-title">MCP {{ i + 1 }}：{{ m.name || '未命名' }}</span>
@@ -138,18 +109,10 @@
           <div class="kv-wrap">
             <div v-for="(row, ri) in m.headers_rows" :key="ri" class="kv-row">
               <el-input v-model="row.key" placeholder="头名，如 Authorization" class="mono kv-key" />
-              <el-input
-                v-model="row.value"
-                placeholder="值（留空 = 保持）"
-                type="password"
-                show-password
-                class="mono kv-val"
-              />
+              <el-input v-model="row.value" placeholder="值（留空 = 保持）" type="password" show-password class="mono kv-val" />
               <el-button link type="danger" :icon="Delete" @click="m.headers_rows.splice(ri, 1)" />
             </div>
-            <el-button size="small" :icon="Plus" @click="m.headers_rows.push({ key: '', value: '' })">
-              添加 Header
-            </el-button>
+            <el-button size="small" :icon="Plus" @click="m.headers_rows.push({ key: '', value: '' })">添加 Header</el-button>
           </div>
         </el-form-item>
         <el-form-item label="Env">
@@ -159,9 +122,7 @@
               <el-input v-model="row.value" placeholder="值（留空 = 保持）" class="mono kv-val" />
               <el-button link type="danger" :icon="Delete" @click="m.env_rows.splice(ri, 1)" />
             </div>
-            <el-button size="small" :icon="Plus" @click="m.env_rows.push({ key: '', value: '' })">
-              添加 Env
-            </el-button>
+            <el-button size="small" :icon="Plus" @click="m.env_rows.push({ key: '', value: '' })">添加 Env</el-button>
           </div>
         </el-form-item>
       </el-form>
@@ -181,7 +142,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { ainexusApi } from '@/api'
-import type { AINexusConfig, AINexusMCPServer, AINexusModelSpec, AINexusProvider } from '@/types'
+import type { AINexusMCPServer, AINexusModelInfo } from '@/types'
 
 interface KVRow {
   key: string
@@ -195,10 +156,17 @@ interface MCPServerForm extends Omit<AINexusMCPServer, 'headers' | 'env'> {
   env_rows: KVRow[]
 }
 
-/** 表单模型（agent 字段必填，方便 el-input-number 绑定） */
-interface AINexusForm {
+const loading = ref(false)
+const saving = ref(false)
+const active = ref(false)
+// 集群 manager 的自动 MCP（cluster:true，服务端自动连接，页面只读）
+const autoMcps = ref<AINexusMCPServer[]>([])
+// 模型池（来自 GET config 的 providers，选项数据源）
+const modelOptions = ref<AINexusModelInfo[]>([])
+
+const form = reactive<{
   enabled: boolean
-  providers: AINexusProvider[]
+  default_model: string
   tools: {
     command: { enabled: boolean; allowed_commands_str: string; timeout: string; work_dir: string }
     http_request: { enabled: boolean; timeout: string }
@@ -206,16 +174,9 @@ interface AINexusForm {
   }
   agent: { max_tool_rounds: number; parallel_tool_calls: boolean; max_context_tokens: number; keep_tool_rounds: number }
   mcp_servers: MCPServerForm[]
-}
-
-const loading = ref(false)
-const saving = ref(false)
-const testing = ref(-1)
-const active = ref(false)
-
-const form = reactive<AINexusForm>({
+}>({
   enabled: false,
-  providers: [] as AINexusProvider[],
+  default_model: '',
   tools: {
     command: { enabled: false, allowed_commands_str: '', timeout: '30s', work_dir: '/tmp' },
     http_request: { enabled: false, timeout: '15s' },
@@ -231,11 +192,10 @@ async function load() {
     const cfg = await ainexusApi.config()
     active.value = cfg.active
     form.enabled = cfg.enabled
-    form.providers = cfg.providers.map((p) => ({
-      ...p,
-      api_key: '', // 仅标记已设置；编辑时留空 = 保持
-      models: p.models.map((m) => ({ ...m })),
-    }))
+    form.default_model = cfg.default_model ?? ''
+    modelOptions.value = (cfg.providers ?? []).flatMap((p) =>
+      (p.models ?? []).map((m) => ({ name: m.name, provider: p.name, type: p.type })),
+    )
     form.tools.command = {
       enabled: cfg.tools?.command?.enabled ?? false,
       allowed_commands_str: (cfg.tools?.command?.allowed_commands ?? []).join(','),
@@ -250,26 +210,25 @@ async function load() {
       max_context_tokens: cfg.agent?.max_context_tokens ?? 800000,
       keep_tool_rounds: cfg.agent?.keep_tool_rounds ?? 5,
     }
-    form.mcp_servers = (cfg.mcp_servers ?? []).map((m) => ({
-      name: m.name,
-      transport: m.transport,
-      url: m.url,
-      command: m.command,
-      args: m.args,
-      args_str: (m.args ?? []).join(' '),
-      // GET 只返回 key 名（值脱敏）；编辑时留空 = 保持已保存值
-      headers_rows: (m.headers_keys ?? []).map((k) => ({ key: k, value: '' })),
-      env_rows: (m.env_keys ?? []).map((k) => ({ key: k, value: '' })),
-    }))
+    // 集群 manager 的自动 MCP 拆出（只读展示），其余为用户自定义（可编辑）
+    autoMcps.value = (cfg.mcp_servers ?? []).filter((m) => m.cluster)
+    form.mcp_servers = (cfg.mcp_servers ?? [])
+      .filter((m) => !m.cluster)
+      .map((m) => ({
+        name: m.name,
+        transport: m.transport,
+        url: m.url,
+        command: m.command,
+        args: m.args,
+        args_str: (m.args ?? []).join(' '),
+        headers_rows: (m.headers_keys ?? []).map((k) => ({ key: k, value: '' })),
+        env_rows: (m.env_keys ?? []).map((k) => ({ key: k, value: '' })),
+      }))
   } catch {
     // 错误已由 http.ts 提示
   } finally {
     loading.value = false
   }
-}
-
-function addProvider() {
-  form.providers.push({ name: '', type: 'openai_compatible', base_url: '', api_key: '', models: [{ name: '' }] })
 }
 
 function addMCPServer() {
@@ -286,22 +245,22 @@ function kvToMap(rows: KVRow[]): Record<string, string> {
   return out
 }
 
-/** 空格分隔参数 → 数组 */
 function splitArgs(s: string): string[] {
   return s.split(/\s+/).filter(Boolean)
 }
 
-function toPayload(): Partial<AINexusConfig> {
-  return {
-    enabled: form.enabled,
-    providers: form.providers.map((p) => ({
-      name: p.name,
-      type: p.type,
-      base_url: p.base_url,
-      api_key: p.api_key ?? '',
-      models: p.models.map((m: AINexusModelSpec) => ({ ...m })),
-    })),
-    tools: {
+function modelLabel(m: AINexusModelInfo) {
+  return `${m.name}（${m.provider}）`
+}
+
+async function save() {
+  saving.value = true
+  try {
+    // 只改网关设置（启用/默认模型/工具/Agent/MCP），模型池（providers）保留
+    const cfg = await ainexusApi.config()
+    cfg.enabled = form.enabled
+    cfg.default_model = form.default_model || undefined
+    cfg.tools = {
       command: {
         enabled: form.tools.command.enabled,
         allowed_commands: form.tools.command.allowed_commands_str.split(',').map((s) => s.trim()).filter(Boolean),
@@ -310,9 +269,9 @@ function toPayload(): Partial<AINexusConfig> {
       },
       http_request: { enabled: form.tools.http_request.enabled, timeout: form.tools.http_request.timeout || '15s' },
       file_read: { enabled: form.tools.file_read.enabled, max_size: form.tools.file_read.max_size },
-    },
-    agent: { ...form.agent },
-    mcp_servers: form.mcp_servers.map((m) => ({
+    }
+    cfg.agent = { ...form.agent }
+    cfg.mcp_servers = form.mcp_servers.map((m) => ({
       name: m.name,
       transport: m.transport,
       url: m.transport === 'stdio' ? '' : m.url,
@@ -320,53 +279,15 @@ function toPayload(): Partial<AINexusConfig> {
       args: splitArgs(m.args_str),
       headers: kvToMap(m.headers_rows),
       env: kvToMap(m.env_rows),
-    })),
-  }
-}
-
-async function save() {
-  saving.value = true
-  try {
-    const cfg = await ainexusApi.updateConfig(toPayload())
-    active.value = cfg.active
+    }))
+    const resp = await ainexusApi.updateConfig(cfg)
+    active.value = resp.active
     ElMessage.success('已保存并热重载，无需重启')
     await load()
   } catch {
     // 错误已由 http.ts 提示
   } finally {
     saving.value = false
-  }
-}
-
-async function testProvider(i: number) {
-  const p = form.providers[i]
-  const model = p.models[0]?.name
-  if (!p.base_url || !model) {
-    ElMessage.warning('请先填写 Base URL 与至少一个模型名')
-    return
-  }
-  if (!p.api_key && !p.api_key_set) {
-    ElMessage.warning('请填写 API Key')
-    return
-  }
-  testing.value = i
-  try {
-    const resp = await ainexusApi.testConfig({
-      name: p.name,
-      type: p.type,
-      base_url: p.base_url,
-      api_key: p.api_key || undefined,
-      model,
-    })
-    if (resp.ok) {
-      ElMessage.success(`连接成功（${resp.latency_ms}ms，模型 ${resp.model}）`)
-    } else {
-      ElMessage.error(`连接失败：${resp.error ?? '未知错误'}`)
-    }
-  } catch {
-    // 错误已由 http.ts 提示
-  } finally {
-    testing.value = -1
   }
 }
 
@@ -380,6 +301,9 @@ onMounted(load)
   gap: 10px;
   margin-bottom: 4px;
 }
+.default-model-form {
+  max-width: 480px;
+}
 .provider-box {
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
@@ -392,27 +316,8 @@ onMounted(load)
   justify-content: space-between;
   margin-bottom: 6px;
 }
-.provider-title {
-  font-weight: 600;
-}
 .provider-form {
   max-width: 720px;
-}
-.models-wrap {
-  width: 100%;
-}
-.model-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
-}
-.model-name {
-  width: 220px;
-}
-.model-display {
-  width: 160px;
 }
 .mb {
   margin-bottom: 12px;
@@ -434,11 +339,17 @@ onMounted(load)
   flex-direction: column;
   gap: 8px;
 }
-.agent-grid {
-  margin-bottom: 12px;
-}
 .agent-form {
   max-width: 480px;
+}
+.auto-mcp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+.auto-mcp-name {
+  font-weight: 600;
 }
 .kv-wrap {
   width: 100%;

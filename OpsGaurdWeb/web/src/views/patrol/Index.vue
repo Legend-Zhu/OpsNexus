@@ -55,6 +55,12 @@
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />
         </el-form-item>
+        <el-form-item label="报告模型">
+          <el-select v-model="form.model" clearable filterable placeholder="默认（AI 网关首个可用模型）" style="width: 100%">
+            <el-option v-for="m in models" :key="m.name" :label="modelLabel(m)" :value="m.name" />
+          </el-select>
+          <span class="muted ml">来自「系统设置 → 模型配置」的模型池</span>
+        </el-form-item>
         <el-form-item label="流程 YAML" prop="yaml">
           <el-input v-model="form.yaml" type="textarea" :rows="14" class="mono"
             placeholder="name: nightly
@@ -68,8 +74,7 @@ checks:
     cluster: dev
     service: api
     min_replicas: 2
-report:
-  model: deepseek-chat" />
+# report.model 由上方「报告模型」下拉自动写入（也可手写覆盖）" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -134,18 +139,22 @@ report:
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import { patrolApi } from '@/api'
-import type { Patrol, PatrolReport, PatrolRun } from '@/types'
+import { ainexusApi, patrolApi } from '@/api'
+import type { AINexusModelInfo, Patrol, PatrolReport, PatrolRun } from '@/types'
 
 const loading = ref(false)
 const patrols = ref<Patrol[]>([])
 const saving = ref(false)
 const runningId = ref('')
 
+// 报告模型：统一取自 AI 排查网关配置（/v1/ainexus/models）；网关未启用时为空
+// 数组，巡检降级为无 AI 报告，不影响检查。
+const models = ref<AINexusModelInfo[]>([])
+
 const formVisible = ref(false)
 const editing = ref(false)
 const formRef = ref<FormInstance>()
-const form = reactive({ id: '', name: '', description: '', cron: '', enabled: true, yaml: '' })
+const form = reactive({ id: '', name: '', description: '', cron: '', enabled: true, yaml: '', model: '' })
 
 const rules: FormRules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
@@ -181,13 +190,21 @@ async function fetchPatrols() {
 
 function openCreate() {
   editing.value = false
-  Object.assign(form, { id: '', name: '', description: '', cron: '0 2 * * *', enabled: true, yaml: '' })
+  Object.assign(form, { id: '', name: '', description: '', cron: '0 2 * * *', enabled: true, yaml: '', model: '' })
   formVisible.value = true
 }
 
 function openEdit(row: Patrol) {
   editing.value = true
-  Object.assign(form, { id: row.id, name: row.name, description: row.description ?? '', cron: row.cron, enabled: row.enabled, yaml: row.yaml })
+  Object.assign(form, {
+    id: row.id,
+    name: row.name,
+    description: row.description ?? '',
+    cron: row.cron,
+    enabled: row.enabled,
+    yaml: row.yaml,
+    model: readYamlReportModel(row.yaml),
+  })
   formVisible.value = true
 }
 
@@ -195,11 +212,12 @@ async function save() {
   await formRef.value?.validate()
   saving.value = true
   try {
+    const body = { ...form, yaml: setYamlReportModel(form.yaml, form.model) }
     if (editing.value) {
-      await patrolApi.update(form.id, { ...form })
+      await patrolApi.update(form.id, body)
       ElMessage.success('已更新')
     } else {
-      await patrolApi.create({ ...form })
+      await patrolApi.create(body)
       ElMessage.success('已创建')
     }
     formVisible.value = false
@@ -209,6 +227,63 @@ async function save() {
   } finally {
     saving.value = false
   }
+}
+
+// --- YAML report.model 同步（下拉与 YAML 双向，不引入 yaml 库，逐行处理） ---
+
+// readYamlReportModel 读取 report: 块下的 model 值（未配置返回空串）。
+function readYamlReportModel(yaml: string): string {
+  let inReport = false
+  for (const line of yaml.split('\n')) {
+    const trimmed = line.trim()
+    if (/^report\s*:/.test(trimmed)) {
+      inReport = true
+      continue
+    }
+    if (inReport && !/^\s+/.test(line)) break // 离开 report 块
+    if (inReport) {
+      const m = trimmed.match(/^model\s*:\s*(\S+)\s*$/)
+      if (m) return m[1]
+    }
+  }
+  return ''
+}
+
+// setYamlReportModel 把 model 写回 YAML 的 report 块：空 model = 移除原
+// model 行；无 report 块则追加；已有 report 块则在块首插入。
+function setYamlReportModel(yaml: string, model: string): string {
+  const lines = yaml.split('\n')
+  const out: string[] = []
+  let inReport = false
+  let reportIdx = -1 // report: 行在 out 中的位置
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const isReportKey = /^report\s*:/.test(trimmed)
+    if (isReportKey) {
+      inReport = true
+      reportIdx = out.length
+    } else if (inReport && !/^\s+/.test(line)) {
+      inReport = false
+    }
+    // report 块内的 model 行：移除（下方按需重插）
+    if (inReport && !isReportKey && /^model\s*:/.test(trimmed)) {
+      continue
+    }
+    out.push(line)
+  }
+  if (model) {
+    const modelLine = `  model: ${model}`
+    if (reportIdx >= 0) {
+      out.splice(reportIdx + 1, 0, modelLine)
+    } else {
+      out.push('report:', modelLine)
+    }
+  }
+  return out.join('\n')
+}
+
+function modelLabel(m: AINexusModelInfo) {
+  return `${m.name}（${m.provider}）`
 }
 
 async function runNow(row: Patrol) {
@@ -255,7 +330,20 @@ async function viewRun(run: PatrolRun) {
   }
 }
 
-onMounted(fetchPatrols)
+onMounted(async () => {
+  await fetchPatrols()
+  // 模型统一取自「系统设置 → AI 排查网关」的配置（GET /v1/ainexus/config，
+  // 网关未启用也正常返回 200；此时模型列表为空，巡检降级为无 AI 报告）。
+  // 不用 /v1/ainexus/models——网关未启用时它返回 503，会被全局拦截器弹错。
+  try {
+    const cfg = await ainexusApi.config()
+    models.value = (cfg.providers ?? []).flatMap((p) =>
+      (p.models ?? []).map((m) => ({ name: m.name, provider: p.name, type: p.type })),
+    )
+  } catch {
+    models.value = []
+  }
+})
 </script>
 
 <style scoped>
@@ -263,6 +351,13 @@ onMounted(fetchPatrols)
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+.ml {
+  margin-left: 8px;
+}
+.muted {
+  color: var(--el-text-color-placeholder);
+  font-size: 12px;
 }
 .header-right {
   display: flex;
