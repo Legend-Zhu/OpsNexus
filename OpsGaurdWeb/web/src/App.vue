@@ -3,5 +3,5 @@
 </template>
 
 <script setup lang="ts">
-// 根组件：路由入口。业务骨架期不承载全局逻辑。
+// 根组件：路由入口 + 全局主题（暗色）。
 </script>

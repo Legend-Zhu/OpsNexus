@@ -1,19 +1,31 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import MainLayout from '@/layout/MainLayout.vue'
+import { getToken } from '@/api/http'
 
 /**
- * 路由骨架：
- *  - /dashboard      仪表盘（多集群总览）
- *  - /clusters       集群管理（类 Rancher：集群列表/详情/工作负载/事件）
- *  - /monitor        集群监控（节点/容器资源，经 Worker /local/stats）
- *  - /alerts         告警中心（Worker webhook 汇聚）
- *  - /patrol         智能巡检（YAML 流程 + 内置调度 + AI 报告）
- *  - /troubleshoot   异常排查（AiNexus 集成）
- *  - /notify         通知中心（渠道/策略/记录）
- *  - /system         系统设置（告警规则/用户/SSO）
- * 后续业务迭代时按模块拆 views 子路由。
+ * 路由：层级化 IA（项目 → 集群 → 节点/容器/进程）
+ *  - /dashboard      总览（在线集群 / 未处理告警 / 巡检异常 / 项目数）
+ *  - /projects       项目（管理层级第一层）
+ *  - /clusters       集群列表
+ *  - /clusters/:name 集群详情（节点 / 容器与服务 / 中间件 / 监控 / 事件）
+ *  - /alerts /patrol /troubleshoot /notify /system
+ *  - /login          登录（本地账号 + SSO）
+ *  - /sso/callback   SSO 回调落地页（读 #token= 后跳首页）
+ * 守卫：无 token 一律重定向 /login；已登录访问 /login 跳回 /dashboard。
  */
 const routes: RouteRecordRaw[] = [
+  {
+    path: '/login',
+    name: 'login',
+    component: () => import('@/views/login/Index.vue'),
+    meta: { title: '登录' },
+  },
+  {
+    path: '/sso/callback',
+    name: 'sso-callback',
+    component: () => import('@/views/sso/Callback.vue'),
+    meta: { title: 'SSO 回调' },
+  },
   {
     path: '/',
     component: MainLayout,
@@ -23,25 +35,25 @@ const routes: RouteRecordRaw[] = [
         path: 'dashboard',
         name: 'dashboard',
         component: () => import('@/views/dashboard/Index.vue'),
-        meta: { title: '仪表盘' },
+        meta: { title: '总览' },
+      },
+      {
+        path: 'projects',
+        name: 'projects',
+        component: () => import('@/views/projects/Index.vue'),
+        meta: { title: '项目' },
       },
       {
         path: 'clusters',
         name: 'clusters',
         component: () => import('@/views/clusters/Index.vue'),
-        meta: { title: '集群管理' },
+        meta: { title: '集群' },
       },
       {
-        path: 'workloads',
-        name: 'workloads',
-        component: () => import('@/views/workloads/Index.vue'),
-        meta: { title: '工作负载' },
-      },
-      {
-        path: 'monitor',
-        name: 'monitor',
-        component: () => import('@/views/monitor/Index.vue'),
-        meta: { title: '集群监控' },
+        path: 'clusters/:name',
+        name: 'cluster-detail',
+        component: () => import('@/views/clusters/Detail.vue'),
+        meta: { title: '集群详情' },
       },
       {
         path: 'alerts',
@@ -73,6 +85,9 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/system/Index.vue'),
         meta: { title: '系统设置' },
       },
+      // 工作负载 / 监控已收编进集群详情（/clusters/:name）
+      { path: 'workloads', redirect: '/clusters' },
+      { path: 'monitor', redirect: '/clusters' },
     ],
   },
   {
@@ -85,6 +100,25 @@ const routes: RouteRecordRaw[] = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+})
+
+// 公开路径（无需登录）
+const PUBLIC_PATHS = ['/login', '/sso/callback']
+
+router.beforeEach((to) => {
+  const authed = Boolean(getToken())
+  if (authed && to.path === '/login') {
+    return { path: '/dashboard' }
+  }
+  if (!authed && !PUBLIC_PATHS.some((p) => to.path.startsWith(p))) {
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
+  return true
+})
+
+router.afterEach((to) => {
+  const base = 'OpsGaurd'
+  document.title = to.meta.title ? `${to.meta.title as string} · ${base}` : base
 })
 
 export default router

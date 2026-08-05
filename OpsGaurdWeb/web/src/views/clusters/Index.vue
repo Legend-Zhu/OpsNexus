@@ -1,36 +1,40 @@
 <template>
-  <el-card shadow="never">
-    <template #header>
-      <div class="card-header">
-        <span>集群管理（类 Rancher）</span>
-        <el-button type="primary" :icon="Plus" :loading="adding" @click="openDialog">接入集群</el-button>
+  <div class="page">
+    <div class="page-head">
+      <div>
+        <h2 class="page-title">集群</h2>
+        <p class="page-sub">纳管的 Docker Swarm 集群 · 每个集群经其 Manager Worker 统一编排、监控与对外提供数据</p>
       </div>
-    </template>
+      <el-button type="primary" :icon="Plus" :loading="adding" @click="openDialog">接入集群</el-button>
+    </div>
 
-    <!-- 集群列表 -->
     <el-table v-loading="loading" :data="clusters" empty-text="暂无集群，点击右上角「接入集群」">
-      <el-table-column label="名称" prop="name" min-width="140">
+      <el-table-column label="名称" min-width="150">
         <template #default="{ row }">
-          <span class="cluster-name">{{ row.name }}</span>
+          <el-link type="primary" @click="$router.push(`/clusters/${row.name}`)">
+            <span class="cluster-name">{{ row.name }}</span>
+          </el-link>
+          <span v-if="row.desc" class="cluster-desc">{{ row.desc }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="120">
+      <el-table-column label="项目" width="130">
         <template #default="{ row }">
-          <el-tag :type="statusTag(row.status)" size="small">{{ statusText(row.status) }}</el-tag>
+          <el-tag v-if="projectName(row)" size="small" effect="plain">{{ projectName(row) }}</el-tag>
+          <span v-else class="muted">—</span>
         </template>
       </el-table-column>
-      <el-table-column label="Worker 端点" prop="worker_url" min-width="200" show-overflow-tooltip />
-      <el-table-column label="MCP 端点" prop="mcp_url" min-width="200" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.mcp_url || '—' }}</template>
+      <el-table-column label="状态" width="100">
+        <template #default="{ row }">
+          <el-tag :type="statusTag(row.status)" size="small" effect="dark">{{ statusText(row.status) }}</el-tag>
+        </template>
       </el-table-column>
-      <el-table-column label="描述" prop="desc" min-width="120" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.desc || '—' }}</template>
-      </el-table-column>
+      <el-table-column label="Manager 端点" prop="worker_url" min-width="200" show-overflow-tooltip />
       <el-table-column label="最近探测" width="170">
         <template #default="{ row }">{{ formatTime(row.last_seen) }}</template>
       </el-table-column>
       <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
+          <el-button link type="primary" @click="$router.push(`/clusters/${row.name}`)">详情</el-button>
           <el-button link type="danger" :disabled="row.status !== 'offline'" @click="removeCluster(row)">
             移除
           </el-button>
@@ -39,16 +43,19 @@
     </el-table>
 
     <!-- 接入对话框 -->
-    <el-dialog v-model="dialogVisible" title="接入集群" width="520px">
+    <el-dialog v-model="dialogVisible" title="接入集群" width="540px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-form-item label="集群名称" prop="name">
           <el-input v-model="form.name" placeholder="如 dev-cluster" />
         </el-form-item>
-        <el-form-item label="Worker 地址" prop="worker_url">
-          <el-input v-model="form.worker_url" placeholder="http://10.60.189.30:8080" />
+        <el-form-item label="所属项目">
+          <el-select v-model="form.project_id" clearable placeholder="可选" style="width: 100%">
+            <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
+          </el-select>
         </el-form-item>
-        <el-form-item label="MCP 地址">
-          <el-input v-model="form.mcp_url" placeholder="http://10.60.189.30:8080/mcp（可选）" />
+        <el-form-item label="Manager 地址" prop="worker_url">
+          <el-input v-model="form.worker_url" placeholder="请输入管理节点地址，如 http://&lt;管理节点IP&gt;:8080" />
+          <div class="form-tip">仅填 swarm 管理节点（manager）的 Worker 地址，节点地址无需填写；MCP 端点自动取 {地址}/mcp</div>
         </el-form-item>
         <el-form-item label="Token">
           <el-input v-model="form.token" type="password" show-password placeholder="Worker Bearer token（可选）" />
@@ -62,23 +69,24 @@
         <el-button type="primary" :loading="adding" @click="addCluster">接入</el-button>
       </template>
     </el-dialog>
-  </el-card>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import { clusterApi } from '@/api'
-import type { AddClusterPayload, ClusterSummary } from '@/types'
+import { clusterApi, projectApi } from '@/api'
+import type { AddClusterPayload, ClusterSummary, Project } from '@/types'
 
 const loading = ref(false)
 const adding = ref(false)
 const clusters = ref<ClusterSummary[]>([])
+const projects = ref<Project[]>([])
 
 const dialogVisible = ref(false)
 const formRef = ref<FormInstance>()
-const form = reactive<AddClusterPayload>({ name: '', worker_url: '', mcp_url: '', token: '', desc: '' })
+const form = reactive<AddClusterPayload>({ name: '', project_id: '', worker_url: '', token: '', desc: '' })
 
 const rules: FormRules = {
   name: [{ required: true, message: '请输入集群名称', trigger: 'blur' }],
@@ -95,6 +103,9 @@ function formatTime(ts?: string) {
   if (!ts) return '—'
   return new Date(ts).toLocaleString()
 }
+function projectName(row: ClusterSummary) {
+  return projects.value.find((p) => p.id === row.project_id)?.name
+}
 
 async function fetchClusters() {
   loading.value = true
@@ -103,6 +114,15 @@ async function fetchClusters() {
     clusters.value = resp.items ?? []
   } finally {
     loading.value = false
+  }
+}
+
+async function fetchProjects() {
+  try {
+    const resp = await projectApi.list()
+    projects.value = (resp.items ?? []).map((v) => v.project)
+  } catch {
+    projects.value = []
   }
 }
 
@@ -117,7 +137,7 @@ async function addCluster() {
     await clusterApi.add(form)
     ElMessage.success('集群接入成功')
     dialogVisible.value = false
-    Object.assign(form, { name: '', worker_url: '', mcp_url: '', token: '', desc: '' })
+    Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '' })
     await fetchClusters()
   } catch {
     // 错误提示已由 http.ts 统一处理（探测失败 502 等）
@@ -135,16 +155,43 @@ async function removeCluster(row: ClusterSummary) {
   await fetchClusters()
 }
 
-onMounted(fetchClusters)
+onMounted(async () => {
+  await Promise.all([fetchClusters(), fetchProjects()])
+})
 </script>
 
 <style scoped>
-.card-header {
+.page-head {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
+  margin-bottom: 16px;
+}
+.page-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.page-sub {
+  margin: 4px 0 0;
+  color: var(--og-text-dim);
+  font-size: 12px;
 }
 .cluster-name {
   font-weight: 600;
+}
+.cluster-desc {
+  margin-left: 8px;
+  color: var(--og-text-dim);
+  font-size: 12px;
+}
+.muted {
+  color: var(--og-text-dim);
+}
+.form-tip {
+  color: var(--og-text-dim);
+  font-size: 12px;
+  line-height: 1.6;
 }
 </style>

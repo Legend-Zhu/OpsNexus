@@ -11,24 +11,49 @@ export interface ApiResponse<T = unknown> {
   data?: T
 }
 
+/** token 存取键（登录页 / SSO 回调 / 请求拦截共用） */
+export const TOKEN_KEY = 'opsguard_token'
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY)
+}
+
+export function setToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token)
+}
+
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY)
+}
+
 const http: AxiosInstance = axios.create({
   baseURL: import.meta.env.VITE_API_BASE ?? '/api',
   timeout: 15000,
 })
 
-// 请求拦截：附加鉴权 token（骨架期预留，登录实现后接入）
+// 请求拦截：附加鉴权 token
 http.interceptors.request.use((config) => {
-  const token = localStorage.getItem('opsguard_token')
+  const token = getToken()
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config
 })
 
-// 响应拦截：统一错误提示
+// 响应拦截：401 统一登出（登录请求本身除外，避免登录失败被弹回登录页）；
+// 其余错误统一提示。
 http.interceptors.response.use(
   (resp) => resp,
   (error) => {
+    const status: number | undefined = error?.response?.status
+    const url: string = error?.config?.url ?? ''
+    if (status === 401 && !url.includes('/auth/login')) {
+      clearToken()
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+      return Promise.reject(error)
+    }
     ElMessage.error(error?.response?.data?.message ?? error.message ?? '请求失败')
     return Promise.reject(error)
   },

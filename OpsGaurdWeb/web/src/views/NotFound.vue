@@ -7,7 +7,7 @@
 </template>
 
 <script setup lang="ts">
-// 404 占位
+// 404 兜底
 </script>
 
 <style scoped>

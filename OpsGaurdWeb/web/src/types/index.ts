@@ -1,10 +1,11 @@
 /**
- * 管理端领域类型（骨架）：与后端路由/模型对应，业务迭代时扩充字段。
+ * 管理端领域类型：与后端路由/模型一一对应。
  */
 
 /** 集群摘要（列表项，与后端 store.Cluster.Public() 对应） */
 export interface ClusterSummary {
   name: string
+  project_id?: string
   worker_url: string
   mcp_url?: string
   desc?: string
@@ -20,10 +21,67 @@ export interface Cluster extends ClusterSummary {
 /** 接入集群请求体 */
 export interface AddClusterPayload {
   name: string
+  project_id?: string
   worker_url: string
+  /** 缺省由后端推导为 {worker_url}/mcp（MCP 端点与 Manager Worker 同址）；仅独立部署网关时显式覆盖 */
   mcp_url?: string
   token?: string
   desc?: string
+}
+
+/** 项目（管理层级第一层：项目 → 集群） */
+export interface Project {
+  id: string
+  name: string
+  desc?: string
+  created_at: string
+}
+
+/** 项目视图（含成员集群统计） */
+export interface ProjectView {
+  project: Project
+  cluster_count: number
+  clusters?: { name: string; status: string; last_seen?: string; worker_url?: string }[]
+}
+
+/** 集群节点（管理层级：集群 → 节点，对应 Worker /api/v1/nodes） */
+export interface ClusterNode {
+  id: string
+  hostname: string
+  role: 'manager' | 'worker'
+  state: string
+  availability: string
+  addr: string
+  leader: boolean
+  managerReachability?: string
+  reachable: boolean
+  cpuCores: number
+  memBytes: number
+  cpuPercent: number
+  memPercent: number
+  containerCount: number
+}
+
+/** 节点宿主机进程（对应 Worker /api/v1/local/processes） */
+export interface ProcessInfo {
+  pid: number
+  name: string
+  cmdline?: string
+  state: string
+  memKb: number
+  cpuPercent: number
+}
+
+/** SSO 状态（公开端点 /api/v1/auth/sso/status） */
+export interface SSOStatus {
+  local: boolean
+  sso: { enabled: boolean; issuer?: string; frontendUrl?: string }
+}
+
+/** 登录用户 */
+export interface Me {
+  username: string
+  role: string
 }
 
 /** 工作负载（swarm service 视图，与后端 workerproxy.Workload 对应） */

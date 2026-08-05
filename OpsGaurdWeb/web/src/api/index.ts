@@ -6,8 +6,10 @@ import type {
   AlertRule,
   AuditItem,
   Cluster,
+  ClusterNode,
   ClusterSummary,
   EventItem,
+  Me,
   NodeStats,
   NotifyChannel,
   NotifyPolicy,
@@ -16,21 +18,41 @@ import type {
   Patrol,
   PatrolReport,
   PatrolRun,
+  ProcessInfo,
+  Project,
+  ProjectView,
+  SSOStatus,
   User,
   Workload,
   WorkloadDetail,
 } from '@/types'
 
-/**
- * API 模块骨架：函数签名已按后端路由定义，业务实现待迭代。
- */
+// ---- 项目（管理层级第一层：项目 → 集群） ----
+export const projectApi = {
+  list: () => get<{ items: ProjectView[] }>('/v1/projects'),
+  get: (id: string) => get<ProjectView>(`/v1/projects/${id}`),
+  create: (body: { name: string; desc?: string }) => post<{ project: Project }>('/v1/projects', body),
+  update: (id: string, body: { name?: string; desc?: string }) =>
+    put<{ project: Project }>(`/v1/projects/${id}`, body),
+  remove: (id: string) => del<{ deleted: string }>(`/v1/projects/${id}`),
+}
 
-// ---- 集群管理（多集群，类 Rancher） ----
+// ---- 集群管理 ----
 export const clusterApi = {
   list: () => get<{ items: ClusterSummary[] }>('/v1/clusters'),
   get: (name: string) => get<Cluster>(`/v1/clusters/${name}`),
   add: (body: AddClusterPayload) => post<Cluster>('/v1/clusters', body),
   remove: (name: string) => del<{ removed: string }>(`/v1/clusters/${name}`),
+}
+
+// ---- 集群节点（管理层级：集群 → 节点 → 容器/进程） ----
+export const nodeApi = {
+  list: (cluster: string) => get<{ items: ClusterNode[] }>(`/v1/clusters/${cluster}/nodes`),
+  processes: (cluster: string, nodeId: string, params?: { top?: string; limit?: number }) =>
+    get<{ node: string; total: number; processes: ProcessInfo[] }>(
+      `/v1/clusters/${cluster}/nodes/${nodeId}/processes`,
+      { params },
+    ),
 }
 
 // ---- 工作负载（经 Worker） ----
@@ -104,10 +126,12 @@ export const alertRuleApi = {
   remove: (cluster: string, service: string) => del<{ deleted: string }>(`/v1/alertrules/${cluster}/${service}`),
 }
 
-// ---- 认证 / 用户（P6） ----
+// ---- 认证 / 用户（P6：本地登录 + SSO/OIDC） ----
 export const authApi = {
   login: (username: string, password: string) => post<{ token: string }>('/v1/auth/login', { username, password }),
-  me: () => get<{ username: string; role: string }>('/v1/auth/me'),
+  me: () => get<Me>('/v1/auth/me'),
+  ssoStatus: () => get<SSOStatus>('/v1/auth/sso/status'),
+  ssoLoginUrl: () => '/api/v1/auth/sso/login',
   users: () => get<{ items: User[] }>('/v1/users'),
   createUser: (body: { username: string; password: string; role?: string }) => post<User>('/v1/users', body),
 }
