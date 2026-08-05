@@ -216,7 +216,7 @@
     </el-tabs>
 
     <!-- 部署对话框 -->
-    <el-dialog v-model="deployVisible" title="部署服务" width="640px">
+    <el-dialog v-model="deployVisible" title="部署服务" width="680px">
       <el-form label-width="80px">
         <el-form-item label="集群">
           <el-tag>{{ clusterName }}</el-tag>
@@ -247,6 +247,34 @@ monitoring:
   portChecks:
     - { port: &quot;8080&quot; }"
           />
+        </el-form-item>
+        <el-form-item>
+          <el-collapse class="cfg-doc">
+            <el-collapse-item title="配置字段说明（service / monitoring）" name="doc">
+              <h5>service（必填：name、image）</h5>
+              <ul>
+                <li><code>mode</code>：<code>replicated</code>（默认，配 <code>replicas</code>）/ <code>global</code>（每节点一个，勿配 replicas）</li>
+                <li><code>env</code> / <code>command</code> / <code>args</code> / <code>workdir</code> / <code>user</code>：容器运行参数</li>
+                <li><code>ports</code>：<code>{ target, published, protocol: tcp|udp, mode: ingress|host }</code>；ingress 模式集群任意节点可访问</li>
+                <li><code>mounts</code>：<code>{ type: volume|bind|tmpfs, source, target, readonly }</code></li>
+                <li><code>resources</code>：<code>limits</code> / <code>reservations</code>，如 <code>{ cpu: "1.0", memory: "512Mi" }</code></li>
+                <li><code>registryAuth</code>：私有仓库凭据，<code>secretRef</code>（swarm secret 名）或 <code>inline</code>（docker config.json 的 base64）</li>
+                <li><code>healthcheck</code>：<code>{ test: ["CMD-SHELL","curl -f ..."], interval, timeout, retries, startPeriod }</code>，部署收敛会等待健康</li>
+                <li><code>placement</code>：<code>{ constraints: ["node.role==worker", ...], preferences: [{spread}] }</code></li>
+                <li><code>update</code> / <code>rollback</code>：<code>{ parallelism, delay, failureAction: pause|continue|rollback, monitor, maxFailureRatio }</code></li>
+                <li><code>restart</code>：<code>{ condition: any|on-failure|none, delay, maxAttempts, window }</code></li>
+                <li><code>networks</code> / <code>secrets</code> / <code>configs</code> / <code>labels</code> / <code>logDriver</code> / <code>imagePullPolicy</code>(always|missing|never)</li>
+              </ul>
+              <h5>monitoring（可选，enabled: true 生效；异常进告警中心并按级别策略通知）</h5>
+              <ul>
+                <li><code>portChecks</code>：<code>{ port, protocol, interval, timeout, retries }</code>——TCP 探测已发布端口，连续失败发 port_down</li>
+                <li><code>httpChecks</code>：<code>{ url, method, headers, expectedStatus, expectedBody(正则), interval, timeout }</code>——发 http_unhealthy；url 用 localhost 会自动重写为任务节点 IP</li>
+                <li><code>logChecks</code>：<code>{ pattern(Go 正则), level, ignore: [...], action: alert|restart }</code>——日志匹配告警或自动重启</li>
+                <li><code>resourceThresholds</code>：<code>{ metric: cpu|memory, threshold: 百分比, action: alert|restart }</code></li>
+              </ul>
+              <div class="muted">完整契约见仓库 docs/Worker-设计方案.md §4.2；部署为异步操作，提交后自动轮询收敛结果。</div>
+            </el-collapse-item>
+          </el-collapse>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -775,5 +803,28 @@ onBeforeUnmount(() => logAbort?.abort())
 .log-ts {
   color: #8b949e;
   margin-right: 8px;
+}
+.cfg-doc {
+  width: 100%;
+}
+.cfg-doc h5 {
+  margin: 8px 0 4px;
+  font-size: 13px;
+}
+.cfg-doc ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.cfg-doc li {
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--el-text-color-regular);
+}
+.cfg-doc code {
+  font-family: var(--og-mono);
+  font-size: 11px;
+  padding: 1px 4px;
+  background: var(--el-fill-color-light);
+  border-radius: 3px;
 }
 </style>
