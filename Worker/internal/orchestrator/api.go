@@ -51,6 +51,8 @@ func (a *API) Routes() map[string]http.HandlerFunc {
 		"GET /api/v1/events":                  a.listEvents,
 		"GET /api/v1/self":                    a.self,
 		"GET /api/v1/audit":                   a.listAudit,
+		"GET /api/v1/nodes":                   a.nodes,
+		"GET /api/v1/nodes/{id}/processes":    a.nodeProcesses,
 	}
 }
 

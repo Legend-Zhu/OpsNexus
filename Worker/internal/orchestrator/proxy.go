@@ -70,6 +70,46 @@ type HostResult struct {
 	ElapsedMS int64  `json:"elapsedMs"`
 }
 
+// ProcessInfo mirrors nodeagent.processInfo (GET /api/v1/local/processes).
+type ProcessInfo struct {
+	PID        int     `json:"pid"`
+	Name       string  `json:"name"`
+	Cmdline    string  `json:"cmdline,omitempty"`
+	State      string  `json:"state"`
+	MemKB      uint64  `json:"memKb"`
+	CPUPercent float64 `json:"cpuPercent"`
+}
+
+// ProcessesResp is the response of GET /api/v1/local/processes.
+type ProcessesResp struct {
+	Node      string        `json:"node"`
+	Total     int           `json:"total"`
+	Processes []ProcessInfo `json:"processes"`
+}
+
+// Processes fetches the node's host process list (top=cpu|mem, limit=N).
+func (n *NodeClient) Processes(ctx context.Context, top, limit string) (ProcessesResp, error) {
+	path := "/api/v1/local/processes"
+	if top != "" || limit != "" {
+		q := "?"
+		if top != "" {
+			q += "top=" + top
+		}
+		if limit != "" {
+			if q != "?" {
+				q += "&"
+			}
+			q += "limit=" + limit
+		}
+		path += q
+	}
+	var out ProcessesResp
+	if err := n.getJSON(ctx, path, &out); err != nil {
+		return ProcessesResp{}, err
+	}
+	return out, nil
+}
+
 // Stats fetches the node's local container stats.
 func (n *NodeClient) Stats(ctx context.Context) (NodeStats, error) {
 	var out NodeStats
