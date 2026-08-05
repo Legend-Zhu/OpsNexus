@@ -32,7 +32,8 @@ type investigateRequest struct {
 // 深度排查：告警 → 拉上下文（事件/日志/审计）→ 进程内调内嵌 AiNexus
 // （SSE 流式）。可选 use_mcp 连接该集群 Worker /mcp，让 Agent 用工具采集证据。
 func (h *Handlers) AINexusInvestigate(c *gin.Context) {
-	if h.AINexus == nil {
+	srv := h.gateway()
+	if srv == nil {
 		fail(c, http.StatusServiceUnavailable, "ainexus gateway is not enabled in config")
 		return
 	}
@@ -95,7 +96,7 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 	useMCP := req.UseMCP
 	if useMCP {
 		if url, tok, merr := h.clusters.MCPEndpoint(alert.Cluster); merr == nil && url != "" {
-			if aerr := h.AINexus.AddMCPCluster(alert.Cluster, url, tok); aerr != nil {
+			if aerr := srv.AddMCPCluster(alert.Cluster, url, tok); aerr != nil {
 				// 连接失败不阻断排查，仅降级为纯上下文分析
 				useMCP = false
 			}
@@ -107,7 +108,7 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 	// 5. 组装注入上下文后的请求体，进程内 SSE 直通
 	model := req.Model
 	if model == "" {
-		if models := h.AINexus.Models(); len(models) > 0 {
+		if models := srv.Models(); len(models) > 0 {
 			model = models[0]
 		}
 	}
@@ -123,7 +124,7 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 	}
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	c.Request.ContentLength = int64(len(body))
-	h.AINexus.OpenAIHandler().ChatCompletions(c)
+	srv.OpenAIHandler().ChatCompletions(c)
 }
 
 // BuildInvestigateMessages 组装深度排查 prompt（纯函数，可测）。

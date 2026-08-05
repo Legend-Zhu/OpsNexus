@@ -27,6 +27,7 @@ const (
 	BucketPatrol    = "patrol"
 	BucketPatrolRun = "patrolrun"
 	BucketReport    = "report"
+	BucketAINexus   = "ainexus" // AiNexus 网关运行时配置（页面保存的热重载配置）
 	BucketSeq       = "seq"
 )
 

@@ -7,16 +7,19 @@ server:
   ingest_token: ""           # Worker webhook 推送校验 token（配到 Worker agent-config.webhooks）
 
 # 认证（P6）：本地用户 + SSO/OIDC。配置了 token_secret 或 sso 即启用认证中间件
-#（健康检查 / webhook ingest / 登录 放行）；都不配 = 内网 bootstrap 不启用。
+#（健康检查 / webhook ingest / 登录 / SSO 跳转与回调 放行）；都不配 = 内网 bootstrap 不启用。
 auth:
   token_secret: ""           # 本地 token 签名密钥（生产经环境变量注入，如 $OPSGUARD_TOKEN_SECRET）
   token_ttl: "24h"
-  # sso:                      # 企业 SSO（OIDC，决策⑤）
+  # sso:                      # 企业 SSO（OIDC，授权码流程）
   #   oidc:
-  #     issuer: "https://sso.example.com"
+  #     issuer: "https://sso.example.com"          # OIDC discovery 地址（.well-known/openid-configuration）
   #     client_id: "opsguard"
   #     client_secret: ""
   #     redirect_url: "http://localhost:8090/api/v1/auth/callback"
+  #     frontend_url: "http://localhost:8090/#sso/callback"   # 回调成功后落地页（token 放 hash）
+  #     scopes: []                                    # 默认 profile email（openid 恒包含）
+  #     default_role: "viewer"                        # 新 SSO 用户默认角色（首个用户自动 admin）
 
 # 持久化：LevelDB 数据目录（嵌入式 KV，拷贝目录即备份）
 store:
@@ -24,6 +27,8 @@ store:
 
 # AiNexus 异常排查网关（内嵌进后端，非独立服务）
 # providers/tools/MCP 客户端/ReAct Agent 与管理端同进程，原生端点挂载 /ainexus/*
+# 注意：本块仅在首次启动时生效。在「系统设置 → AI 排查网关」页面保存过后，
+# 以页面保存的运行时配置为准（LevelDB 持久化，保存即热重载，无需重启）。
 ainexus:
   enabled: true              # false 则完全不加载网关（/ainexus/* 返回 503）
   providers:
@@ -56,7 +61,7 @@ ainexus:
   mcp_servers:
     # - name: "dev-cluster"
     #   transport: "streamable-http"
-    #   url: "http://10.60.189.30:8080/mcp"
+    #   url: "http://<管理节点IP>:8080/mcp"
     #   headers:
     #     Authorization: "Bearer <worker-token>"
 
@@ -65,7 +70,7 @@ ainexus:
 clusters:
   # dev-cluster:
   #   name: "dev-cluster"
-  #   worker_url: "http://10.60.189.30:8080"
-  #   mcp_url: "http://10.60.189.30:8080/mcp"
+  #   worker_url: "http://<管理节点IP>:8080"
+  #   mcp_url: "http://<管理节点IP>:8080/mcp"
   #   token: ""
   #   desc: "开发集群"

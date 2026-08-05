@@ -1,0 +1,248 @@
+// Package ainexusrt manages the embedded AiNexus gateway's runtime
+// configuration: the config last saved from the management UI (persisted as
+// YAML in LevelDB), hot-reload of the in-process gateway without restarting,
+// and an atomic view of the current server so handlers never hold a stale
+// pointer. Until the UI saves once, the ainexus block of config.yaml remains
+// the source of truth (file config, not persisted).
+package ainexusrt
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"sync"
+
+	"gopkg.in/yaml.v3"
+
+	ainexuscfg "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
+	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
+)
+
+// Service 运行时网关配置服务。
+type Service struct {
+	st       *store.Store
+	clusters *cluster.Service
+	logger   *log.Logger
+
+	mu  sync.RWMutex
+	cfg *ainexuscfg.Config    // 当前生效配置（含已保存的 api_key）
+	srv *ainexusserver.Server // 当前内嵌网关（nil = 未启用）
+}
+
+// New 创建运行时网关配置服务。fileCfg 来自 config.yaml 的 ainexus 块，
+// 仅在 LevelDB 尚无运行时配置（从未在页面保存过）时作为回退。
+func New(st *store.Store, clusters *cluster.Service, fileCfg *ainexuscfg.Config) *Service {
+	return &Service{
+		st:       st,
+		clusters: clusters,
+		logger:   log.New(os.Stderr, "[OpsGaurdWeb.AiNexusRT] ", log.LstdFlags|log.Lshortfile),
+		cfg:      cloneConfig(fileCfg),
+	}
+}
+
+// Init 加载运行时配置并构建网关：
+//   - LevelDB 已有页面保存过的配置 → 以其为准（覆盖文件配置）；
+//   - 否则回退 config.yaml 的 ainexus 块（不落库，文件保持为源）。
+//
+// enabled=true 时构建内嵌网关，失败返回错误（启动即退出）。
+func (s *Service) Init(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	raw, err := s.st.GetAINexusRuntime()
+	if err != nil {
+		return fmt.Errorf("read runtime ainexus config: %w", err)
+	}
+	if len(raw) > 0 {
+		var cfg ainexuscfg.Config
+		if err := yaml.Unmarshal(raw, &cfg); err != nil {
+			// 已保存的配置损坏 → 回退文件配置并提示（不阻塞启动）
+			s.logger.Printf("runtime config corrupted (%v), falling back to file config", err)
+		} else {
+			s.cfg = &cfg
+		}
+	}
+
+	next, err := build(ctx, s.cfg)
+	if err != nil {
+		return err
+	}
+	s.srv = next
+	if next != nil {
+		s.reconnectClustersLocked(ctx)
+	}
+	return nil
+}
+
+// Update 热重载网关配置（保存并立即生效，无需重启）：
+//   - 空白 api_key 沿用当前已保存的值（前端密码框留空 = 不修改）；
+//   - 校验失败 → 返回错误，旧网关继续服务；
+//   - 构建新网关成功 → 持久化 YAML → 关旧网关 → 原子换指针。
+//
+// enabled=false 时关闭网关（/ainexus/* 返回 503），配置照常保存。
+func (s *Service) Update(ctx context.Context, cfg *ainexuscfg.Config) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if cfg == nil {
+		return fmt.Errorf("ainexus config is required")
+	}
+	carryKeys(s.cfg, cfg) // 空白 api_key 沿用旧值（禁用/启用切换也不丢失）
+	if cfg.Enabled {
+		if len(cfg.Providers) == 0 {
+			return fmt.Errorf("at least one provider must be configured")
+		}
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("ainexus config invalid: %w", err)
+		}
+	}
+
+	next, err := build(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
+	yamlText, err := yaml.Marshal(cfg)
+	if err != nil {
+		closeServer(next)
+		return fmt.Errorf("marshal runtime config: %w", err)
+	}
+	if err := s.st.PutAINexusRuntime(string(yamlText)); err != nil {
+		closeServer(next)
+		return fmt.Errorf("persist runtime config: %w", err)
+	}
+
+	closeServer(s.srv) // 旧网关（含 MCP 连接）关闭
+	s.cfg = cfg
+	s.srv = next
+	if next != nil {
+		s.reconnectClustersLocked(ctx)
+	}
+	s.logger.Printf("gateway config reloaded (enabled=%v, providers=%d)", cfg.Enabled, len(cfg.Providers))
+	return nil
+}
+
+// Server 返回当前内嵌网关（nil = 未启用）。指针在热重载后失效，调用方须在
+// 单次请求内完成使用，不要跨请求持有。
+func (s *Service) Server() *ainexusserver.Server {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.srv
+}
+
+// Config 返回当前生效配置的深拷贝（供 API 层脱敏视图/测试，避免与内部共享）。
+func (s *Service) Config() *ainexuscfg.Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneConfig(s.cfg)
+}
+
+// build 按配置构建内嵌网关；enabled=false 返回 (nil, nil)。校验失败返回
+// 错误（新网关不会生效，旧网关不受影响）。
+func build(ctx context.Context, cfg *ainexuscfg.Config) (*ainexusserver.Server, error) {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("ainexus config invalid: %w", err)
+	}
+	srv := ainexusserver.New(cfg)
+	if err := srv.Initialize(ctx); err != nil {
+		return nil, fmt.Errorf("ainexus initialize: %w", err)
+	}
+	return srv, nil
+}
+
+// closeServer 关闭网关（幂等，nil 直接返回）。
+func closeServer(srv *ainexusserver.Server) {
+	if srv == nil {
+		return
+	}
+	_ = srv.Close()
+}
+
+// reconnectClustersLocked 把各集群 Worker 的 MCP 重新注册进网关（热重载后
+// 集群 MCP 连接随旧网关一起关闭，需重连）。失败仅记日志，不阻断加载。
+func (s *Service) reconnectClustersLocked(ctx context.Context) {
+	if s.srv == nil {
+		return
+	}
+	clusters, err := s.clusters.ListStatic()
+	if err != nil {
+		s.logger.Printf("list clusters for MCP reconnect: %v", err)
+		return
+	}
+	for _, c := range clusters {
+		if c.MCPURL == "" {
+			continue
+		}
+		if err := s.srv.AddMCPCluster(c.Name, c.MCPURL, c.Token); err != nil {
+			s.logger.Printf("reconnect MCP for cluster %q: %v", c.Name, err)
+		}
+	}
+}
+
+// carryKeys 把旧配置中非空的 api_key 填入新配置（前端密码框留空 = 沿用旧
+// 值）。按 provider 名匹配；新 provider 无旧值则保持空（由 Validate 拦下）。
+func carryKeys(old, next *ainexuscfg.Config) {
+	byName := make(map[string]string, len(old.Providers))
+	for _, p := range old.Providers {
+		byName[p.Name] = p.APIKey
+	}
+	for i := range next.Providers {
+		if next.Providers[i].APIKey == "" {
+			next.Providers[i].APIKey = byName[next.Providers[i].Name]
+		}
+	}
+}
+
+// cloneConfig 深拷贝网关配置（map/slice 全部复制，防止调用方与内部共享）。
+func cloneConfig(c *ainexuscfg.Config) *ainexuscfg.Config {
+	if c == nil {
+		return &ainexuscfg.Config{}
+	}
+	out := *c
+	out.Providers = make([]ainexuscfg.ProviderConfig, len(c.Providers))
+	for i, p := range c.Providers {
+		cp := p
+		cp.Models = append([]ainexuscfg.ModelConfig(nil), p.Models...)
+		cp.Extra = cloneAnyMap(p.Extra)
+		out.Providers[i] = cp
+	}
+	out.MCPServers = make([]ainexuscfg.MCPServerConfig, len(c.MCPServers))
+	for i, m := range c.MCPServers {
+		cm := m
+		cm.Args = append([]string(nil), m.Args...)
+		cm.Env = cloneStrMap(m.Env)
+		cm.Headers = cloneStrMap(m.Headers)
+		out.MCPServers[i] = cm
+	}
+	return &out
+}
+
+// cloneStrMap 复制 map[string]string。
+func cloneStrMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// cloneAnyMap 复制 map[string]any（值按原样共享，网关配置中不深含可变结构）。
+func cloneAnyMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}

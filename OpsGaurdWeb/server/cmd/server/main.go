@@ -12,9 +12,9 @@ import (
 	"os"
 	"time"
 
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexusrt"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/alertrule"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/api"
-	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/auth"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/config"
@@ -62,20 +62,18 @@ func main() {
 	// 告警 ingest 服务（P3：Worker webhook → 事件落库 + 告警聚合）
 	h.SetIngestService(ingest.New(st), cfg.Server.IngestToken)
 
-	// 内嵌 AiNexus 网关（与管理端同进程，无独立服务/端口）
-	var ainx *ainexusserver.Server
-	if cfg.AINexus.Enabled {
-		ainx = ainexusserver.New(&cfg.AINexus)
-		if err := ainx.Initialize(context.Background()); err != nil {
-			log.Error("ainexus embed init failed", "err", err)
-			os.Exit(1)
-		}
-		h.AINexus = ainx
-		defer ainx.Close()
+	// 内嵌 AiNexus 网关（与管理端同进程，无独立服务/端口）。配置可在
+	// 页面「系统设置 → AI 排查网关」在线修改并热重载（无需重启）；首次保存
+	// 后以 LevelDB 中的运行时配置为准，之前回退 config.yaml 的 ainexus 块。
+	ainexusRT := ainexusrt.New(st, clusterSvc, &cfg.AINexus)
+	if err := ainexusRT.Init(context.Background()); err != nil {
+		log.Error("ainexus embed init failed", "err", err)
+		os.Exit(1)
 	}
+	h.SetAINexusRT(ainexusRT)
 
 	// 智能巡检服务（P5：YAML 流程 + 单实例 cron 调度 + AI 报告）
-	patrolSvc := patrol.New(st, clusterSvc, ainx)
+	patrolSvc := patrol.New(st, clusterSvc, ainexusRT)
 	h.SetPatrolService(patrolSvc)
 	patrolSvc.Start()
 	defer patrolSvc.Stop()
@@ -101,7 +99,7 @@ func main() {
 				log.Info("bootstrapped default admin (admin)")
 			}
 		}
-		public := []string{"/healthz", "/api/v1/ingest/events", "/api/v1/auth/login", "/ainexus"}
+		public := []string{"/healthz", "/api/v1/ingest/events", "/api/v1/auth/login", "/api/v1/auth/sso", "/api/v1/auth/callback", "/ainexus"}
 		h.SetAuthMiddleware(authSvc.Middleware(public))
 		log.Info("auth enabled", "sso", cfg.Auth.SSO != nil)
 	}
@@ -109,7 +107,7 @@ func main() {
 	log.Info("server starting",
 		"addr", cfg.Server.Addr,
 		"store", cfg.Store.Path,
-		"ainexus_embedded", cfg.AINexus.Enabled,
+		"ainexus_embedded", ainexusRT.Server() != nil,
 		"clusters", len(cfg.Clusters),
 	)
 
@@ -143,6 +141,9 @@ func oidcFromConfig(sso *config.SSOConfig) *auth.OIDCConfig {
 		ClientID:     sso.OIDC.ClientID,
 		ClientSecret: sso.OIDC.ClientSecret,
 		RedirectURL:  sso.OIDC.RedirectURL,
+		FrontendURL:  sso.OIDC.FrontendURL,
+		Scopes:       sso.OIDC.Scopes,
+		DefaultRole:  sso.OIDC.DefaultRole,
 	}
 }
 

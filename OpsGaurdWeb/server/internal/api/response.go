@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexusrt"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/alertrule"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/auth"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
@@ -33,7 +33,7 @@ func fail(c *gin.Context, status int, message string) {
 
 // Handlers groups the HTTP handlers. Cluster registry + Worker proxying are
 // wired in P1/P2; alert ingest (P3), patrol (P5), notify/alertrule/auth (P6)
-// and the embedded AiNexus gateway (nil when disabled) follow.
+// and the embedded AiNexus gateway runtime (P7, hot-reload config) follow.
 type Handlers struct {
 	clusters    *cluster.Service
 	ingestSvc   *ingest.Service
@@ -42,7 +42,7 @@ type Handlers struct {
 	notifySvc   *notify.Service
 	ruleSvc     *alertrule.Service
 	authSvc     *auth.Service
-	AINexus     *ainexusserver.Server // 内嵌 AiNexus 网关（config 未启用时为 nil）
+	AINexusRT   *ainexusrt.Service // 内嵌 AiNexus 网关运行时（热重载配置；Server() 为空 = 未启用）
 	// AuthMiddleware 认证中间件（P6；nil = 未启用认证）。
 	AuthMiddleware gin.HandlerFunc
 }
@@ -75,6 +75,9 @@ func (h *Handlers) SetAuthService(s *auth.Service) { h.authSvc = s }
 
 // SetAuthMiddleware wires the auth middleware (P6; nil disables auth).
 func (h *Handlers) SetAuthMiddleware(m gin.HandlerFunc) { h.AuthMiddleware = m }
+
+// SetAINexusRT wires the AiNexus gateway runtime service (P7; hot-reload).
+func (h *Handlers) SetAINexusRT(s *ainexusrt.Service) { h.AINexusRT = s }
 
 // Health godoc: GET /healthz
 func (h *Handlers) Health(c *gin.Context) {

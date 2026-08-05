@@ -2,7 +2,8 @@
 //
 // Route groups:
 //
-//	/api/v1/clusters        多集群管理（类 Rancher）
+//	/api/v1/projects        项目（管理层级第一层：项目 → 集群）
+//	/api/v1/clusters        多集群管理
 //	/api/v1/clusters/:name/workloads   工作负载（经 Worker 编排）
 //	/api/v1/clusters/:name/events      监控事件
 //	/api/v1/clusters/:name/audit       审计
@@ -50,14 +51,27 @@ func New(h *api.Handlers) *gin.Engine {
 	// API v1
 	v1 := r.Group("/api/v1")
 	{
-		// 登录（放行）
+		// 登录 / SSO（放行，注册在认证中间件之前）
 		v1.POST("/auth/login", h.Login)
+		v1.GET("/auth/sso/login", h.LoginSSO)
+		v1.GET("/auth/sso/status", h.SSOStatus)
+		v1.GET("/auth/callback", h.SSOCallback)
 
 		if authMW != nil {
 			v1.Use(authMW)
 		}
 
-		// 集群管理（多集群，类 Rancher）
+		// 项目（管理层级第一层：项目 → 集群）
+		projects := v1.Group("/projects")
+		{
+			projects.GET("", h.ListProjects)
+			projects.POST("", h.CreateProject)
+			projects.GET("/:id", h.GetProject)
+			projects.PUT("/:id", h.UpdateProject)
+			projects.DELETE("/:id", h.DeleteProject)
+		}
+
+		// 集群管理（多集群）
 		clusters := v1.Group("/clusters")
 		{
 			clusters.GET("", h.ListClusters)
@@ -76,10 +90,12 @@ func New(h *api.Handlers) *gin.Engine {
 		clusters.GET("/:name/workloads/:service/logs", h.StreamWorkloadLogs)
 		clusters.GET("/:name/workloads/ops/:id", h.GetWorkloadOperation)
 
-		// 监控事件 / 审计
+		// 监控事件 / 审计 / 节点（管理层级：集群 → 节点 → 容器/进程）
 		clusters.GET("/:name/events", h.ListEvents)
 		clusters.GET("/:name/audit", h.ListAudit)
 		clusters.GET("/:name/metrics", h.ClusterMetrics)
+		clusters.GET("/:name/nodes", h.ListNodes)
+		clusters.GET("/:name/nodes/:id/processes", h.NodeProcesses)
 
 		// 告警 ingest（Worker webhook 入口）
 		v1.POST("/ingest/events", h.IngestEvent)
@@ -132,13 +148,16 @@ func New(h *api.Handlers) *gin.Engine {
 		v1.GET("/users", h.ListUsers)
 		v1.POST("/users", h.CreateUser)
 
-		// AiNexus 异常排查（内嵌网关，进程内直调）
+		// AiNexus 异常排查（内嵌网关，进程内直调；config 为页面管理的网关配置）
 		ainexus := v1.Group("/ainexus")
 		{
 			ainexus.GET("/health", h.AINexusHealth)
 			ainexus.GET("/models", h.ListAINexusModels)
 			ainexus.POST("/chat", h.AINexusChat)
 			ainexus.POST("/investigate", h.AINexusInvestigate)
+			ainexus.GET("/config", h.GetAINexusConfig)
+			ainexus.PUT("/config", h.UpdateAINexusConfig)
+			ainexus.POST("/config/test", h.TestAINexusProvider)
 		}
 	}
 

@@ -13,7 +13,7 @@ import (
 	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
 
-	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexusrt"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy"
@@ -97,17 +97,17 @@ func ValidCron(expr string) error {
 
 // Service 巡检服务。
 type Service struct {
-	st      *store.Store
+	st       *store.Store
 	clusters *cluster.Service
-	ainx    *server.Server // 内嵌 AiNexus（可为 nil，无报告生成）
-	sched   *cron.Cron
+	ainxRT   *ainexusrt.Service // 内嵌 AiNexus 运行时（Server() 为空 = 无报告生成）
+	sched    *cron.Cron
 	// onRun 调度触发的执行（供测试注入/替换）。
 	onRun func(patrolID string)
 }
 
 // New 创建巡检服务。sched 为 nil 时自动创建（单实例调度器）。
-func New(st *store.Store, clusters *cluster.Service, ainx *server.Server) *Service {
-	s := &Service{st: st, clusters: clusters, ainx: ainx}
+func New(st *store.Store, clusters *cluster.Service, ainxRT *ainexusrt.Service) *Service {
+	s := &Service{st: st, clusters: clusters, ainxRT: ainxRT}
 	// 5 字段标准 cron（与 ValidCron 的 ParseStandard 一致）
 	s.sched = cron.New()
 	s.onRun = func(id string) { _, _ = s.Run(context.Background(), id) }
@@ -432,10 +432,14 @@ func (s *Service) buildReport(p *store.Patrol, flow *Flow, anomalies []store.Ano
 		prompt += "\n附加要求：" + flow.Report.Prompt + "\n"
 	}
 
-	if s.ainx == nil {
+	if s.ainxRT == nil {
 		return prompt // 无 AI 时返回结构化摘要
 	}
-	report, err := s.ainx.Summarize(flow.Report.Model, prompt)
+	srv := s.ainxRT.Server()
+	if srv == nil {
+		return prompt
+	}
+	report, err := srv.Summarize(flow.Report.Model, prompt)
 	if err != nil {
 		return prompt + "\n（AI 报告生成失败：" + err.Error() + "）"
 	}
