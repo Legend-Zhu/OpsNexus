@@ -6,6 +6,7 @@ import type {
   Alert,
   AlertRule,
   AuditItem,
+  BuildTask,
   Cluster,
   ClusterNode,
   ClusterSummary,
@@ -24,6 +25,8 @@ import type {
   ProcessInfo,
   Project,
   ProjectView,
+  RegistryInfo,
+  RegistryRepo,
   SSOStatus,
   User,
   Workload,
@@ -170,4 +173,17 @@ export const settingsApi = {
   // 巡检报告投递（系统设置 → 巡检报告）
   patrolReport: () => get<PatrolReportSetting>('/v1/settings/patrol-report'),
   updatePatrolReport: (body: PatrolReportSetting) => put<PatrolReportSetting>('/v1/settings/patrol-report', body),
+}
+
+// ---- 内嵌镜像仓库 + 页面传包构建 ----
+export const registryApi = {
+  info: () => get<RegistryInfo>('/v1/registry/info'),
+  images: () => get<{ items: RegistryRepo[] }>('/v1/registry/images'),
+  deleteTag: (name: string, tag: string) =>
+    del<{ deleted: string }>(`/v1/registry/images/${name}/tags/${tag}`),
+  builds: () => get<{ items: BuildTask[] }>('/v1/registry/builds'),
+  build: (id: string) => get<BuildTask>(`/v1/registry/builds/${id}`),
+  // 上传构建包（multipart，大文件放宽超时到 10 分钟）
+  submitBuild: (form: FormData) =>
+    post<BuildTask>('/v1/registry/builds', form, { timeout: 600000 }),
 }

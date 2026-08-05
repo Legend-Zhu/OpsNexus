@@ -29,6 +29,10 @@
           <el-icon><Bell /></el-icon>
           <span>告警中心</span>
         </el-menu-item>
+        <el-menu-item index="/registry">
+          <el-icon><Box /></el-icon>
+          <span>镜像仓库</span>
+        </el-menu-item>
         <el-menu-item index="/patrol">
           <el-icon><Calendar /></el-icon>
           <span>智能巡检</span>
@@ -83,7 +87,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Bell, Calendar, FolderOpened, MagicStick, Odometer, Platform, Promotion, Setting,
+  Bell, Box, Calendar, FolderOpened, MagicStick, Odometer, Platform, Promotion, Setting,
 } from '@element-plus/icons-vue'
 import { authApi } from '@/api'
 import { clearToken } from '@/api/http'

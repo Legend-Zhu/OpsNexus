@@ -62,6 +62,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '告警中心' },
       },
       {
+        path: 'registry',
+        name: 'registry',
+        component: () => import('@/views/registry/Index.vue'),
+        meta: { title: '镜像仓库' },
+      },
+      {
         path: 'patrol',
         name: 'patrol',
         component: () => import('@/views/patrol/Index.vue'),

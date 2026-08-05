@@ -197,6 +197,45 @@ export interface PatrolReportSetting {
   channel_ids: string[]
 }
 
+/** 镜像仓库服务信息 */
+export interface RegistryInfo {
+  enabled: boolean
+  hostname: string
+  port: string
+  docker_available: boolean
+  retention_per_repo: number
+  max_upload_mb: number
+  auth_enabled: boolean
+}
+
+/** 镜像 tag 视图 */
+export interface RegistryTag {
+  tag: string
+  digest: string
+  size: number
+  updated: string
+}
+
+/** 镜像仓库（repo）视图 */
+export interface RegistryRepo {
+  name: string
+  tags: RegistryTag[]
+}
+
+/** 构建任务（页面传包构建） */
+export interface BuildTask {
+  id: string
+  status: 'PENDING' | 'EXTRACTING' | 'BUILDING' | 'PUSHING' | 'CLEANING' | 'SUCCESS' | 'FAILED'
+  progress: number // -1 = 失败
+  image: string
+  name: string
+  tag: string
+  logs?: string[]
+  error?: string
+  created_at: string
+  finished_at?: string
+}
+
 /** 节点资源统计（Worker /local/stats） */
 export interface NodeStats {
   node: string
