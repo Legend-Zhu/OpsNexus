@@ -69,12 +69,31 @@
       <!-- SSO -->
       <el-tab-pane label="SSO" name="sso">
         <el-alert type="info" :closable="false" class="mb"
-          title="企业 SSO（OIDC）"
-          description="通过 server.yaml 的 auth.sso.oidc 配置（issuer / client_id / client_secret / redirect_url）对接企业 SSO 网关。未配置时使用本地用户登录（bootstrap fallback）。" />
+          title="企业 SSO（OIDC 授权码流程）"
+          description="通过 server.yaml 的 auth.sso.oidc 配置（issuer / client_id / client_secret / redirect_url / frontend_url）对接企业 SSO 网关。未配置时使用本地用户登录。" />
         <el-descriptions :column="1" border size="small">
-          <el-descriptions-item label="SSO 模式">OIDC（配置于服务端，凭据不入库）</el-descriptions-item>
-          <el-descriptions-item label="本地 fallback">已启用（token_secret 配置后启用认证）</el-descriptions-item>
+          <el-descriptions-item label="SSO 模式">
+            <el-tag size="small" :type="ssoStatus?.sso?.enabled ? 'success' : 'info'" effect="plain">
+              {{ ssoStatus?.sso?.enabled ? '已启用（OIDC）' : '未配置' }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="ssoStatus?.sso?.enabled" label="Issuer" class-name="mono">
+            {{ ssoStatus.sso.issuer }}
+          </el-descriptions-item>
+          <el-descriptions-item label="本地账号">
+            <el-tag size="small" :type="ssoStatus?.local ? 'success' : 'info'" effect="plain">
+              {{ ssoStatus?.local ? '已启用' : '未启用' }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="ssoStatus?.sso?.enabled" label="落地页">
+            <span class="mono">{{ ssoStatus.sso.frontendUrl }}</span>
+          </el-descriptions-item>
         </el-descriptions>
+      </el-tab-pane>
+
+      <!-- AI 排查网关（P7：在线配置 + 热重载内嵌 AiNexus） -->
+      <el-tab-pane label="AI 排查网关" name="ainexus">
+        <AINexusConfig />
       </el-tab-pane>
     </el-tabs>
 
@@ -139,12 +158,14 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { alertRuleApi, authApi, clusterApi } from '@/api'
-import type { AlertRule, ClusterSummary, User } from '@/types'
+import type { AlertRule, ClusterSummary, SSOStatus, User } from '@/types'
+import AINexusConfig from './AINexusConfig.vue'
 
 const tab = ref('rules')
 const rules = ref<AlertRule[]>([])
 const users = ref<User[]>([])
 const clusters = ref<ClusterSummary[]>([])
+const ssoStatus = ref<SSOStatus | null>(null)
 const applying = ref('')
 
 const ruleVisible = ref(false)
@@ -162,6 +183,11 @@ async function fetchAll() {
   rules.value = r.items ?? []
   users.value = u.items ?? []
   clusters.value = c.items ?? []
+  try {
+    ssoStatus.value = await authApi.ssoStatus()
+  } catch {
+    ssoStatus.value = null
+  }
 }
 
 function openRule(row?: AlertRule) {

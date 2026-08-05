@@ -1,6 +1,7 @@
 import { get, post, del, put } from './http'
 import type {
   AddClusterPayload,
+  AINexusConfig,
   AINexusModelInfo,
   Alert,
   AlertRule,
@@ -143,4 +144,9 @@ export const ainexusApi = {
   chat: (body: unknown) => post<unknown>('/v1/ainexus/chat', body),
   // 深度排查：告警 → 上下文注入 → 内嵌 Agent（SSE 流式）
   investigateUrl: () => '/api/v1/ainexus/investigate',
+  // 网关运行时配置（系统设置 → AI 排查网关）
+  config: () => get<AINexusConfig>('/v1/ainexus/config'),
+  updateConfig: (body: Partial<AINexusConfig>) => put<AINexusConfig>('/v1/ainexus/config', body),
+  testConfig: (body: { name?: string; type: string; base_url: string; api_key?: string; model: string }) =>
+    post<{ ok: boolean; latency_ms: number; error?: string; model?: string }>('/v1/ainexus/config/test', body),
 }

@@ -3,9 +3,22 @@
     <template #header>
       <div class="card-header">
         <span>异常排查（AiNexus）</span>
-        <el-tag size="small" type="success">已整合 · 进程内</el-tag>
+        <el-tag v-if="gatewayActive" size="small" type="success">已整合 · 进程内</el-tag>
+        <el-tag v-else size="small" type="info">网关未启用</el-tag>
       </div>
     </template>
+
+    <!-- 网关未启用引导（P7：配置已搬到页面管理） -->
+    <el-alert
+      v-if="!gatewayActive && !configLoading"
+      type="warning"
+      :closable="false"
+      class="mb"
+      title="AiNexus 网关未启用"
+      description="请在 系统设置 → AI 排查网关 配置模型提供商并启用网关，保存后无需重启立即生效。"
+    >
+      <el-button size="small" type="primary" @click="router.push('/system')">前往配置</el-button>
+    </el-alert>
 
     <div class="toolbar">
       <el-select v-model="alertId" placeholder="选择要排查的告警" filterable style="width: 340px">
@@ -43,14 +56,19 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 import { ainexusApi, alertApi } from '@/api'
 import type { AINexusModelInfo, Alert } from '@/types'
 
+const router = useRouter()
 const alerts = ref<Alert[]>([])
 const alertId = ref('')
 const models = ref<AINexusModelInfo[]>([])
 const model = ref('')
 const useMCP = ref(true)
+
+const gatewayActive = ref(false)
+const configLoading = ref(true)
 
 const running = ref(false)
 const result = ref('')
@@ -175,7 +193,21 @@ function authHeaders(): Record<string, string> {
 }
 
 onMounted(async () => {
-  await Promise.all([loadAlerts(), loadModels()])
+  // 先探测网关是否启用（配置可热重载）：未启用时跳过模型加载，避免 503 全局弹错
+  configLoading.value = true
+  try {
+    const cfg = await ainexusApi.config()
+    gatewayActive.value = cfg.active
+  } catch {
+    gatewayActive.value = false
+  } finally {
+    configLoading.value = false
+  }
+  if (gatewayActive.value) {
+    await Promise.all([loadAlerts(), loadModels()])
+  } else {
+    await loadAlerts()
+  }
 })
 onBeforeUnmount(() => abort?.abort())
 </script>
@@ -185,6 +217,9 @@ onBeforeUnmount(() => abort?.abort())
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+.mb {
+  margin-bottom: 14px;
 }
 .toolbar {
   display: flex;

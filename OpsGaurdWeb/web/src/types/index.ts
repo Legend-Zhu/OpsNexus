@@ -315,3 +315,63 @@ export interface AINexusModelInfo {
   provider: string
   type: string
 }
+
+// ---- AiNexus 网关运行时配置（系统设置 → AI 排查网关，P7） ----
+// 与后端 internal/api/ainexusconfig.go 的脱敏视图对应（api_key 仅布尔标记）。
+
+/** 网关配置（脱敏视图） */
+export interface AINexusConfig {
+  enabled: boolean
+  /** 网关是否已加载（enabled 且构建成功） */
+  active: boolean
+  providers: AINexusProvider[]
+  tools: AINexusTools
+  agent: AINexusAgent
+  mcp_servers: AINexusMCPServer[]
+}
+
+/** Provider（api_key 留空 = 沿用已保存值） */
+export interface AINexusProvider {
+  name: string
+  type: 'openai_compatible' | 'anthropic_compatible'
+  base_url: string
+  api_key?: string
+  api_key_set?: boolean
+  models: AINexusModelSpec[]
+}
+
+/** 模型配置项（区别于 AINexusModel 的网关原生模型条目） */
+export interface AINexusModelSpec {
+  name: string
+  display_name?: string
+  max_tokens?: number
+  temperature?: number
+}
+
+/** 内置工具配置 */
+export interface AINexusTools {
+  command: { enabled: boolean; allowed_commands?: string[]; timeout: string; work_dir?: string }
+  http_request: { enabled: boolean; timeout: string }
+  file_read: { enabled: boolean; max_size: number }
+}
+
+/** Agent 参数 */
+export interface AINexusAgent {
+  max_tool_rounds: number
+  parallel_tool_calls: boolean
+  max_context_tokens?: number
+  keep_tool_rounds?: number
+}
+
+/** MCP Server 配置（headers/env 值留空 = 沿用已保存值） */
+export interface AINexusMCPServer {
+  name: string
+  transport: string
+  url?: string
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  env_keys?: string[]
+  headers?: Record<string, string>
+  headers_keys?: string[]
+}
