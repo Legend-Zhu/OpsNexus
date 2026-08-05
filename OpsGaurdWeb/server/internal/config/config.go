@@ -42,12 +42,18 @@ type SSOConfig struct {
 	OIDC *SSOOIDC `yaml:"oidc,omitempty" json:"oidc,omitempty"`
 }
 
-// SSOOIDC OIDC 网关参数。
+// SSOOIDC OIDC 网关参数（授权码流程）。
 type SSOOIDC struct {
 	Issuer       string `yaml:"issuer" json:"issuer"`
 	ClientID     string `yaml:"client_id" json:"clientId"`
 	ClientSecret string `yaml:"client_secret" json:"-"`
 	RedirectURL  string `yaml:"redirect_url" json:"redirectUrl"`
+	// FrontendURL 回调成功后重定向的前端落地页（token 放 URL hash；默认 "/"）。
+	FrontendURL string `yaml:"frontend_url" json:"frontendUrl"`
+	// Scopes 额外 OIDC scopes（默认 profile email；openid 恒包含）。
+	Scopes []string `yaml:"scopes" json:"scopes"`
+	// DefaultRole SSO 新用户默认角色（admin|viewer，默认 viewer）。
+	DefaultRole string `yaml:"default_role" json:"defaultRole"`
 }
 
 // StoreConfig holds the LevelDB data directory.

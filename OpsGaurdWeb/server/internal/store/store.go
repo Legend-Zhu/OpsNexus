@@ -20,6 +20,7 @@ import (
 // Key prefixes (buckets). Each maps to a Go type in this package.
 const (
 	BucketMeta      = "meta"
+	BucketProject   = "project"
 	BucketCluster   = "cluster"
 	BucketEvent     = "event"
 	BucketAlert     = "alert"

@@ -40,7 +40,7 @@ func (e *ErrUnreachable) Error() string {
 
 // Client 是对单个 Worker 的 HTTP 客户端。
 type Client struct {
-	baseURL string   // e.g. http://10.60.189.30:8080
+	baseURL string   // e.g. http://<管理节点IP>:8080
 	token   string   // bearer token（可空）
 	http    *http.Client
 }
@@ -136,6 +136,42 @@ type ContainerStat struct {
 	MemLimit    uint64  `json:"memLimitBytes"`
 }
 
+// Node 对应 Worker GET /api/v1/nodes 的单个节点视图
+// （管理层级「集群 → 节点」）。
+type Node struct {
+	ID             string  `json:"id"`
+	Hostname       string  `json:"hostname"`
+	Role           string  `json:"role"`            // manager | worker
+	State          string  `json:"state"`           // ready | down | ...
+	Availability   string  `json:"availability"`    // active | pause | drain
+	Addr           string  `json:"addr"`
+	Leader         bool    `json:"leader"`
+	ManagerReach   string  `json:"managerReachability,omitempty"`
+	Reachable      bool    `json:"reachable"`       // 节点 Worker 可达
+	CPUCores       float64 `json:"cpuCores"`
+	MemBytes       uint64  `json:"memBytes"`
+	CPUPercent     float64 `json:"cpuPercent"`
+	MemPercent     float64 `json:"memPercent"`
+	ContainerCount int     `json:"containerCount"`
+}
+
+// Process 对应 Worker GET /api/v1/local/processes 的单个进程。
+type Process struct {
+	PID        int     `json:"pid"`
+	Name       string  `json:"name"`
+	Cmdline    string  `json:"cmdline,omitempty"`
+	State      string  `json:"state"`
+	MemKB      uint64  `json:"memKb"`
+	CPUPercent float64 `json:"cpuPercent"`
+}
+
+// ProcessesResp 对应 Worker 的进程列表响应。
+type ProcessesResp struct {
+	Node      string    `json:"node"`
+	Total     int       `json:"total"`
+	Processes []Process `json:"processes"`
+}
+
 // --- 方法 ---
 
 // Ping 探测 Worker 存活（GET /healthz）。
@@ -163,6 +199,24 @@ func (c *Client) NodeStats(ctx context.Context) (NodeStats, error) {
 	var ns NodeStats
 	err := c.do(ctx, http.MethodGet, "/api/v1/local/stats", nil, nil, &ns)
 	return ns, err
+}
+
+// ListNodes 获取集群节点列表（GET /api/v1/nodes）。
+func (c *Client) ListNodes(ctx context.Context) ([]Node, error) {
+	var nodes []Node
+	err := c.do(ctx, http.MethodGet, "/api/v1/nodes", nil, nil, &nodes)
+	return nodes, err
+}
+
+// ListProcesses 获取指定节点的宿主机进程（GET /api/v1/nodes/{id}/processes）。
+func (c *Client) ListProcesses(ctx context.Context, nodeID, top string, limit int) (ProcessesResp, error) {
+	var out ProcessesResp
+	q := map[string]string{"top": top}
+	if limit > 0 {
+		q["limit"] = fmt.Sprintf("%d", limit)
+	}
+	err := c.do(ctx, http.MethodGet, "/api/v1/nodes/"+nodeID+"/processes", q, nil, &out)
+	return out, err
 }
 
 // Events 获取监控事件（GET /api/v1/events），P3 消费，P1 原样透传。

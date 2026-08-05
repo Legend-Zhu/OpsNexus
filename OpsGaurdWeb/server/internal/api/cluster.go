@@ -13,11 +13,12 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 )
 
-// --- 集群管理（多集群，类 Rancher） ---
+// --- 集群管理 ---
 
 // addClusterRequest 接入集群的请求体。
 type addClusterRequest struct {
 	Name      string `json:"name" binding:"required"`
+	ProjectID string `json:"project_id"`
 	WorkerURL string `json:"worker_url" binding:"required"`
 	MCPURL    string `json:"mcp_url"`
 	Token     string `json:"token"`
@@ -77,6 +78,7 @@ func (h *Handlers) AddCluster(c *gin.Context) {
 	}
 	item, err := h.clusters.Add(c.Request.Context(), &store.Cluster{
 		Name:      req.Name,
+		ProjectID: req.ProjectID,
 		WorkerURL: req.WorkerURL,
 		MCPURL:    req.MCPURL,
 		Token:     req.Token,

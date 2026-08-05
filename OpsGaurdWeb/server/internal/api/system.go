@@ -6,6 +6,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/gin-gonic/gin"
 
@@ -294,6 +295,56 @@ func (h *Handlers) Login(c *gin.Context) {
 // Me godoc: GET /api/v1/auth/me
 func (h *Handlers) Me(c *gin.Context) {
 	ok(c, http.StatusOK, gin.H{"username": c.GetString("username"), "role": c.GetString("role")})
+}
+
+// --- SSO (OIDC) ---
+
+// LoginSSO godoc: GET /api/v1/auth/sso/login
+// 发起 OIDC 授权码跳转；未配置 SSO 时返回 400。
+func (h *Handlers) LoginSSO(c *gin.Context) {
+	if h.authSvc == nil {
+		fail(c, http.StatusServiceUnavailable, "auth service not initialized")
+		return
+	}
+	url, err := h.authSvc.LoginURL()
+	if err != nil {
+		fail(c, http.StatusBadRequest, "sso login: "+err.Error())
+		return
+	}
+	c.Redirect(http.StatusFound, url)
+}
+
+// SSOCallback godoc: GET /api/v1/auth/callback?state=&code=&error=
+// OIDC 回调：校验 state → 换 token → find-or-create 用户 → 签发管理端 token，
+// 302 到前端落地页，token 放 URL hash（#token=…）。
+func (h *Handlers) SSOCallback(c *gin.Context) {
+	if h.authSvc == nil {
+		fail(c, http.StatusServiceUnavailable, "auth service not initialized")
+		return
+	}
+	front := h.authSvc.SSOFrontendURL()
+	if errMsg := c.Query("error"); errMsg != "" {
+		c.Redirect(http.StatusFound, front+"#error="+url.QueryEscape(errMsg))
+		return
+	}
+	token, err := h.authSvc.CompleteLogin(c.Request.Context(), c.Query("state"), c.Query("code"))
+	if err != nil {
+		c.Redirect(http.StatusFound, front+"#error="+url.QueryEscape(err.Error()))
+		return
+	}
+	c.Redirect(http.StatusFound, front+"#token="+url.QueryEscape(token))
+}
+
+// SSOStatus godoc: GET /api/v1/auth/sso/status（公开，前端登录页据此展示 SSO 入口）
+func (h *Handlers) SSOStatus(c *gin.Context) {
+	sso := gin.H{"enabled": false}
+	if h.authSvc != nil && h.authSvc.SSOEnabled() {
+		sso = gin.H{"enabled": true, "issuer": h.authSvc.OIDC.Issuer, "frontendUrl": h.authSvc.SSOFrontendURL()}
+	}
+	ok(c, http.StatusOK, gin.H{
+		"local": h.authSvc != nil,
+		"sso":   sso,
+	})
 }
 
 // ListUsers godoc: GET /api/v1/users

@@ -6,6 +6,8 @@ package cluster
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -54,6 +56,12 @@ func (s *Service) List(ctx context.Context) ([]*store.Cluster, error) {
 	return clusters, nil
 }
 
+// ListStatic 返回全部集群注册表条目（不探测状态，不抹除 token），供内部
+// 模块（如 AiNexus 网关热重载后重连集群 MCP）读取端点/凭据，对外不可见。
+func (s *Service) ListStatic() ([]*store.Cluster, error) {
+	return s.store.ListClusters()
+}
+
 // Get 返回单个集群（含实时探测）。
 func (s *Service) Get(ctx context.Context, name string) (*store.Cluster, error) {
 	c, err := s.store.GetCluster(name)
@@ -82,6 +90,14 @@ func (s *Service) Add(ctx context.Context, in *store.Cluster) (*store.Cluster, e
 	} else if existing != nil {
 		return nil, fmt.Errorf("cluster %q already exists", name)
 	}
+	// 归属项目需存在（管理层级「项目 → 集群」引用完整性）。
+	if in.ProjectID != "" {
+		if p, err := s.store.GetProject(in.ProjectID); err != nil {
+			return nil, err
+		} else if p == nil {
+			return nil, fmt.Errorf("project %q not found", in.ProjectID)
+		}
+	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, s.probeTimeout)
 	defer cancel()
@@ -90,10 +106,18 @@ func (s *Service) Add(ctx context.Context, in *store.Cluster) (*store.Cluster, e
 		return nil, ErrProbeFailed{Name: name, Err: err}
 	}
 
+	// MCP 地址缺省取同一 manager 的 /mcp（Worker 仅 manager 挂载该端点）；
+	// 显式传入 mcp_url 仍可覆盖（独立部署网关/入口等场景）。
+	mcpURL := in.MCPURL
+	if mcpURL == "" {
+		mcpURL = strings.TrimRight(in.WorkerURL, "/") + "/mcp"
+	}
+
 	c := &store.Cluster{
 		Name:      name,
+		ProjectID: in.ProjectID,
 		WorkerURL: in.WorkerURL,
-		MCPURL:    in.MCPURL,
+		MCPURL:    mcpURL,
 		Token:     in.Token,
 		Desc:      in.Desc,
 		Status:    store.ClusterOnline,
@@ -145,6 +169,81 @@ func (s *Service) Remove(ctx context.Context, name string) error {
 		return ErrNotFound{Name: name}
 	}
 	return s.store.DeleteCluster(name)
+}
+
+// --- 项目（管理层级第一层：项目 → 集群） ---
+
+// ErrProjectNotFound 项目不存在。
+type ErrProjectNotFound struct{ ID string }
+
+func (e ErrProjectNotFound) Error() string { return fmt.Sprintf("project %q not found", e.ID) }
+
+// ListProjects 列出全部项目，附成员集群数（不探测集群状态）。
+func (s *Service) ListProjects() ([]*store.Project, error) {
+	return s.store.ListProjects()
+}
+
+// GetProject 按 ID 读取项目。
+func (s *Service) GetProject(id string) (*store.Project, error) {
+	p, err := s.store.GetProject(id)
+	if err != nil {
+		return nil, err
+	}
+	if p == nil {
+		return nil, ErrProjectNotFound{ID: id}
+	}
+	return p, nil
+}
+
+// CreateProject 新建项目（名称去重）。
+func (s *Service) CreateProject(name, desc string) (*store.Project, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("project name is required")
+	}
+	projects, err := s.store.ListProjects()
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range projects {
+		if p.Name == name {
+			return nil, fmt.Errorf("project %q already exists", name)
+		}
+	}
+	p := &store.Project{
+		ID:        "p-" + randomHex(8),
+		Name:      name,
+		Desc:      desc,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := s.store.PutProject(p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// UpdateProject 更新项目名称/描述。
+func (s *Service) UpdateProject(id, name, desc string) (*store.Project, error) {
+	p, err := s.GetProject(id)
+	if err != nil {
+		return nil, err
+	}
+	if name != "" {
+		p.Name = name
+	}
+	p.Desc = desc
+	if err := s.store.PutProject(p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// DeleteProject 删除项目（不级联删除集群，仅解除归属）。
+func (s *Service) DeleteProject(id string) error {
+	if _, err := s.GetProject(id); err != nil {
+		return err
+	}
+	return s.store.DeleteProject(id)
 }
 
 // WorkerClient 按集群名构造 Worker HTTP 客户端（带注册的 token）。
@@ -221,4 +320,13 @@ func (s *Service) probeWorker(ctx context.Context, baseURL, token string) (worke
 			baseURL, info.Role, info.SwarmManager)
 	}
 	return info, nil
+}
+
+// randomHex 生成 n 字节随机 hex（ID 用）。
+func randomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
