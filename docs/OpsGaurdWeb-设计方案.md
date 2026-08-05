@@ -314,12 +314,12 @@ seq/<kind>                        -> 自增序列（告警 id、事件 seq 等�
 | 阶段 | 里程碑 | 交付物 |
 |---|---|---|
 | **P0 骨架** ✅ | 前后端骨架 + 路由占位 | `OpsGaurdWeb/web` + `server`（已提交 f2900f2） |
-| **P1 集群接入** ✅ | 集群注册表 CRUD + Worker 健康探测 + Worker 代理客户端 + **LevelDB 存储层** | `cluster/`、`workerproxy/`、`store/`、前端集群页接真数据（已提交，双节点 swarm 联调待做） |
-| **P2 工作负载** ✅ | 服务列表/详情/部署/缩放/重启/移除 + 异步操作轮询 + SSE 日志 | 前端 workloads 页 + 后端代理（已提交，双节点 swarm 联调待做） |
-| **P3 监控告警** ✅ | webhook ingest 端点 + 告警落库/列表/认领/恢复（事件驱动）+ 节点资源视图 + 告警规则（管理 Worker monitoring config，**P6 待做**） | `ingest`、`Alert`、前端 alerts/monitor 页（已提交，双节点 swarm 联调待做） |
+| **P1 集群接入** ✅ | 集群注册表 CRUD + Worker 健康探测 + Worker 代理客户端 + **LevelDB 存储层** | `cluster/`、`workerproxy/`、`store/`、前端集群页接真数据（已提交，真机双集群验证通过（2026-08-05）） |
+| **P2 工作负载** ✅ | 服务列表/详情/部署/缩放/重启/移除 + 异步操作轮询 + SSE 日志 | 前端 workloads 页 + 后端代理（已提交，真机双集群验证通过（2026-08-05）） |
+| **P3 监控告警** ✅ | webhook ingest 端点 + 告警落库/列表/认领/恢复（事件驱动）+ 节点资源视图 + 告警规则（管理 Worker monitoring config，**P6 待做**） | `ingest`、`Alert`、前端 alerts/monitor 页（已提交，真机双集群验证通过（2026-08-05）） |
 | **P4 AiNexus 整合** ✅ | **vendor AiNexus 进后端** + `/ainexus/*` 原生端点 + /ainexus/chat 进程内 SSE + **深度排查闭环**（告警 → 事件/日志/审计上下文注入 → 内嵌 Agent + **动态连接集群 Worker MCP 采证**） | `ainexus/` 内嵌网关、前端 troubleshoot 页（已提交，真机 LLM 联调待做） |
-| **P5 智能巡检** ✅ | YAML 流程 CRUD + 内置调度引擎（单实例 Go cron）+ 执行记录 + AI 报告 | `patrol/`、前端 patrol/schedule/report 页（已提交，真机联调待做） |
-| **P6 通知/系统** ✅ | 渠道（可配置）+ 互联网代理对接 + 策略/记录 + **SSO 认证**（OIDC + 本地 fallback）+ 用户管理 + 告警规则（管理 Worker monitoring config） | `notify/`、`alertrule/`、`auth/`、`users`、前端 notify/system 页（已提交，真机联调待做） |
+| **P5 智能巡检** ✅ | YAML 流程 CRUD + 内置调度引擎（单实例 Go cron）+ 执行记录 + AI 报告 | `patrol/`、前端 patrol/schedule/report 页（已提交，真机验证通过（2026-08-05）） |
+| **P6 通知/系统** ✅ | 渠道（可配置）+ 互联网代理对接 + 策略/记录 + **SSO 认证**（OIDC + 本地 fallback）+ 用户管理 + 告警规则（管理 Worker monitoring config） | `notify/`、`alertrule/`、`auth/`、`users`、前端 notify/system 页（已提交，真机验证通过（2026-08-05）） |
 
 每阶段：单元测试 + 真机（双节点 swarm）联调 + 文档更新。
 
