@@ -3,7 +3,7 @@
     <div class="page-head">
       <div>
         <h2 class="page-title">项目</h2>
-        <p class="page-sub">管理层级第一层：项目 → 集群 → 节点 → 容器 / 进程 / 中间件</p>
+        <p class="page-sub">管理层级：项目 → 集群 → 节点 → 容器 / 进程 / 中间件</p>
       </div>
       <el-button type="primary" :icon="Plus" @click="openCreate">新建项目</el-button>
     </div>
