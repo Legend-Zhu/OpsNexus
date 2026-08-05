@@ -98,6 +98,10 @@ func (s *Service) Update(ctx context.Context, cfg *ainexuscfg.Config) error {
 		if err := cfg.Validate(); err != nil {
 			return fmt.Errorf("ainexus config invalid: %w", err)
 		}
+	} else if err := validateDefaultModel(cfg); err != nil {
+		// 网关未启用时不跑完整 Validate（其 server.addr 检查与内嵌场景无关），
+		// 但默认模型仍须属于模型池，避免重新启用时才发现配置错误。
+		return err
 	}
 
 	next, err := build(ctx, cfg)
@@ -154,6 +158,21 @@ func build(ctx context.Context, cfg *ainexuscfg.Config) (*ainexusserver.Server, 
 		return nil, fmt.Errorf("ainexus initialize: %w", err)
 	}
 	return srv, nil
+}
+
+// validateDefaultModel 校验默认模型属于模型池（providers[].models）。
+func validateDefaultModel(cfg *ainexuscfg.Config) error {
+	if cfg.DefaultModel == "" {
+		return nil
+	}
+	for _, p := range cfg.Providers {
+		for _, m := range p.Models {
+			if m.Name == cfg.DefaultModel {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("default_model %q is not in the model pool (providers[].models)", cfg.DefaultModel)
 }
 
 // closeServer 关闭网关（幂等，nil 直接返回）。

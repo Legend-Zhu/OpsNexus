@@ -116,6 +116,32 @@ func TestInvalidConfigKeepsOldGateway(t *testing.T) {
 	}
 }
 
+// TestDefaultModelValidated 网关未启用时默认模型也须属于模型池。
+func TestDefaultModelValidated(t *testing.T) {
+	svc := newTestService(t)
+	if err := svc.Update(context.Background(), validConfig(false)); err != nil {
+		t.Fatalf("seed pool: %v", err)
+	}
+
+	// 未启用 + 默认模型不在模型池 → 拒绝
+	bad := validConfig(false)
+	bad.Providers[0].Models = []ainexuscfg.ModelConfig{{Name: "m1"}}
+	bad.DefaultModel = "ghost"
+	if err := svc.Update(context.Background(), bad); err == nil {
+		t.Fatal("expected error for default model not in pool")
+	}
+	// 未启用 + 默认模型在模型池 → 允许
+	good := validConfig(false)
+	good.Providers[0].Models = []ainexuscfg.ModelConfig{{Name: "m1"}}
+	good.DefaultModel = "m1"
+	if err := svc.Update(context.Background(), good); err != nil {
+		t.Fatalf("expected ok for in-pool default model, got: %v", err)
+	}
+	if cfg := svc.Config(); cfg.DefaultModel != "m1" {
+		t.Fatalf("DefaultModel = %q, want m1", cfg.DefaultModel)
+	}
+}
+
 // TestDisable 关闭网关后 Server() 为 nil，配置仍保存。
 func TestDisable(t *testing.T) {
 	svc := newTestService(t)

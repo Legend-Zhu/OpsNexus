@@ -106,12 +106,7 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 	}
 
 	// 5. 组装注入上下文后的请求体，进程内 SSE 直通
-	model := req.Model
-	if model == "" {
-		if models := srv.Models(); len(models) > 0 {
-			model = models[0]
-		}
-	}
+	model := srv.ResolveModel(req.Model)
 	messages := BuildInvestigateMessages(alert, events, audit, logs, useMCP)
 	body, err := json.Marshal(map[string]any{
 		"model":    model,

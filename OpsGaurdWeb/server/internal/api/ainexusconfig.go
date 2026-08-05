@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,12 +19,14 @@ import (
 // --- 脱敏视图（GET） ---
 
 type ainexusConfigView struct {
-	Enabled    bool                   `json:"enabled"`
-	Active     bool                   `json:"active"` // 网关是否已加载（enabled 且构建成功）
-	Providers  []ainexusProviderView  `json:"providers"`
-	Tools      ainexusToolsView       `json:"tools"`
-	Agent      ainexusAgentView       `json:"agent"`
-	MCPServers []ainexusMCPServerView `json:"mcp_servers"`
+	Enabled   bool                  `json:"enabled"`
+	Active    bool                  `json:"active"` // 网关是否已加载（enabled 且构建成功）
+	Providers []ainexusProviderView `json:"providers"`
+	// DefaultModel AI 排查网关默认模型（模型池之一；空 = 用首个可用）。
+	DefaultModel string                 `json:"default_model,omitempty"`
+	Tools        ainexusToolsView       `json:"tools"`
+	Agent        ainexusAgentView       `json:"agent"`
+	MCPServers   []ainexusMCPServerView `json:"mcp_servers"`
 }
 
 type ainexusProviderView struct {
@@ -79,16 +82,20 @@ type ainexusMCPServerView struct {
 	Args       []string `json:"args,omitempty"`
 	EnvKeys    []string `json:"env_keys,omitempty"`
 	HeaderKeys []string `json:"headers_keys,omitempty"`
+	// Cluster 标记该条目为集群 manager 的自动 MCP（服务端加载/热重载时
+	// 自动连接，页面只读），区别于用户自定义 MCP。
+	Cluster bool `json:"cluster,omitempty"`
 }
 
 // --- 写入请求（PUT，空白 api_key/header 值 = 沿用旧值） ---
 
 type ainexusConfigRequest struct {
-	Enabled    bool                      `json:"enabled"`
-	Providers  []ainexusProviderRequest  `json:"providers"`
-	Tools      ainexusToolsRequest       `json:"tools"`
-	Agent      ainexusAgentRequest       `json:"agent"`
-	MCPServers []ainexusMCPServerRequest `json:"mcp_servers"`
+	Enabled      bool                      `json:"enabled"`
+	DefaultModel string                    `json:"default_model,omitempty"` // 网关默认模型（模型池之一；空 = 首个可用）
+	Providers    []ainexusProviderRequest  `json:"providers"`
+	Tools        ainexusToolsRequest       `json:"tools"`
+	Agent        ainexusAgentRequest       `json:"agent"`
+	MCPServers   []ainexusMCPServerRequest `json:"mcp_servers"`
 }
 
 type ainexusProviderRequest struct {
@@ -141,13 +148,41 @@ type ainexusMCPServerRequest struct {
 
 // GetAINexusConfig godoc: GET /api/v1/ainexus/config
 // 返回当前生效网关配置的脱敏视图（api_key 仅标记是否已设置；headers/env 仅列 key）。
-// 未在页面保存过时返回 config.yaml 的 ainexus 块。
+// 未在页面保存过时返回 config.yaml 的 ainexus 块。mcp_servers 额外合并各
+// 集群 manager 的自动 MCP（cluster:true，服务端加载/热重载时已自动连接）。
 func (h *Handlers) GetAINexusConfig(c *gin.Context) {
 	if h.AINexusRT == nil {
 		fail(c, http.StatusServiceUnavailable, "ainexus runtime not initialized")
 		return
 	}
-	ok(c, http.StatusOK, buildAINexusView(h.AINexusRT.Config(), h.AINexusRT.Server() != nil))
+	view := buildAINexusView(h.AINexusRT.Config(), h.AINexusRT.Server() != nil)
+	view.MCPServers = append(view.MCPServers, h.clusterMCPServers()...)
+	ok(c, http.StatusOK, view)
+}
+
+// clusterMCPServers 收集各集群 manager 的自动 MCP（有 mcp_url 的集群）。
+// 集群服务未初始化或列表失败时静默返回空（不阻断配置展示）。
+func (h *Handlers) clusterMCPServers() []ainexusMCPServerView {
+	if h.clusters == nil {
+		return nil
+	}
+	clusters, err := h.clusters.ListStatic()
+	if err != nil {
+		return nil
+	}
+	var out []ainexusMCPServerView
+	for _, c := range clusters {
+		if c.MCPURL == "" {
+			continue
+		}
+		out = append(out, ainexusMCPServerView{
+			Name:      "cluster:" + c.Name,
+			Transport: "streamable-http",
+			URL:       c.MCPURL,
+			Cluster:   true,
+		})
+	}
+	return out
 }
 
 // UpdateAINexusConfig godoc: PUT /api/v1/ainexus/config
@@ -171,7 +206,9 @@ func (h *Handlers) UpdateAINexusConfig(c *gin.Context) {
 		fail(c, http.StatusBadGateway, err.Error())
 		return
 	}
-	ok(c, http.StatusOK, buildAINexusView(h.AINexusRT.Config(), h.AINexusRT.Server() != nil))
+	view := buildAINexusView(h.AINexusRT.Config(), h.AINexusRT.Server() != nil)
+	view.MCPServers = append(view.MCPServers, h.clusterMCPServers()...)
+	ok(c, http.StatusOK, view)
 }
 
 // TestAINexusProvider godoc: POST /api/v1/ainexus/config/test
@@ -244,7 +281,7 @@ func probeProvider(ctx context.Context, ptype, name, baseURL, apiKey, model stri
 
 // toConfig 把写入请求转换为网关配置；时长文本解析失败返回错误。
 func (req *ainexusConfigRequest) toConfig() (*ainexuscfg.Config, error) {
-	cfg := &ainexuscfg.Config{Enabled: req.Enabled}
+	cfg := &ainexuscfg.Config{Enabled: req.Enabled, DefaultModel: req.DefaultModel}
 
 	commandTimeout, err := parseDur(req.Tools.Command.Timeout, 30*time.Second)
 	if err != nil {
@@ -297,6 +334,11 @@ func (req *ainexusConfigRequest) toConfig() (*ainexuscfg.Config, error) {
 	}
 
 	for _, m := range req.MCPServers {
+		// 集群 manager 的自动 MCP（cluster: 前缀）由服务端统一管理，
+		// 用户保存时过滤，避免与自动连接重复（前端误提交/旧缓存兜底）。
+		if strings.HasPrefix(m.Name, "cluster:") {
+			continue
+		}
 		cfg.MCPServers = append(cfg.MCPServers, ainexuscfg.MCPServerConfig{
 			Name:      m.Name,
 			Transport: m.Transport,
@@ -328,8 +370,9 @@ func buildAINexusView(cfg *ainexuscfg.Config, active bool) ainexusConfigView {
 		cfg = &ainexuscfg.Config{}
 	}
 	v := ainexusConfigView{
-		Enabled: cfg.Enabled,
-		Active:  active,
+		Enabled:      cfg.Enabled,
+		Active:       active,
+		DefaultModel: cfg.DefaultModel,
 		Tools: ainexusToolsView{
 			Command: ainexusCommandView{
 				Enabled:         cfg.Tools.Command.Enabled,

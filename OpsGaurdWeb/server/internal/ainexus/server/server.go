@@ -152,22 +152,15 @@ func (s *Server) Models() []string {
 // MCPNames 返回已连接的 MCP Server 名称
 func (s *Server) MCPNames() []string { return s.mcpMgr.ServerNames() }
 
-// Summarize 非流式生成一段文本（巡检报告/摘要）。model 为空用第一个可用
-// 模型。复用 ReAct Agent（含上下文预算/摘要压缩）与工具注册中心，供 patrol
-// 等业务进程内调用；失败返回错误，不阻塞调用方。
+// Summarize 非流式生成一段文本（巡检报告/摘要）。model 为空用配置的默认
+// 模型（DefaultModel），再回退首个可用。复用 ReAct Agent（含上下文预算/
+// 摘要压缩）与工具注册中心，供 patrol 等业务进程内调用；失败返回错误，
+// 不阻塞调用方。
 func (s *Server) Summarize(model, prompt string) (string, error) {
 	if s.openaiH == nil {
 		return "", fmt.Errorf("ainexus gateway not initialized")
 	}
-	if model == "" {
-		if len(s.modelRoutes) == 0 {
-			return "", fmt.Errorf("no models configured")
-		}
-		for m := range s.modelRoutes {
-			model = m
-			break
-		}
-	}
+	model = s.ResolveModel(model)
 	p, ok := s.modelRoutes[model]
 	if !ok {
 		return "", fmt.Errorf("model %q not found", model)
@@ -184,6 +177,26 @@ func (s *Server) Summarize(model, prompt string) (string, error) {
 		return "", fmt.Errorf("summarize: no response")
 	}
 	return resp.Choices[0].Message.Content, nil
+}
+
+// ResolveModel 解析模型名：空 → 配置的默认模型（DefaultModel）→ 首个可用。
+// 返回 "" 表示模型池为空。
+func (s *Server) ResolveModel(model string) string {
+	if model != "" {
+		if _, ok := s.modelRoutes[model]; ok {
+			return model
+		}
+		return model // 未知模型交给上层报错
+	}
+	if s.config.DefaultModel != "" {
+		if _, ok := s.modelRoutes[s.config.DefaultModel]; ok {
+			return s.config.DefaultModel
+		}
+	}
+	for m := range s.modelRoutes {
+		return m
+	}
+	return ""
 }
 
 // AddMCPCluster 动态连接一个集群的 Worker MCP（streamable-http + Bearer

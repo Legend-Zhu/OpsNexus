@@ -16,6 +16,9 @@ type Config struct {
 	Tools      ToolsConfig       `yaml:"tools"`
 	MCPServers []MCPServerConfig `yaml:"mcp_servers"`
 	Agent      AgentConfig       `yaml:"agent"`
+	// DefaultModel AI 排查网关默认模型（模型池 providers[].models 之一）；
+	// 空 = 用模型池首个可用。页面在「AI 排查网关」tab 从模型池选择。
+	DefaultModel string `yaml:"default_model,omitempty"`
 }
 
 // ServerConfig HTTP 服务配置
@@ -39,17 +42,17 @@ const (
 
 // ProviderConfig 提供商配置（支持多模型）
 type ProviderConfig struct {
-	Name    string        `yaml:"name"`              // 提供商显示名称，如 "openai"、"zhipu"、"deepseek"
-	Type    ProviderType  `yaml:"type"`              // API 格式类型: openai_compatible | anthropic_compatible
-	BaseURL string        `yaml:"base_url"`          // API 基础地址
-	APIKey  string        `yaml:"api_key"`           // API Key
-	Models  []ModelConfig `yaml:"models"`            // 该提供商下的模型列表
-	Extra   map[string]any `yaml:"extra,omitempty"`  // 扩展字段（如自定义请求头等）
+	Name    string         `yaml:"name"`            // 提供商显示名称，如 "openai"、"zhipu"、"deepseek"
+	Type    ProviderType   `yaml:"type"`            // API 格式类型: openai_compatible | anthropic_compatible
+	BaseURL string         `yaml:"base_url"`        // API 基础地址
+	APIKey  string         `yaml:"api_key"`         // API Key
+	Models  []ModelConfig  `yaml:"models"`          // 该提供商下的模型列表
+	Extra   map[string]any `yaml:"extra,omitempty"` // 扩展字段（如自定义请求头等）
 }
 
 // ModelConfig 模型配置
 type ModelConfig struct {
-	Name        string  `yaml:"name"`                  // 模型标识（请求时传的 model 值），如 "glm-5.1"、"gpt-5.4"
+	Name        string  `yaml:"name"`                   // 模型标识（请求时传的 model 值），如 "glm-5.1"、"gpt-5.4"
 	DisplayName string  `yaml:"display_name,omitempty"` // 显示名称（可选），如 "GLM 5.1"
 	MaxTokens   int     `yaml:"max_tokens,omitempty"`   // 默认最大输出 token
 	Temperature float64 `yaml:"temperature,omitempty"`  // 默认温度
@@ -195,6 +198,11 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("model name %q is duplicated in providers %q and %q", m.Name, existing, p.Name)
 			}
 			modelNames[m.Name] = p.Name
+		}
+	}
+	if c.DefaultModel != "" {
+		if _, ok := modelNames[c.DefaultModel]; !ok {
+			return fmt.Errorf("default_model %q is not in the model pool (providers[].models)", c.DefaultModel)
 		}
 	}
 
