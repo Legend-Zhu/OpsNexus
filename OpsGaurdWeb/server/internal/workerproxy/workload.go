@@ -105,14 +105,14 @@ func (c *Client) Operation(ctx context.Context, id string) (Operation, error) {
 
 // Workload 前端友好的服务摘要（由 Docker 原生 Service 映射）。
 type Workload struct {
-	ID      string         `json:"id"`
-	Name    string         `json:"name"`
-	Image   string         `json:"image,omitempty"`
-	Mode    string         `json:"mode,omitempty"` // replicated | global
-	Replica string         `json:"replica,omitempty"` // 如 3/3
-	Running uint64         `json:"running,omitempty"`
-	Desired uint64         `json:"desired,omitempty"`
-	Ports   []PortMapping  `json:"ports,omitempty"`
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Image   string            `json:"image,omitempty"`
+	Mode    string            `json:"mode,omitempty"`    // replicated | global
+	Replica string            `json:"replica,omitempty"` // 如 3/3
+	Running uint64            `json:"running,omitempty"`
+	Desired uint64            `json:"desired,omitempty"`
+	Ports   []PortMapping     `json:"ports,omitempty"`
 	Labels  map[string]string `json:"labels,omitempty"`
 }
 
@@ -126,8 +126,8 @@ type PortMapping struct {
 
 // dockerService Docker 原生 Service（最小子集，用于映射）。
 type dockerService struct {
-	ID            string        `json:"ID"`
-	Spec          dockerSpec    `json:"Spec"`
+	ID            string     `json:"ID"`
+	Spec          dockerSpec `json:"Spec"`
 	ServiceStatus *struct {
 		RunningTasks   uint64 `json:"RunningTasks"`
 		DesiredTasks   uint64 `json:"DesiredTasks"`
@@ -232,11 +232,11 @@ type TaskView struct {
 // GetWorkload 获取服务详情（GET /api/v1/services/{name}）。
 func (c *Client) GetWorkload(ctx context.Context, name string) (WorkloadDetail, error) {
 	var raw struct {
-		Service dockerService   `json:"service"`
-		Tasks   []dockerTask    `json:"tasks"`
-		Running int             `json:"running"`
-		Desired int             `json:"desired"`
-		Healthy int             `json:"healthy"`
+		Service dockerService `json:"service"`
+		Tasks   []dockerTask  `json:"tasks"`
+		Running int           `json:"running"`
+		Desired int           `json:"desired"`
+		Healthy int           `json:"healthy"`
 	}
 	err := c.do(ctx, http.MethodGet, "/api/v1/services/"+name, nil, nil, &raw)
 	if err != nil {

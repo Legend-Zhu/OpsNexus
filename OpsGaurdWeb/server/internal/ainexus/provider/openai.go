@@ -34,9 +34,9 @@ func NewOpenAIProvider(name, baseURL, apiKey string, models []string) *OpenAIPro
 	}
 }
 
-func (p *OpenAIProvider) Name() string         { return p.name }
+func (p *OpenAIProvider) Name() string           { return p.name }
 func (p *OpenAIProvider) ToolFormat() ToolFormat { return ToolFormatOpenAI }
-func (p *OpenAIProvider) Models() []string      { return p.models }
+func (p *OpenAIProvider) Models() []string       { return p.models }
 
 func (p *OpenAIProvider) SupportsModel(model string) bool {
 	for _, m := range p.models {
@@ -50,12 +50,12 @@ func (p *OpenAIProvider) SupportsModel(model string) bool {
 // --- 请求/响应结构体 ---
 
 type openaiRequest struct {
-	Model        string           `json:"model"`
-	Messages     []openaiMessage  `json:"messages"`
-	Tools        []openaiTool     `json:"tools,omitempty"`
-	Stream       bool             `json:"stream"`
-	MaxTokens    int              `json:"max_tokens,omitempty"`
-	Temperature  *float64         `json:"temperature,omitempty"`
+	Model         string          `json:"model"`
+	Messages      []openaiMessage `json:"messages"`
+	Tools         []openaiTool    `json:"tools,omitempty"`
+	Stream        bool            `json:"stream"`
+	MaxTokens     int             `json:"max_tokens,omitempty"`
+	Temperature   *float64        `json:"temperature,omitempty"`
 	StreamOptions *streamOptions  `json:"stream_options,omitempty"`
 }
 
@@ -82,7 +82,7 @@ type openaiFunctionCall struct {
 }
 
 type openaiTool struct {
-	Type     string       `json:"type"`
+	Type     string        `json:"type"`
 	Function openaiFuncDef `json:"function"`
 }
 
@@ -235,12 +235,12 @@ func (p *OpenAIProvider) ChatCompletion(ctx context.Context, req *ChatRequest) (
 
 func (p *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *ChatRequest) (<-chan StreamEvent, error) {
 	oaiReq := openaiRequest{
-		Model:        req.Model,
-		Messages:     p.convertToOpenaiMessages(req.Messages),
-		Tools:        p.convertToolsToOpenai(req.Tools),
-		Stream:       true,
+		Model:         req.Model,
+		Messages:      p.convertToOpenaiMessages(req.Messages),
+		Tools:         p.convertToolsToOpenai(req.Tools),
+		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},
-		MaxTokens:    req.MaxTokens,
+		MaxTokens:     req.MaxTokens,
 	}
 	if req.Temperature > 0 {
 		oaiReq.Temperature = &req.Temperature

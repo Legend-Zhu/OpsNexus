@@ -23,8 +23,8 @@ type CommandExecutor struct {
 func NewCommandExecutor(cfg config.CommandToolConfig) *CommandExecutor {
 	return &CommandExecutor{
 		allowedCommands: cfg.AllowedCommands,
-		timeout:        cfg.Timeout,
-		workDir:        cfg.WorkDir,
+		timeout:         cfg.Timeout,
+		workDir:         cfg.WorkDir,
 	}
 }
 

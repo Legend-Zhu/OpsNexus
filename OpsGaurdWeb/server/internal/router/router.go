@@ -29,6 +29,13 @@ func New(h *api.Handlers) *gin.Engine {
 	// 健康检查
 	r.GET("/healthz", h.Health)
 
+	// 内嵌镜像仓库(OCI /v2 协议端点:docker CLI 直连,独立 basic auth,
+	// 不走管理端会话认证)
+	if reg := h.Registry(); reg != nil {
+		v2 := r.Group("/v2", reg.AuthMiddleware())
+		v2.Any("/*rest", reg.V2)
+	}
+
 	// 内嵌 AiNexus 网关原生端点（兼容 AiNexus 自身 URL 契约，非独立服务）
 	ainx := r.Group("/ainexus")
 	{
@@ -120,6 +127,17 @@ func New(h *api.Handlers) *gin.Engine {
 		// 全局设置（巡检报告投递策略等）
 		v1.GET("/settings/patrol-report", h.GetPatrolReportSetting)
 		v1.PUT("/settings/patrol-report", h.PutPatrolReportSetting)
+
+		// 内嵌镜像仓库（管理 API：构建提交/轮询、镜像列表、删除 tag）
+		registry := v1.Group("/registry")
+		{
+			registry.GET("/info", h.RegistryInfo)
+			registry.POST("/builds", h.SubmitRegistryBuild)
+			registry.GET("/builds", h.ListRegistryBuilds)
+			registry.GET("/builds/:id", h.GetRegistryBuild)
+			registry.GET("/images", h.ListRegistryImages)
+			registry.DELETE("/images/*ref", h.DeleteRegistryTag)
+		}
 
 		// 智能巡检（YAML 流程 + 内置调度 + AI 报告）
 		patrols := v1.Group("/patrols")

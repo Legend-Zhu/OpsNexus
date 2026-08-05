@@ -34,9 +34,9 @@ func newTestRule(t *testing.T) (*Service, *httptest.Server) {
 			"service": map[string]any{
 				"ID": "s1",
 				"Spec": map[string]any{
-					"Name": r.PathValue("name"),
+					"Name":         r.PathValue("name"),
 					"TaskTemplate": map[string]any{"ContainerSpec": map[string]any{"Image": "nginx:alpine"}},
-					"Mode": map[string]any{"Replicated": map[string]any{"Replicas": 2}},
+					"Mode":         map[string]any{"Replicated": map[string]any{"Replicas": 2}},
 				},
 				"ServiceStatus": map[string]any{"RunningTasks": 2, "DesiredTasks": 2},
 			},

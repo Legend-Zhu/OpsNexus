@@ -125,7 +125,10 @@ func (c *Conversation) Compress(compressor Compressor, maxTokens, keepRounds int
 	}
 
 	// 1. 按原子单位分组
-	type grp struct{ start, end int; isTool bool }
+	type grp struct {
+		start, end int
+		isTool     bool
+	}
 	var groups []grp
 	for i := 0; i < len(c.Messages); {
 		m := c.Messages[i]

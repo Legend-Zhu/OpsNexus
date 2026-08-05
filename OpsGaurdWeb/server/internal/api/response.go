@@ -12,6 +12,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/registry"
 )
 
 // Response is the standard envelope for all management-plane endpoints.
@@ -42,6 +43,7 @@ type Handlers struct {
 	notifySvc   *notify.Service
 	ruleSvc     *alertrule.Service
 	authSvc     *auth.Service
+	registrySvc *registry.Service
 	AINexusRT   *ainexusrt.Service // 内嵌 AiNexus 网关运行时（热重载配置；Server() 为空 = 未启用）
 	// AuthMiddleware 认证中间件（P6；nil = 未启用认证）。
 	AuthMiddleware gin.HandlerFunc
@@ -78,6 +80,12 @@ func (h *Handlers) SetAuthMiddleware(m gin.HandlerFunc) { h.AuthMiddleware = m }
 
 // SetAINexusRT wires the AiNexus gateway runtime service (P7; hot-reload).
 func (h *Handlers) SetAINexusRT(s *ainexusrt.Service) { h.AINexusRT = s }
+
+// SetRegistryService wires the embedded registry service（镜像仓库 + 构建）。
+func (h *Handlers) SetRegistryService(s *registry.Service) { h.registrySvc = s }
+
+// Registry 返回内嵌镜像仓库服务（router 挂载 /v2 用；nil = 未启用）。
+func (h *Handlers) Registry() *registry.Service { return h.registrySvc }
 
 // Health godoc: GET /healthz
 func (h *Handlers) Health(c *gin.Context) {

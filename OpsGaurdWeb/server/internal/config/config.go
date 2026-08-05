@@ -8,6 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	ainexuscfg "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
+	registrycfg "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/registry"
 )
 
 // Config is the management-plane server configuration.
@@ -25,6 +26,8 @@ type Config struct {
 	// Clusters registry: name -> management-plane reachable Worker base URL.
 	// Each cluster is managed via its Worker's HTTP API + MCP endpoint.
 	Clusters map[string]ClusterConfig `yaml:"clusters" json:"clusters"`
+	// Registry 内嵌镜像仓库(OCI /v2)+ 页面传包构建(docker CLI)。
+	Registry registrycfg.Config `yaml:"registry" json:"registry"`
 }
 
 // AuthConfig 认证配置。
@@ -101,6 +104,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Store.Path == "" {
 		c.Store.Path = "./data"
+	}
+	if c.Registry.Storage == "" {
+		c.Registry.Storage = c.Store.Path + "/registry"
+	}
+	if c.Registry.Hostname == "" {
+		c.Registry.Hostname = "registry.opsguard"
+	}
+	if c.Registry.MaxUploadMB <= 0 {
+		c.Registry.MaxUploadMB = 500
 	}
 }
 

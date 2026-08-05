@@ -66,9 +66,9 @@ func newMockOpsServer(t *testing.T) *mockOpsServer {
 		writeJSON(w, 200, []map[string]any{{
 			"ID": "svc1",
 			"Spec": map[string]any{
-				"Name": "web",
+				"Name":         "web",
 				"TaskTemplate": map[string]any{"ContainerSpec": map[string]any{"Image": "nginx:alpine"}},
-				"Mode": map[string]any{"Replicated": map[string]any{"Replicas": 3}},
+				"Mode":         map[string]any{"Replicated": map[string]any{"Replicas": 3}},
 			},
 			"ServiceStatus": map[string]any{"RunningTasks": 2, "DesiredTasks": 3},
 			"Endpoint": map[string]any{"Ports": []map[string]any{{
@@ -81,16 +81,16 @@ func newMockOpsServer(t *testing.T) *mockOpsServer {
 			"service": map[string]any{
 				"ID": "svc1",
 				"Spec": map[string]any{
-					"Name": "web",
+					"Name":         "web",
 					"TaskTemplate": map[string]any{"ContainerSpec": map[string]any{"Image": "nginx:alpine"}},
-					"Mode": map[string]any{"Replicated": map[string]any{"Replicas": 3}},
+					"Mode":         map[string]any{"Replicated": map[string]any{"Replicas": 3}},
 				},
 				"ServiceStatus": map[string]any{"RunningTasks": 3, "DesiredTasks": 3},
 			},
 			"tasks": []map[string]any{{
 				"ID": "task1", "Slot": 1, "NodeID": "n1", "DesiredState": "running",
 				"Status": map[string]any{
-					"State": "running",
+					"State":           "running",
 					"ContainerStatus": map[string]any{"ContainerID": "c1", "ExitCode": 0},
 				},
 			}},

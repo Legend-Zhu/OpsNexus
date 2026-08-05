@@ -25,6 +25,24 @@ auth:
 store:
   path: "./data"
 
+# 内嵌镜像仓库（OCI /v2）+ 页面传包构建（docker CLI）
+# 与管理台同端口同进程；镜像引用统一用 hostname（双网段 hosts 解析到各自
+# 网段的管理端地址，避免"外推内拉"割裂）。
+registry:
+  enabled: false             # 开启后 /v2 提供 docker push/pull,/api/v1/registry/* 提供页面管理
+  hostname: "registry.opsguard"   # 统一寻址主机名；节点 daemon.json 的 insecure-registries 配它
+  storage: ""                # 默认 <store.path>/registry
+  retention_per_repo: 10     # 每仓库保留最近 N 个 tag（0 = 不裁剪；裁剪后自动清无引用 blob）
+  max_upload_mb: 500         # 构建 zip 上传上限
+  # users:                   # /v2 basic auth（节点 pull / 外部 push 都要过；空 = 不启用）
+  #   ops: "$2y$10$..."      # bcrypt(htpasswd -B)或 {PLAIN}xxx
+  # builder:                 # 管理端构建后 push 本机 registry 的账号(启动时 docker login)
+  #   username: "builder"
+  #   password: ""
+  # 集群节点一次性配置（内网纯 HTTP 必须）：
+  #   /etc/docker/daemon.json → { "insecure-registries": ["registry.opsguard:8090"] }
+  #   /etc/hosts            → <管理端本网段IP> registry.opsguard
+
 # AiNexus 异常排查网关（内嵌进后端，非独立服务）
 # providers/tools/MCP 客户端/ReAct Agent 与管理端同进程，原生端点挂载 /ainexus/*
 # 注意：本块仅在首次启动时生效。在「系统设置 → AI 排查网关」页面保存过后，

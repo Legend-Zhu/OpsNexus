@@ -184,8 +184,8 @@ func (h *Handlers) ListNotifyRecords(c *gin.Context) {
 
 // ruleRequest 告警规则请求体。
 type ruleRequest struct {
-	Cluster    string          `json:"cluster" binding:"required"`
-	Service    string          `json:"service" binding:"required"`
+	Cluster    string           `json:"cluster" binding:"required"`
+	Service    string           `json:"service" binding:"required"`
 	Monitoring store.Monitoring `json:"monitoring"`
 }
 

@@ -30,7 +30,7 @@ func (e ErrInvalid) Error() string { return "invalid alert rule: " + e.Msg }
 
 // Service 告警规则服务。
 type Service struct {
-	st      *store.Store
+	st       *store.Store
 	clusters *cluster.Service
 }
 

@@ -40,12 +40,12 @@ func NewOpenAIHandler(modelRoutes map[string]provider.Provider, registry *tool.R
 
 // openaiChatRequest OpenAI Chat Completion 请求
 type openaiChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []oaiMsg  `json:"messages"`
-	Tools       []any     `json:"tools,omitempty"`
-	Stream      bool      `json:"stream"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Temperature *float64  `json:"temperature,omitempty"`
+	Model       string   `json:"model"`
+	Messages    []oaiMsg `json:"messages"`
+	Tools       []any    `json:"tools,omitempty"`
+	Stream      bool     `json:"stream"`
+	MaxTokens   int      `json:"max_tokens,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
 }
 
 type oaiMsg struct {
@@ -144,30 +144,30 @@ func (h *OpenAIHandler) handleStream(c *gin.Context, ag *agent.Agent, conv *agen
 			c.Writer.(http.Flusher).Flush()
 
 		case agent.AgentEventToolEnd:
-				delta := openaiToolCallDelta{
-					Index: toolCallIndex,
-					Function: &openaiFuncDelta{Arguments: event.ToolCall.Arguments},
+			delta := openaiToolCallDelta{
+				Index:    toolCallIndex,
+				Function: &openaiFuncDelta{Arguments: event.ToolCall.Arguments},
+			}
+			if event.ToolResult != nil {
+				delta.ToolResult = &openaiToolResult{
+					Name:    event.ToolCall.Name,
+					Content: event.ToolResult.Content,
+					IsError: event.ToolResult.IsError,
 				}
-				if event.ToolResult != nil {
-					delta.ToolResult = &openaiToolResult{
-						Name:    event.ToolCall.Name,
-						Content: event.ToolResult.Content,
-						IsError: event.ToolResult.IsError,
-					}
-				}
-				resp := openaiStreamResponse{
-					ID: msgID, Object: "chat.completion.chunk", Created: created, Model: model,
-					Choices: []openaiStreamChoice{{
-						Index: 0,
-						Delta: openaiStreamDelta{
-							ToolCalls: []openaiToolCallDelta{delta},
-						},
-					}},
-				}
-				data, _ := json.Marshal(resp)
-				fmt.Fprintf(c.Writer, "data: %s\n\n", data)
-				c.Writer.(http.Flusher).Flush()
-				toolCallIndex++
+			}
+			resp := openaiStreamResponse{
+				ID: msgID, Object: "chat.completion.chunk", Created: created, Model: model,
+				Choices: []openaiStreamChoice{{
+					Index: 0,
+					Delta: openaiStreamDelta{
+						ToolCalls: []openaiToolCallDelta{delta},
+					},
+				}},
+			}
+			data, _ := json.Marshal(resp)
+			fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+			c.Writer.(http.Flusher).Flush()
+			toolCallIndex++
 
 		case agent.AgentEventDone:
 			finishReason := "stop"
@@ -252,10 +252,10 @@ func (h *OpenAIHandler) Models(c *gin.Context) {
 // --- 响应结构体 ---
 
 type openaiStreamResponse struct {
-	ID      string              `json:"id"`
-	Object  string              `json:"object"`
-	Created int64               `json:"created"`
-	Model   string              `json:"model"`
+	ID      string               `json:"id"`
+	Object  string               `json:"object"`
+	Created int64                `json:"created"`
+	Model   string               `json:"model"`
 	Choices []openaiStreamChoice `json:"choices"`
 }
 
@@ -266,8 +266,8 @@ type openaiStreamChoice struct {
 }
 
 type openaiStreamDelta struct {
-	Role      string               `json:"role,omitempty"`
-	Content   string               `json:"content,omitempty"`
+	Role      string                `json:"role,omitempty"`
+	Content   string                `json:"content,omitempty"`
 	ToolCalls []openaiToolCallDelta `json:"tool_calls,omitempty"`
 }
 
@@ -291,24 +291,24 @@ type openaiFuncDelta struct {
 }
 
 type openaiNonStreamResponse struct {
-	ID      string          `json:"id"`
-	Object  string          `json:"object"`
-	Created int64           `json:"created"`
-	Model   string          `json:"model"`
-	Choices []openaiChoice  `json:"choices"`
-	Usage   oaiUsageResp    `json:"usage"`
+	ID      string         `json:"id"`
+	Object  string         `json:"object"`
+	Created int64          `json:"created"`
+	Model   string         `json:"model"`
+	Choices []openaiChoice `json:"choices"`
+	Usage   oaiUsageResp   `json:"usage"`
 }
 
 type openaiChoice struct {
-	Index        int         `json:"index"`
-	Message      oaiMsgResp  `json:"message"`
-	FinishReason string      `json:"finish_reason"`
+	Index        int        `json:"index"`
+	Message      oaiMsgResp `json:"message"`
+	FinishReason string     `json:"finish_reason"`
 }
 
 type oaiMsgResp struct {
-	Role      string                `json:"role"`
-	Content   string                `json:"content"`
-	ToolCalls []openaiToolCallResp  `json:"tool_calls,omitempty"`
+	Role      string               `json:"role"`
+	Content   string               `json:"content"`
+	ToolCalls []openaiToolCallResp `json:"tool_calls,omitempty"`
 }
 
 type openaiToolCallResp struct {

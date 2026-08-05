@@ -210,7 +210,7 @@ func (h *AnthropicHandler) handleStream(c *gin.Context, ag *agent.Agent, conv *a
 
 	// message_delta
 	msgDelta := map[string]any{
-		"type": "message_delta",
+		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": "end_turn", "status": "completed"},
 		"usage": map[string]any{"output_tokens": outputTokens},
 	}

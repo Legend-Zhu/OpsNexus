@@ -9,6 +9,7 @@ import (
 	"context"
 	"flag"
 	"log/slog"
+	"net"
 	"os"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/registry"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/router"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 )
@@ -76,6 +78,23 @@ func main() {
 	notifySvc := notify.New(st)
 	h.SetNotifyService(notifySvc)
 
+	// 内嵌镜像仓库(OCI /v2 + 页面传包构建;构建 push 走本机 loopback)
+	if cfg.Registry.Enabled {
+		regSvc, err := registry.NewService(cfg.Registry, serverPort(cfg.Server.Addr))
+		if err != nil {
+			log.Error("registry init failed", "err", err)
+			os.Exit(1)
+		}
+		h.SetRegistryService(regSvc)
+		// 构建 push 账号登录本机 registry(loopback 免 HTTPS);失败仅告警,
+		// 不阻断启动(docker 未装时构建接口会明确 503)
+		if err := regSvc.DockerLogin(context.Background()); err != nil {
+			log.Warn("registry builder docker login failed", "err", err)
+		}
+		log.Info("embedded registry enabled", "storage", cfg.Registry.Storage,
+			"hostname", cfg.Registry.Hostname, "auth", len(cfg.Registry.Users) > 0)
+	}
+
 	// 智能巡检服务（P5：YAML 流程 + 单实例 cron 调度 + AI 报告 +
 	// 报告渠道投递/异常转告警闭环）
 	patrolSvc := patrol.New(st, clusterSvc, ainexusRT, notifySvc)
@@ -130,6 +149,14 @@ func parseDuration(s string, def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+// serverPort 从监听地址提取端口（":8090" → "8090";"0.0.0.0:8090" → "8090"）。
+func serverPort(addr string) string {
+	if _, port, err := net.SplitHostPort(addr); err == nil && port != "" {
+		return port
+	}
+	return "8090"
 }
 
 // oidcFromConfig 提取 OIDC 配置（未配置返回 nil → 仅本地用户）。

@@ -38,9 +38,9 @@ func NewAnthropicProvider(name, baseURL, apiKey string, models []string) *Anthro
 	}
 }
 
-func (p *AnthropicProvider) Name() string         { return p.name }
+func (p *AnthropicProvider) Name() string           { return p.name }
 func (p *AnthropicProvider) ToolFormat() ToolFormat { return ToolFormatAnthropic }
-func (p *AnthropicProvider) Models() []string      { return p.models }
+func (p *AnthropicProvider) Models() []string       { return p.models }
 
 func (p *AnthropicProvider) SupportsModel(model string) bool {
 	for _, m := range p.models {
@@ -54,12 +54,12 @@ func (p *AnthropicProvider) SupportsModel(model string) bool {
 // --- 请求/响应结构体 ---
 
 type anthropicRequest struct {
-	Model     string              `json:"model"`
-	MaxTokens int                 `json:"max_tokens"`
-	System    any                 `json:"system,omitempty"`
-	Messages  []anthropicMessage  `json:"messages"`
-	Tools     []anthropicTool     `json:"tools,omitempty"`
-	Stream    bool                `json:"stream"`
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	System    any                `json:"system,omitempty"`
+	Messages  []anthropicMessage `json:"messages"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
+	Stream    bool               `json:"stream"`
 }
 
 type anthropicMessage struct {
@@ -315,7 +315,7 @@ func (p *AnthropicProvider) processStream(body io.ReadCloser, ch chan<- StreamEv
 
 		case "content_block_delta":
 			var event struct {
-				Index int                       `json:"index"`
+				Index int                        `json:"index"`
 				Delta anthropicContentBlockDelta `json:"delta"`
 			}
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
