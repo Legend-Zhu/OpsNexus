@@ -13,3 +13,8 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+
+# 本地配置与数据
+config.local.yaml
+OpsGaurdWeb/server/configs/config.local.yaml
+OpsGaurdWeb/server/data/
