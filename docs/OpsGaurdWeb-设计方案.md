@@ -118,19 +118,21 @@ OpsGaurdWeb 是**多集群管理控制台**（类 Rancher）：纳管多个 swar
 | 原型页面 | 管理端模块 | 路由 | 数据来源 |
 |---|---|---|---|
 | 运维态势 | 仪表盘 | `/dashboard` | 各集群 Worker 聚合（节点/服务/事件/审计） |
+| 项目管理 | 项目（管理层级第一层） | `/projects` | 管理端项目表 |
 | 项目管理 | 集群管理（类 Rancher） | `/clusters` | 后端集群注册表 |
-| 项目-服务器 | 集群详情（节点/服务列表） | `/clusters/:name` | Worker `/services`、`/nodes`、`/local/stats` |
-| 服务器详情 | 集群资源详情（节点+容器+操作） | `/clusters/:name/:id` | Worker 详情/exec/日志 |
-| 应用服务管理 | 工作负载（swarm 服务） | `/workloads` | Worker `/services`（含部署/缩放/回滚） |
-| 中间件管理 | （v1 由工作负载/端口监控覆盖；专项中间件视图待扩展） | — | — |
-| 实时监控 | 集群监控（节点资源/服务健康） | `/monitor` | Worker `/local/stats` + 事件 |
-| 告警中心 | 告警中心 | `/alerts` | Worker `/events`（webhook 已推送到管理端）+ AI 深度排查入口 |
-| 巡检编排/调度/报告 | 智能巡检（YAML 编排 + 内置调度 + 报告） | `/patrol` | 管理端存储 + 调度引擎 + AiNexus 生成 |
-| 智能助手/LLM 策略 | AI 助手（对话 + 模型策略） | `/troubleshoot` | AiNexus（SSE 透传） |
+| 项目-服务器 | 集群详情（节点/服务/进程） | `/clusters/:name` | Worker `/services`、`/nodes`、`/local/stats`、`/local/processes` |
+| 服务器详情 | 集群资源详情（节点+容器+操作） | `/clusters/:name`（详情抽屉） | Worker 详情/exec/日志 |
+| 应用服务管理 | 工作负载（swarm 服务） | `/clusters/:name`（收编） | Worker `/services`（含部署/缩放/回滚） |
+| 中间件管理 | 节点探测覆盖（端口/HTTP/进程 filter） | `/clusters/:name`（节点抽屉） | Worker `/local/check/*`、`/local/processes` |
+| 实时监控 | 集群监控（节点资源/服务健康） | `/clusters/:name`（收编） | Worker `/local/stats` + 事件 |
+| 告警中心 | 告警中心（已排查标记 + 一键跳转排查） | `/alerts` | Worker `/events`（webhook 已推送到管理端）+ investigation 回写 |
+| 巡检编排/调度/报告 | 智能巡检（YAML 五类检查 + 内置调度 + 报告 + 异常转告警） | `/patrol` | 管理端存储 + 调度引擎 + AiNexus 生成 |
+| 智能助手/LLM 策略 | 对话式排查（选告警/自由提问/多轮/落库） | `/troubleshoot` | AiNexus `/chat`（SSE + alert_id 证据注入） |
+| —（新增） | 镜像仓库（内嵌 registry + 上传构建 + 镜像列表） | `/registry` | 管理端 registry（/v2 + 构建任务） |
 | 通知管理 | 通知中心（渠道/策略/记录） | `/notify` | 管理端（对接 Worker webhook 出口 + 飞书/短信） |
-| 系统设置 | 系统设置（用户/Agent 配置） | `/system` | 管理端 |
+| 系统设置 | 系统设置（用户/SSO/模型配置/AI 网关/巡检报告） | `/system` | 管理端 |
 
-> 骨架路由已建 4 个（dashboard/clusters/workloads/troubleshoot）；告警/巡检/通知/系统按上表补路由。
+> 注：工作负载/监控已收编进集群详情页（/workloads、/monitor 重定向 /clusters）。
 
 ---
 
@@ -140,20 +142,25 @@ OpsGaurdWeb 是**多集群管理控制台**（类 Rancher）：纳管多个 swar
 
 ```
 server/internal/
-├── api/            # handlers（clusters 已接真逻辑；workloads/events/audit 待 P2/P3）
-├── config/         # 集群注册表 + AiNexus 内嵌配置 + store 路径
-├── router/         # 路由（含 ainexus 组）
-├── ainexus/        # 【内嵌】AiNexus 网关代码（从仓库 ./AiNexus vendor 进本模块，
-│                   #        providers/tools/mcp/agent/handler/server 全套，单进程运行；
-│                   #        AddMCPCluster 动态连接集群 Worker MCP 采证，✅ P4）
-├── cluster/        # 集群管理：注册表 CRUD + Worker 连接状态探测 + 告警查询（✅ P1/P3）
+├── api/            # handlers（clusters/workloads/events/audit/patrol/notify/settings/registry/investigations）
+├── config/         # 集群注册表 + AiNexus 内嵌配置 + registry 配置 + store 路径
+├── router/         # 路由（含 ainexus 组、/v2 registry 协议端点）
+├── ainexus/        # 【内嵌】AiNexus 网关代码（providers/tools/mcp/agent/handler/server 全套，
+│                   #        单进程运行；AddMCPCluster 动态连接集群 Worker MCP 采证；
+│                   #        MCP headers 透传 + 工具名清洗为合法 function name，✅ P4/P7）
+├── cluster/        # 集群管理：注册表 CRUD + Worker 连接状态探测 + 告警查询 + 排查会话（✅ P1/P3）
 ├── ingest/         # Worker webhook 入口：事件落库 + 事件→告警聚合（✅ P3）
-├── workerproxy/    # Worker HTTP 代理客户端：healthz/self/services(+编排操作)/events/audit/local/stats/logs(SSE)（✅ P1/P2/P3）
-├── patrol/         # 巡检：YAML 流程定义/校验 + 执行（resource/health 检查→异常→AI 报告）+ 内置调度（✅ P5）
-├── notify/         # 通知：渠道（可配置不预设）/策略/记录 + 互联网代理转发（✅ P6）
+├── workerproxy/    # Worker HTTP 代理客户端：healthz/self/services/events/audit/local/stats/logs(SSE)
+│                   #   + 节点探测 CheckPort/CheckHTTP + 进程 filter（✅ P1/P2/P3/P8）
+├── patrol/         # 巡检：YAML 流程（resource/health/port/http/process 五类检查）+ 内置调度
+│                   #   + AI 报告 + 报告渠道投递 + 异常转告警闭环（✅ P5/P8）
+├── notify/         # 通知：渠道（可配置不预设）/策略/记录 + 互联网代理转发 + 通用 Send（✅ P6/P8）
 ├── alertrule/      # 告警规则：管理 Worker monitoring config（决策⑦）+ 下发（✅ P6）
 ├── auth/           # 认证：本地用户（加盐哈希 + HMAC token）+ OIDC/SSO 抽象 + 中间件（✅ P6）
-└── store/          # 持久化（LevelDB/goleveldb 嵌入式 KV，✅ P1/P3：集群表 + 事件/告警 + 索引 + 序列 + 迁移）
+├── registry/       # 内嵌镜像仓库：OCI /v2（pull/push/catalog/tags/delete，basic auth）
+│                   #   + 页面传包构建（docker CLI，任务状态机）+ 保留策略/GC（✅ P9）
+└── store/          # 持久化（LevelDB/goleveldb 嵌入式 KV：集群/事件/告警/巡检/通知/用户
+                    #   + settings/investigation/ainexus 桶 + 索引 + 序列 + 迁移）
 ```
 
 ### 4.2 API 规划（骨架基础上扩展）
@@ -163,7 +170,7 @@ server/internal/
 GET/POST    /api/v1/clusters                    # 列表 / 接入（Worker URL+token+名称）
 GET/DELETE  /api/v1/clusters/:name              # 详情（健康探测）/ 移除
 GET         /api/v1/clusters/:name/nodes        # 节点列表（经 Worker /nodes）
-GET         /api/v1/clusters/:name/nodes/:id    # 节点详情（stats 聚合）
+GET         /api/v1/clusters/:name/nodes/:id/processes   # 节点进程（top/limit/filter）
 
 # 工作负载（经 Worker 代理）
 GET         /api/v1/clusters/:name/workloads            # Worker /services
@@ -181,18 +188,36 @@ GET         /api/v1/clusters/:name/metrics      # 节点资源聚合（Worker /l
 # AiNexus 整合（内嵌网关，不单独起服务）
 GET         /api/v1/ainexus/health                # 内嵌网关健康（providers/models/tools/mcp）
 GET         /api/v1/ainexus/models                # 模型列表（模型选择器）
-POST        /api/v1/ainexus/chat                  # OpenAI 格式对话（SSE 流式，进程内直调）
-POST        /api/v1/ainexus/investigate           # 深度排查：告警 → 拼上下文 → 内嵌 Agent
+POST        /api/v1/ainexus/chat                  # 对话式排查（SSE；扩展 alert_id/use_mcp：证据前缀注入+多轮追问）
+POST        /api/v1/ainexus/investigate           # 深度排查：告警 → 拼上下文 → 内嵌 Agent（一次性）
+GET/PUT     /api/v1/ainexus/config                # 网关配置（页面管理，保存即热重载）
 # 内嵌网关原生端点（挂载 /ainexus，兼容 AiNexus 自身 URL 契约）
 GET         /ainexus/health | /ainexus/api/models | /ainexus/api/tools | /ainexus/api/mcp
 POST        /ainexus/v1/chat/completions | /ainexus/v1/messages
 GET         /ainexus/v1/models
 
-# 巡检（新增）
+# 排查会话（对话式 troubleshoot 落库，关联告警回写「已排查」）
+POST        /api/v1/investigations                # 保存（带 alert_id 回写告警标记）
+PUT         /api/v1/investigations/:id            # 追问后更新同一条
+GET         /api/v1/investigations/:id            # 详情
+GET         /api/v1/alerts/:id/investigations     # 按告警列出历史排查
+
+# 巡检（YAML 流程：resource/health/port/http/process 五类检查）
 GET/POST    /api/v1/patrols                     # YAML 流程 CRUD + 校验
 POST        /api/v1/patrols/:id/run             # 立即执行
 GET         /api/v1/patrols/:id/runs            # 执行记录
 GET         /api/v1/patrols/:id/reports         # 报告
+GET/PUT     /api/v1/settings/patrol-report      # 报告投递策略（每次/仅异常/关闭 + 渠道）
+
+# 内嵌镜像仓库（管理 API；/v2 协议端点见下）
+GET         /api/v1/registry/info               # 服务信息（hostname/docker 可用性/保留策略）
+POST        /api/v1/registry/builds             # 上传 zip 构建（multipart/octet-stream）
+GET         /api/v1/registry/builds[/:id]       # 构建任务轮询（状态/进度/步骤日志）
+GET         /api/v1/registry/images             # 镜像列表（repo+tags+大小+更新时间）
+DELETE      /api/v1/registry/images/*ref        # 删除 tag（<name>/tags/<tag>）
+
+# OCI 镜像仓库协议端点（docker CLI 直连，独立 basic auth，不走会话认证）
+*           /v2/*                               # pull/push/uploads/catalog/tags/delete
 
 # 通知/系统（新增）
 GET/POST    /api/v1/notify/channels             # 渠道（飞书/短信/...）
@@ -241,15 +266,28 @@ GET/POST    /api/v1/users                       # 用户管理
 - **via_proxy 标记**：需访问公网的渠道一律经代理转发；代理是独立小服务（HTTP 转发，接收内网请求后带自身凭据调公网 API），**公网凭据不进入内网管理端**。
 - **v1 必支持**：飞书（机器人 Webhook）与短信（至少一家服务商），经代理链路。
 
-### 5.5 闭环链路（演示场景）
+### 5.5 闭环链路（2026-08-05 全部打通）
 
 ```
-用户："app-server-02 为什么 CPU 这么高？"
-  → 前端 /troubleshoot → 后端 /ainexus/chat（SSE，进程内）
-  → 内嵌 AiNexus（model=deepseek-v4-flash）ReAct Agent
-  → MCP call → Worker /mcp exec_host_command("top") / get_service_logs / get_events
-  → 证据回 AiNexus → LLM 根因分析 → SSE 回前端展示（证据链 + 因果 + 建议）
+① Worker 监控事件 ──webhook──▶ ingest ──▶ 告警聚合 ──▶ notify 按级别策略投递渠道
+② 巡检 cron/手动 ──▶ 五类检查(resource/health/port/http/process)──▶ 异常
+     ├──▶ patrol_failed 告警(按 检查项|节点 细分,新增/复发才通知,恢复自动关闭)
+     └──▶ AI 报告(每次 Run 结束生成)──▶ 按 settings/patrol-report 投递渠道(每次/仅异常/关闭)
+③ 告警 ──▶ 对话式排查(troubleshoot 页:选告警 or 自由提问,多轮追问,
+     服务端注入事件/日志/审计证据前缀,可选 MCP 采证)
+     └──▶ 会话自动落库(investigation)──▶ 回写告警「已排查×N」──▶ 告警页一键跳转
+④ 页面传 zip ──▶ 管理端 docker build ──▶ push 内嵌 registry(127.0.0.1 loopback)
+     ──▶ 集群节点 docker pull(统一主机名 + insecure-registries)──▶ 部署上线
 ```
+
+### 5.6 内嵌镜像仓库与构建（P9，双网段统一寻址）
+
+- **形态**：OCI registry 以 `/v2` 协议端点内嵌进管理端进程（与管理台同端口），文件存储（blobs content-addressable + manifests/tags link，原子写入），不经 LevelDB；支持 pull/push/catalog/tags/delete，manifest content-type 原样存取（docker schema2 / OCI / image index 透明，多架构 manifest 可存可拉）。
+- **认证**：/v2 走独立 HTTP Basic（`registry.users`，bcrypt 或 `{PLAIN}`），不走管理端会话认证；管理端构建 push 用 `registry.builder` 账号（启动时 docker login 一次）。空用户表 = 内网全信放行。
+- **构建（参考 CI build-api 模式）**：页面上传 zip（Dockerfile + 编译产物，≤500MB，名称白名单防注入）→ 管理端解压（zip-slip 防护、.sh 自动 +x、Dockerfile 目录为 context）→ `docker build` → `docker push 127.0.0.1:<port>`（**loopback 免 HTTPS，管理端 dockerd 零配置**）→ 清理。任务状态机 PENDING→EXTRACTING→BUILDING→PUSHING→CLEANING→SUCCESS/FAILED + 进度 + 步骤日志，页面轮询。
+- **双网段统一寻址（10 内网 / 172 政务外网）**：镜像名内嵌 registry 地址，网段割裂会导致"外推的镜像内网拉不了"。解法=镜像引用统一用**主机名**（`registry.hostname`，默认 `registry.opsguard`）：集群节点（10 段）与构建机（172 段）各自 /etc/hosts 解析到本网段的管理端地址；节点 `daemon.json` 的 `insecure-registries` 配主机名条目（双网段通用）；部署 YAML 的 image 永远写 `registry.opsguard:<port>/<name>:<tag>`。页面上传构建天然规避寻址（构建机只需能开管理台页面）。
+- **保留策略 + GC**：每仓库保留最近 N 个 tag（`retention_per_repo` 默认 10），manifest 写入/删除后自动裁剪 + mark-sweep 清无引用 blob。
+- **部署前提**：管理端服务器双网卡（或两网段路由可达）+ 装 docker CLI（仅构建需要）。
 
 ---
 
@@ -266,6 +304,9 @@ GET/POST    /api/v1/users                       # 用户管理
 7. **SSO 认证**：管理端用户认证对接企业 SSO（OIDC/SAML 网关），本地账号仅作 fallback；用户/角色与 SSO 目录同步。✅ 已确认
 8. **通知渠道可配置 + 互联网代理**：渠道（飞书/短信/钉钉/企微/邮件）均为可配置项，不预设默认；**内网部署约束**——外呼类渠道（短信、飞书等需访问公网）一律经**互联网转发代理**（独立部署在可访问公网的服务器上，内网管理端 → 代理 → 公网渠道 API），代理凭据不入内网库。✅ 已确认
 9. **告警规则管理 Worker monitoring config**：管理端告警规则页 = 编辑目标集群 Worker 的服务 monitoring 配置（单一事实来源），不在管理端做独立规则引擎。✅ 已确认
+10. **巡检闭环**：巡检报告按全局设置（`settings/patrol-report`：每次/仅异常/关闭 + 渠道）投递通知渠道；巡检异常按 `检查项|节点` 细分为 `patrol_failed` 告警（确定键 ID、原地重激活、新增/复发才通知、恢复自动关闭）。✅ 已实现（2026-08-05）
+11. **对话式排查**：troubleshoot 为对话界面（选告警 or 自由提问、多轮追问）；`/ainexus/chat` 扩展 `alert_id`/`use_mcp`——服务端注入证据前缀（每轮前置，追问不丢上下文）+ 按需挂集群 MCP；会话自动落库 `investigation/` 并回写告警「已排查」标记。✅ 已实现（2026-08-05）
+12. **内嵌镜像仓库**：OCI registry 内嵌管理端进程（/v2，basic auth），镜像构建在**管理端本机**执行（docker CLI，职责清晰），push 走 127.0.0.1 loopback 免 HTTPS；**双网段（10 内网/172 政务外网）统一主机名寻址**，规避"外推内拉"割裂。✅ 已实现（2026-08-05）
 
 ---
 
@@ -287,13 +328,24 @@ event/<seq>                       -> IngestEvent{id, ts, cluster_id, service, ty
 event/idx/cluster/<cluster>/<seq> -> ""  （按集群过滤，可选）
 
 alert/<id>                        -> Alert{id, cluster_id, service, level, title,
-                                       status(active/acked/recovered), count, first_ts, last_ts}
+                                       status(active/acked/recovered), count, first_ts, last_ts,
+                                       investigations, last_investigation_id}  // 排查回写
 alert/idx/<status>/<cluster>/<ts>/<id> -> ""  （告警列表过滤/排序索引）
+// 告警 id = sha256(cluster|service|type) 前 6 字节；巡检告警用 AlertIDWithKey
+// （附加 检查项|节点 标识），复发原地重激活（不换 id），见 syncAlerts
 
 patrol/<id>                       -> Patrol{id, name, description, cron, enabled, yaml}
 patrolrun/<id>                    -> PatrolRun{id, patrol_id, started_at, finished_at,
-                                       result, anomalies}
+                                       result, anomalies}   // Anomaly 含 node 字段（节点级检查）
 report/<id>                       -> Report{id, patrol_run_id, ai_summary}
+
+investigation/<seq>               -> Investigation{id, alert_id, cluster, title,
+                                       messages(对话 JSON), conclusion, model, created_at}
+                                       // 对话式排查落库；关联告警时回写 alert.investigations
+
+settings/<key>                    -> JSON 值（全局设置，如 patrol-report 投递策略）
+
+ainexus/runtime                   -> 网关运行时配置（YAML 原文，页面保存即热重载）
 
 notify/channel/<id>               -> NotifyChannel{id, type, name, config, via_proxy, enabled}
 notify/policy/<level>             -> NotifyPolicy{level, channel_ids, receivers, escalate}
@@ -320,6 +372,9 @@ seq/<kind>                        -> 自增序列（告警 id、事件 seq 等�
 | **P4 AiNexus 整合** ✅ | **vendor AiNexus 进后端** + `/ainexus/*` 原生端点 + /ainexus/chat 进程内 SSE + **深度排查闭环**（告警 → 事件/日志/审计上下文注入 → 内嵌 Agent + **动态连接集群 Worker MCP 采证**） | `ainexus/` 内嵌网关、前端 troubleshoot 页（已提交，真机 LLM 联调待做） |
 | **P5 智能巡检** ✅ | YAML 流程 CRUD + 内置调度引擎（单实例 Go cron）+ 执行记录 + AI 报告 | `patrol/`、前端 patrol/schedule/report 页（已提交，真机验证通过（2026-08-05）） |
 | **P6 通知/系统** ✅ | 渠道（可配置）+ 互联网代理对接 + 策略/记录 + **SSO 认证**（OIDC + 本地 fallback）+ 用户管理 + 告警规则（管理 Worker monitoring config） | `notify/`、`alertrule/`、`auth/`、`users`、前端 notify/system 页（已提交，真机验证通过（2026-08-05）） |
+| **P7 网关页面化** ✅ | AiNexus 网关配置页面管理（保存即热重载）+ 模型统一配置（default_model + 集群 MCP 自动合并）+ MCP headers 透传/工具名清洗修复 | `ainexusrt/`、系统设置「模型配置/AI 排查网关」tab（2026-08-05） |
+| **P8 巡检闭环+节点探测** ✅ | 巡检 port/http/process 检查类型（Worker `/local/check/*` + 进程 filter）+ 报告渠道投递 + 异常转告警（patrol_failed）+ 对话式排查页（多轮/落库/告警回写）+ MCP 探测三工具（check_port/check_http/list_host_processes） | `patrol/`、`api/investigation.go`、troubleshoot 对话页（2026-08-05） |
+| **P9 内嵌镜像仓库** ✅ | OCI /v2（pull/push/catalog/delete，basic auth）+ 页面传包构建（docker CLI 状态机）+ 保留策略/GC + 双网段统一主机名寻址 | `registry/`、前端镜像仓库页（2026-08-05） |
 
 每阶段：单元测试 + 真机（双节点 swarm）联调 + 文档更新。
 
@@ -343,12 +398,13 @@ seq/<kind>                        -> 自增序列（告警 id、事件 seq 等�
 | 原型功能 | 落点 | 状态 |
 |---|---|---|
 | 资源采集（CPU/内存/磁盘） | Worker `/local/stats` + 节点 stats | ✅ 已实现 |
-| 进程/服务健康 | Worker 服务健康（task+healthcheck） | ✅ 已实现 |
+| 进程/服务健康 | Worker 服务健康（task+healthcheck）+ `/local/processes`（filter） | ✅ 已实现 |
 | 命令执行/SSH | Worker `exec_host_command`/`exec_in_container`（黑白名单） | ✅ 已实现 |
-| MCP 工具（AI 排查证据） | Worker `/mcp` 16 工具 | ✅ 已实现 |
-| 事件/告警 | Worker 事件 + webhook 推送 | ✅ 已实现（管理端 ingest 待做） |
-| LLM 对话/多模型路由 | AiNexus（**vendor 进后端**） | ✅ 现成代码（待整合） |
-| 分层调 LLM 策略 | AiNexus 多模型路由 + 管理端按场景指定 model | 待整合 |
-| 巡检编排/调度/报告 | 管理端 `patrol/`（新增） | 待开发 |
-| 通知（飞书/短信） | 管理端 `notify/`（新增） | 待开发 |
-| 用户/系统设置 | 管理端（新增） | 待开发 |
+| MCP 工具（AI 排查证据） | Worker `/mcp` 19 工具（含 check_port/check_http/list_host_processes） | ✅ 已实现 |
+| 事件/告警 | Worker 事件 + webhook 推送 + 管理端 ingest 聚合 | ✅ 已实现 |
+| LLM 对话/多模型路由 | AiNexus（已 vendor 进后端，`server/internal/ainexus`） | ✅ 已实现 |
+| 分层调 LLM 策略 | AiNexus 多模型路由 + default_model 统一配置（页面管理，热重载） | ✅ 已实现 |
+| 巡检编排/调度/报告 | 管理端 `patrol/`（五类检查 + 报告投递 + 异常转告警） | ✅ 已实现 |
+| 通知（飞书/短信） | 管理端 `notify/`（渠道/策略/记录 + 通用 Send） | ✅ 已实现 |
+| 用户/系统设置 | 管理端（用户/SSO/模型配置/网关/巡检报告 tab） | ✅ 已实现 |
+| 镜像仓库/构建 | 管理端 `registry/`（内嵌 OCI /v2 + 页面传包构建） | ✅ 已实现（P9） |

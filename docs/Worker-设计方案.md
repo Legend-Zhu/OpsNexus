@@ -58,7 +58,7 @@ Worker 以 **Docker Swarm 全局服务（global service）** 形式部署到所�
 **角色判定**：Worker 通过 `/info` 的 `Swarm.NodeID`（权威，非 hostname 匹配）读取自身节点，结合 `Spec.Role` 判定；agent config `worker.role` 可显式指定 `manager`/`node` 覆盖 auto 推导。
 
 - **manager-role Worker**：独占编排能力（`ensureSwarmManager` 守卫写操作）；承担**服务级**监控（service logs、routing-mesh 端口/HTTP 探活）；聚合所有节点上报的本地指标；是事件总线中心；MCP Server 端点。
-- **node-role Worker**（每台纳管服务器都部署）：提供**本地接口** `GET /api/v1/local/stats`、`POST /api/v1/local/exec`、`POST /api/v1/local/host`、`GET /api/v1/local/logs`（SSE 流式日志），供 manager 跨节点代理采集。
+- **node-role Worker**（每台纳管服务器都部署）：提供**本地接口** `GET /api/v1/local/stats`、`GET /api/v1/local/processes`（宿主机进程）、`POST /api/v1/local/exec`、`POST /api/v1/local/host`、`GET /api/v1/local/logs`（SSE 流式日志）、`GET /api/v1/local/check/port` / `POST /api/v1/local/check/http`（一次性探测），供 manager 跨节点代理采集。
 - **跨节点代理（manager→node）**：manager 的 MCP 工具（`get_resource_usage`/`exec_in_container`/`exec_host_command`）按任务所在节点路由到对应 node worker 的本地接口，实现**跨节点指标聚合与命令执行**。
 - **Leader 选举**：swarm manager 集群本身有 Raft leader。manager-role Worker 中仅 `ManagerStatus.Leader==true` 者执行"写"编排与全局事件汇聚；其余 manager 实例做热备（API 代理到 leader）。
 
@@ -148,15 +148,22 @@ Worker 单二进制（Go）
 | `GET` | `/api/v1/operations[/{id}]` | 操作跟踪 |
 | `GET` | `/api/v1/events` | 监控事件（`?service=&type=&limit=`） |
 | `GET` | `/api/v1/self` | 本节点 swarm 角色 |
+| `GET` | `/api/v1/nodes` | 集群节点列表（含资源聚合） |
+| `GET` | `/api/v1/nodes/{id}/processes` | 节点进程代理（`top`/`limit`/`filter` 转发；id 支持 node ID 或 hostname） |
+| `GET` | `/api/v1/nodes/{id}/check/port` | 节点级 TCP 探测代理（`?host=&port=&timeout=`） |
+| `POST` | `/api/v1/nodes/{id}/check/http` | 节点级 HTTP 探测代理（JSON body 原样转发） |
 
 **本地节点接口（每台纳管服务器，`/api/v1/local/...`，供 manager 跨节点代理）**
 
 | Method | Path | 说明 |
 |---|---|---|
 | `GET` | `/api/v1/local/stats` | 本节点 swarm 容器实时 CPU%/Mem%（快照差值） |
+| `GET` | `/api/v1/local/processes` | 宿主机进程列表（纯 Go 扫 /proc；`?top=cpu|mem&limit=N&filter=名称/cmdline 子串`） |
 | `POST` | `/api/v1/local/exec` | 容器内执行命令（`{container|service+slot, command}`，走命令策略） |
 | `POST` | `/api/v1/local/host` | 宿主机执行命令（nsenter，走命令策略） |
 | `GET` | `/api/v1/local/logs` | **SSE 流式日志**：`?service=&follow=true|false&tail=N&since=`，等价 `docker service logs -f` |
+| `GET` | `/api/v1/local/check/port` | 一次性 TCP 探测任意 host:port（`?host=&port=&timeout=`，只读不挂命令策略） |
+| `POST` | `/api/v1/local/check/http` | 一次性 HTTP 探测任意 URL（`{url,method,headers,expectedStatus,expectedBody,timeout}`） |
 
 **鉴权**：管理端→Worker 用 **mTLS**（Worker 侧加载 ca/cert/key，与 swarm manager 2376 同套体系）或共享 token；跨集群走 HTTPS。`/local/*` 含命令执行能力，生产须置于仅内网/带鉴权代理后。
 
@@ -582,7 +589,7 @@ commandPolicy:
 > **P3 实现说明（已落地，`internal/mcp/`，基于 go-sdk v1.7.0）**：
 > - **传输**：Streamable HTTP（单 endpoint `POST /mcp`，**stateless**，`StreamableHTTPOptions.Stateless=true`，2026-07-28 无状态协议必需；真机发现并修复）；`-mcp-stdio` 模式走 stdio（newline-delimited JSON-RPC 自定义 transport，与 SDK custom-transport 同款）。
 > - **Server**：`mcp.NewServer` + 泛型 `mcp.AddTool[In,Out]`（自动生成 input/output JSON Schema 2020-12、入参校验、`structuredContent` 输出）。
-> - **Tools（16 个，已注册）**：编排类 list/get/deploy/update/scale/restart/remove_service、get_service_logs、get_events、get_operation、list/get_node、get_self；命令执行类 **exec_in_container**（跨节点路由）、**exec_host_command**（nsenter 宿主机，跨节点，黑白名单）；指标类 **get_resource_usage**（跨节点聚合）。危险操作（remove/scale=0/两类 exec）要求 `confirm=true`，否则返回 `isError` 工具错误（e2e 已验证，含 `rm -rf /` 被黑名单拦截）。
+> - **Tools（19 个，已注册）**：编排类 list/get/deploy/update/scale/restart/remove_service、get_service_logs、get_events、get_operation、list/get_node、get_self；命令执行类 **exec_in_container**（跨节点路由）、**exec_host_command**（nsenter 宿主机，跨节点，黑白名单）；指标类 **get_resource_usage**（跨节点聚合）；节点探测类 **check_port**（任意 host:port TCP）、**check_http**（任意 URL，状态码+body 正则）、**list_host_processes**（宿主机进程发现，名称/cmdline 子串过滤）——探测类只读、无需 confirm，node 参数空=全部 ready 节点扇出（单点失败降级为结果条目），供排查 LLM 检查宿主机中间件/Java 进程。危险操作（remove/scale=0/两类 exec）要求 `confirm=true`，否则返回 `isError` 工具错误（e2e 已验证，含 `rm -rf /` 被黑名单拦截）。
 > - **Resources（3 个）**：`worker://services`、`worker://services/{name}`（template）、`worker://events`。
 > - **协议能力**：go-sdk 自动实现 `server/discover`、版本协商（2026-07-28/2025-11-25）、每请求 `_meta` 能力声明；客户端 e2e 确认 `InitializeResult().ProtocolVersion=2026-07-28`。2026-07-28 要求请求体 `_meta` 携带 `io.modelcontextprotocol/protocolVersion`（手写 JSON-RPC 需显式带，SDK 客户端自动带）。
 > - **跨节点**：manager 按任务所在节点路由到 node worker 的 `/api/v1/local/*`，聚合 stats、代理 exec、广播 host 命令（真机双节点验证）。
