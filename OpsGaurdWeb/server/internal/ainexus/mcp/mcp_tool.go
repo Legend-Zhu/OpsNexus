@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"regexp"
 	"unicode/utf8"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/tool"
@@ -31,13 +33,35 @@ type MCPClient interface {
 	CallTool(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error)
 }
 
-// Name 返回工具名称（带 server 前缀避免冲突）
+// openAIToolNameMaxLen OpenAI function name 长度上限（规范 ^[a-zA-Z0-9_-]{1,64}$）。
+const openAIToolNameMaxLen = 64
+
+// toolNameInvalidChars OpenAI function name 非法字符（连续一段折叠成一个 _）。
+var toolNameInvalidChars = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+
+// Name 返回工具名称（带 server 前缀避免冲突）。
+// 集群 server 名形如 "cluster:prod"，含 ":" 等 OpenAI function name 非法字符，
+// 部分 openai_compatible 提供商会直接拒绝整个 tools 定义——统一清洗成合法名，
+// 超长则以哈希后缀截断保唯一。原始 server 名仍保留在 Description 中供 LLM 识别集群。
 func (t *MCPTool) Name() string {
 	// 如果工具名已经有 mcp_ 前缀就不重复加
 	if len(t.toolName) > 4 && t.toolName[:4] == "mcp_" {
-		return t.toolName
+		return sanitizeToolName(t.toolName)
 	}
-	return "mcp_" + t.serverName + "_" + t.toolName
+	return sanitizeToolName("mcp_" + t.serverName + "_" + t.toolName)
+}
+
+// sanitizeToolName 清洗成合法 OpenAI function name（[a-zA-Z0-9_-]，≤64）。
+// 清洗后只剩 ASCII，按字节截断安全。
+func sanitizeToolName(name string) string {
+	name = toolNameInvalidChars.ReplaceAllString(name, "_")
+	if len(name) <= openAIToolNameMaxLen {
+		return name
+	}
+	h := fnv.New32a()
+	h.Write([]byte(name))
+	suffix := fmt.Sprintf("_%08x", h.Sum32())
+	return name[:openAIToolNameMaxLen-len(suffix)] + suffix
 }
 
 // Description 返回工具描述

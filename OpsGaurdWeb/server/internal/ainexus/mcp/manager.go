@@ -10,6 +10,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/tool"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -129,7 +130,11 @@ func (m *Manager) createStdioClient(cfg config.MCPServerConfig) (*mcpclient.Clie
 
 // createSSEClient 创建 SSE 传输客户端
 func (m *Manager) createSSEClient(cfg config.MCPServerConfig) (*mcpclient.Client, error) {
-	client, err := mcpclient.NewSSEMCPClient(cfg.URL)
+	var opts []transport.ClientOption
+	if len(cfg.Headers) > 0 {
+		opts = append(opts, transport.WithHeaders(cfg.Headers))
+	}
+	client, err := mcpclient.NewSSEMCPClient(cfg.URL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create SSE client: %w", err)
 	}
@@ -138,7 +143,11 @@ func (m *Manager) createSSEClient(cfg config.MCPServerConfig) (*mcpclient.Client
 
 // createStreamableHTTPClient 创建 Streamable HTTP 传输客户端
 func (m *Manager) createStreamableHTTPClient(cfg config.MCPServerConfig) (*mcpclient.Client, error) {
-	client, err := mcpclient.NewStreamableHttpClient(cfg.URL)
+	var opts []transport.StreamableHTTPCOption
+	if len(cfg.Headers) > 0 {
+		opts = append(opts, transport.WithHTTPHeaders(cfg.Headers))
+	}
+	client, err := mcpclient.NewStreamableHttpClient(cfg.URL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create StreamableHTTP client: %w", err)
 	}
