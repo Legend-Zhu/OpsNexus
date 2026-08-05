@@ -85,6 +85,10 @@ checks:
     cluster: dev
     filter: java
 # report.model 由上方「报告模型」下拉自动写入（也可手写覆盖）" />
+          <div class="yaml-actions">
+            <el-button link type="primary" size="small" :icon="Download" @click="downloadTemplate">下载完整模板</el-button>
+            <span class="muted">含全部 5 种检查类型与字段注释</span>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -148,7 +152,7 @@ checks:
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Download } from '@element-plus/icons-vue'
 import { ainexusApi, patrolApi } from '@/api'
 import type { AINexusModelInfo, Patrol, PatrolReport, PatrolRun } from '@/types'
 
@@ -182,6 +186,58 @@ const currentReport = ref<PatrolReport | null>(null)
 
 function runStatusTag(s: string) {
   return s === 'success' ? 'success' : s === 'running' ? 'warning' : 'danger'
+}
+
+// 巡检流程完整模板（与占位示例一致 + 全字段注释），供下载后离线编辑。
+const FLOW_TEMPLATE = `name: nightly                      # 流程名（必填）
+description: 每日凌晨巡检        # 可选
+checks:
+  - type: resource               # 服务容器资源阈值
+    cluster: dev                 # 集群名（必填）
+    service: web                 # 服务名（resource/health 必填）
+    cpu_threshold: 85            # CPU 百分比上限
+    mem_threshold: 90            # 内存百分比上限
+
+  - type: health                 # 服务副本健康
+    cluster: dev
+    service: api
+    min_replicas: 2              # 最少运行副本数
+
+  - type: port                   # 从节点发起 TCP 端口探测
+    cluster: dev
+    # node: node1                # 可选：只在该节点探测（ID/hostname；空=全部 ready 节点）
+    host: 10.0.0.11              # 探宿主机中间件用节点 IP，勿用 127.0.0.1
+    port: 3306
+    timeout: 3s                  # 可选，默认 3s，上限 10s
+
+  - type: http                   # 从节点发起 HTTP 探测
+    cluster: dev
+    url: http://10.0.0.11:8080/healthz
+    method: GET                  # 可选，默认 GET
+    expected_status: [200, 204]  # 可选，空 = 任意 2xx
+    expected_body: '"status":"ok"' # 可选，body 正则
+    timeout: 3s
+
+  - type: process                # 宿主机进程发现（中间件/Java 进程）
+    cluster: dev
+    # node: node1
+    filter: java                 # 名称/命令行子串（大小写不敏感）
+    min_count: 1                 # 每节点最少匹配数，少于即异常（默认 1）
+
+report:
+  # model: qwen-plus           # 报告模型；不填用「AI 排查网关」默认模型
+  # prompt: 重点关注存储类异常   # 附加报告要求
+# 报告投递渠道在 系统设置 → 巡检报告 配置（每次生成/仅有异常/不发送）
+`
+
+function downloadTemplate() {
+  const blob = new Blob([FLOW_TEMPLATE], { type: 'text/yaml;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'patrol-template.yaml'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 function anomalyCount(run: PatrolRun) {
@@ -376,6 +432,12 @@ onMounted(async () => {
 .mono :deep(textarea) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
+}
+.yaml-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
 }
 .yaml-box {
   background: #0d1117;

@@ -31,7 +31,14 @@
           <el-tag size="small" type="info">{{ typeText(row.type) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="标题" prop="title" min-width="220" show-overflow-tooltip />
+      <el-table-column label="标题" min-width="220" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span>{{ row.title }}</span>
+          <el-tag v-if="row.investigations" size="small" type="success" effect="plain" class="ml">
+            已排查{{ row.investigations > 1 ? `×${row.investigations}` : '' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="次数" prop="count" width="70" align="center" />
       <el-table-column label="首次" width="160">
         <template #default="{ row }">{{ formatTime(row.first_ts) }}</template>
@@ -44,8 +51,9 @@
           <el-tag size="small" :type="statusTag(row.status)">{{ statusText(row.status) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="150" fixed="right">
+      <el-table-column label="操作" width="200" fixed="right">
         <template #default="{ row }">
+          <el-button link type="warning" @click="goTroubleshoot(row)">排查</el-button>
           <template v-if="row.status === 'active'">
             <el-button link type="primary" @click="ack(row)">认领</el-button>
             <el-button link type="success" @click="recover(row)">恢复</el-button>
@@ -53,7 +61,6 @@
           <template v-else-if="row.status === 'acked'">
             <el-button link type="success" @click="recover(row)">恢复</el-button>
           </template>
-          <span v-else class="muted">—</span>
         </template>
       </el-table-column>
     </el-table>
@@ -64,8 +71,11 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 import { alertApi, clusterApi } from '@/api'
 import type { Alert, ClusterSummary } from '@/types'
+
+const router = useRouter()
 
 const clusters = ref<ClusterSummary[]>([])
 const cluster = ref('')
@@ -89,6 +99,7 @@ function typeText(t: string) {
     log_match: '日志匹配',
     resource_over: '资源超限',
     resource_recovered: '资源恢复',
+    patrol_failed: '巡检异常',
   }
   return map[t] ?? t
 }
@@ -125,6 +136,11 @@ async function recover(row: Alert) {
   await alertApi.recover(row.id)
   ElMessage.success('已恢复')
   await fetchAlerts()
+}
+
+// 跳转对话式排查页并预选该告警
+function goTroubleshoot(row: Alert) {
+  router.push({ path: '/troubleshoot', query: { alert: row.id } })
 }
 
 onMounted(async () => {

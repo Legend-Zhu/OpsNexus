@@ -100,6 +100,11 @@
       <el-tab-pane label="AI 排查网关" name="ainexus">
         <AINexusGateway />
       </el-tab-pane>
+
+      <!-- 巡检报告（生成后的渠道投递策略） -->
+      <el-tab-pane label="巡检报告" name="patrol-report">
+        <PatrolReport />
+      </el-tab-pane>
     </el-tabs>
 
     <!-- 规则对话框 -->
@@ -166,6 +171,7 @@ import { alertRuleApi, authApi, clusterApi } from '@/api'
 import type { AlertRule, ClusterSummary, SSOStatus, User } from '@/types'
 import AINexusGateway from './AINexusGateway.vue'
 import ModelConfig from './ModelConfig.vue'
+import PatrolReport from './PatrolReport.vue'
 
 const tab = ref('rules')
 const rules = ref<AlertRule[]>([])

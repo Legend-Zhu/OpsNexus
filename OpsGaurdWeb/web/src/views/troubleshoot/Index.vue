@@ -1,14 +1,16 @@
 <template>
-  <el-card shadow="never">
+  <el-card shadow="never" class="ts-card">
     <template #header>
       <div class="card-header">
         <span>异常排查（AiNexus）</span>
-        <el-tag v-if="gatewayActive" size="small" type="success">已整合 · 进程内</el-tag>
-        <el-tag v-else size="small" type="info">网关未启用</el-tag>
+        <div>
+          <el-tag v-if="gatewayActive" size="small" type="success">已整合 · 进程内</el-tag>
+          <el-tag v-else size="small" type="info">网关未启用</el-tag>
+        </div>
       </div>
     </template>
 
-    <!-- 网关未启用引导（P7：配置已搬到页面管理） -->
+    <!-- 网关未启用引导 -->
     <el-alert
       v-if="!gatewayActive && !configLoading"
       type="warning"
@@ -20,44 +22,129 @@
       <el-button size="small" type="primary" @click="router.push('/system')">前往配置</el-button>
     </el-alert>
 
+    <!-- 会话工具栏：告警可选（不选 = 自由提问） -->
     <div class="toolbar">
-      <el-select v-model="alertId" placeholder="选择要排查的告警" filterable style="width: 340px">
+      <el-select
+        v-model="alertId"
+        placeholder="关联告警（可选，不选则自由提问）"
+        filterable
+        clearable
+        style="width: 380px"
+        :disabled="running"
+        @change="onAlertChange"
+      >
         <el-option
           v-for="a in alerts"
           :key="a.id"
-          :label="`[${a.cluster}/${a.service}] ${a.title} (${a.status})`"
+          :label="`[${a.cluster}/${a.service || '-'}] ${a.title} (${a.status})`"
           :value="a.id"
         />
       </el-select>
-      <el-switch v-model="useMCP" active-text="启用 MCP 采证" />
-      <el-button type="primary" :icon="Search" :loading="running" :disabled="!alertId" @click="investigate">
+      <el-switch v-model="useMCP" active-text="MCP 采证" :disabled="running" />
+      <el-button v-if="alertId" size="small" @click="openHistory">历史排查</el-button>
+      <el-button size="small" :icon="RefreshLeft" :disabled="!messages.length" @click="resetSession">新会话</el-button>
+      <el-button
+        v-if="alertId && !messages.length"
+        type="primary"
+        :icon="Search"
+        :loading="running"
+        :disabled="!gatewayActive"
+        @click="send('')"
+      >
         开始排查
       </el-button>
     </div>
 
-    <!-- 排查过程/结论 -->
-    <div v-if="running || result" class="result-box">
-      <div class="result-title">排查结果</div>
-      <el-collapse>
-        <el-collapse-item title="排查详情" name="detail">
-          <div ref="streamBoxRef" class="stream-box" v-html="renderedStream" />
-        </el-collapse-item>
-      </el-collapse>
-      <div v-if="status" class="status">{{ status }}</div>
+    <!-- 对话区 -->
+    <div v-if="messages.length" ref="chatBoxRef" class="chat-box">
+      <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
+        <div class="msg-role">{{ m.role === 'user' ? '我' : 'AI 排查' }}</div>
+        <!-- 工具调用（assistant 轮次内） -->
+        <div v-if="m.tools?.length" class="tool-list">
+          <el-collapse>
+            <el-collapse-item v-for="(t, j) in m.tools" :key="j" :name="j">
+              <template #title>
+                <span class="tool-chip" :class="{ err: t.isError }">⚙ {{ t.name }}</span>
+              </template>
+              <pre class="tool-result">{{ t.result || '（无输出）' }}</pre>
+            </el-collapse-item>
+          </el-collapse>
+        </div>
+        <div class="msg-content" v-html="renderText(m.content + (m.streaming ? ' ▌' : ''))" />
+      </div>
     </div>
-    <el-empty v-else description="选择一条告警，AI 将基于事件/日志/审计证据进行根因排查" />
+    <el-empty
+      v-else
+      :description="alertId ? '点击「开始排查」，AI 将基于事件/日志/审计证据分析该告警' : '选择告警开始排查，或直接输入问题自由提问'"
+    />
+
+    <!-- 输入区 -->
+    <div class="input-bar">
+      <el-input
+        v-model="input"
+        type="textarea"
+        :autosize="{ minRows: 1, maxRows: 4 }"
+        :placeholder="messages.length ? '继续追问…（Enter 发送，Shift+Enter 换行）' : alertId ? '也可以先输入补充说明再发送' : '输入你的问题，例如：prod 集群的 java 进程还在吗？'"
+        :disabled="running || !gatewayActive"
+        @keydown.enter.exact.prevent="send(input)"
+      />
+      <el-button type="primary" :loading="running" :disabled="!canSend" @click="send(input)">发送</el-button>
+    </div>
+    <div v-if="status" class="status">{{ status }}</div>
+
+    <!-- 历史排查（关联告警的过往会话） -->
+    <el-dialog v-model="historyVisible" title="历史排查" width="720px">
+      <el-table :data="historyList" size="small" v-loading="historyLoading">
+        <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
+        <el-table-column label="时间" width="170">
+          <template #default="{ row }">{{ new Date(row.updated_at).toLocaleString() }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="80">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="viewHistory(row.id)">查看</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!historyLoading && !historyList.length" description="该告警暂无历史排查" />
+    </el-dialog>
+
+    <!-- 历史会话只读查看 -->
+    <el-dialog v-model="historyViewVisible" :title="historyView?.title ?? ''" width="760px">
+      <div v-if="historyView" class="chat-box readonly">
+        <div v-for="(m, i) in historyView.messages" :key="i" class="msg" :class="m.role">
+          <div class="msg-role">{{ m.role === 'user' ? '我' : 'AI 排查' }}</div>
+          <div v-if="m.tools?.length" class="tool-list">
+            <span v-for="(t, j) in m.tools" :key="j" class="tool-chip">⚙ {{ t.name }}</span>
+          </div>
+          <div class="msg-content" v-html="renderText(m.content)" />
+        </div>
+      </div>
+    </el-dialog>
   </el-card>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
-import { useRouter } from 'vue-router'
-import { ainexusApi, alertApi } from '@/api'
-import type { Alert } from '@/types'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { RefreshLeft, Search } from '@element-plus/icons-vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ainexusApi, alertApi, investigationApi } from '@/api'
+import type { Alert, Investigation } from '@/types'
+
+interface ToolEvent {
+  name: string
+  result?: string
+  isError?: boolean
+}
+interface ChatMsg {
+  role: 'user' | 'assistant'
+  content: string
+  tools?: ToolEvent[]
+  streaming?: boolean
+}
 
 const router = useRouter()
+const route = useRoute()
 const alerts = ref<Alert[]>([])
 const alertId = ref('')
 const useMCP = ref(true)
@@ -65,31 +152,43 @@ const useMCP = ref(true)
 const gatewayActive = ref(false)
 const configLoading = ref(true)
 
+const messages = ref<ChatMsg[]>([])
+const input = ref('')
 const running = ref(false)
-const result = ref('')
 const status = ref('')
-const streamBoxRef = ref<HTMLElement>()
+const chatBoxRef = ref<HTMLElement>()
+
+// 会话状态：alertId 在首轮固定（sessionAlertId），apiHistory 是发给网关的
+// 客户端消息（告警会话的证据前缀由服务端注入，不含在这里）；savedInvId 为
+// 落库记录 id（首轮完成 POST，后续轮 PUT 更新）。
+const sessionAlertId = ref('')
+const apiHistory = { current: [] as { role: string; content: string }[] }
+const savedInvId = ref('')
+
+const historyVisible = ref(false)
+const historyLoading = ref(false)
+const historyList = ref<Investigation[]>([])
+const historyViewVisible = ref(false)
+const historyView = ref<{ title: string; messages: ChatMsg[] } | null>(null)
 
 let abort: AbortController | null = null
 
-// 展示为终端风格文本（转义 HTML 防注入）
-const renderedStream = computed(() => {
-  return (result.value || '')
-    .split('\n')
-    .map((l) => `<div class="line">${escapeHtml(l) || '&nbsp;'}</div>`)
-    .join('')
-})
+const currentAlert = computed(() => alerts.value.find((a) => a.id === sessionAlertId.value))
+const canSend = computed(() => gatewayActive.value && !running.value && (!!input.value.trim() || (!!alertId.value && !messages.value.length)))
 
-function escapeHtml(s: string) {
+function renderText(s: string) {
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+    .split('\n')
+    .map((l) => `<div class="line">${l || '&nbsp;'}</div>`)
+    .join('')
 }
 
-function scrollStream() {
+function scrollChat() {
   void nextTick(() => {
-    const el = streamBoxRef.value
+    const el = chatBoxRef.value
     if (el) el.scrollTop = el.scrollHeight
   })
 }
@@ -103,74 +202,189 @@ async function loadAlerts() {
   }
 }
 
-async function investigate() {
-  if (!alertId.value) {
-    ElMessage.warning('请选择告警')
+// 切换告警 = 新会话（有对话时先确认）
+async function onAlertChange(v: string) {
+  if (!messages.value.length) {
     return
   }
+  try {
+    await ElMessageBox.confirm('切换告警将开始新会话（当前会话已自动保存）。', '新会话', { type: 'info' })
+    doReset()
+  } catch {
+    alertId.value = sessionAlertId.value // 取消则还原选择
+  }
+  void v
+}
+
+function doReset() {
+  abort?.abort()
+  messages.value = []
+  apiHistory.current = []
+  savedInvId.value = ''
+  sessionAlertId.value = ''
+  status.value = ''
+  input.value = ''
+}
+
+function resetSession() {
+  doReset()
+}
+
+async function send(typed: string) {
+  const text = typed.trim()
+  const firstTurn = messages.value.length === 0
+  if (firstTurn) {
+    sessionAlertId.value = alertId.value
+  }
+  const withAlert = !!sessionAlertId.value
+  // 告警会话首轮且未输入：服务端证据消息本身即是提问，无需客户端消息
+  const sendUserMsg = text ? [{ role: 'user', content: text }] : []
+  if (!withAlert && !text) {
+    ElMessage.warning('请输入问题')
+    return
+  }
+
+  const displayText = text || `请排查该告警：${currentAlert.value?.title ?? ''}`
+  messages.value.push({ role: 'user', content: displayText })
+  const assistant: ChatMsg = { role: 'assistant', content: '', streaming: true }
+  messages.value.push(assistant)
+  input.value = ''
+  running.value = true
+  status.value = '正在分析…'
+  scrollChat()
+
   abort?.abort()
   abort = new AbortController()
-  running.value = true
-  result.value = ''
-  status.value = '正在采集证据并分析…'
-
   try {
-    // 模型不在此选择：用「AI 排查网关」配置的默认模型
-    const resp = await fetch(ainexusApi.investigateUrl(), {
+    const resp = await fetch(ainexusApi.chatUrl(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ alert_id: alertId.value, use_mcp: useMCP.value }),
+      body: JSON.stringify({
+        stream: true,
+        use_mcp: useMCP.value,
+        alert_id: sessionAlertId.value || undefined,
+        messages: [...apiHistory.current, ...sendUserMsg],
+      }),
       signal: abort.signal,
     })
     if (!resp.ok || !resp.body) {
       const body = await resp.text().catch(() => '')
-      ElMessage.error(`排查失败（${resp.status}）：${body}`)
+      assistant.content = `排查失败（${resp.status}）：${body}`
+      assistant.streaming = false
       status.value = '排查失败'
       return
     }
-    const reader = resp.body.getReader()
-    const decoder = new TextDecoder()
-    let buf = ''
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      let idx: number
-      while ((idx = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, idx).trim()
-        buf = buf.slice(idx + 1)
-        if (line.startsWith('data:')) {
-          const payload = line.slice(5).trim()
-          if (!payload || payload === '[DONE]') continue
-          try {
-            const evt = JSON.parse(payload)
-            const delta = evt?.choices?.[0]?.delta
-            if (delta?.content) {
-              result.value += delta.content
-              scrollStream()
-            }
-            if (delta?.tool_calls?.length) {
-              const tc = delta.tool_calls[0]
-              if (tc.function?.name) result.value += `\n⚙ 调用工具：${tc.function.name}\n`
-            }
-            if (evt?.choices?.[0]?.finish_reason) {
-              status.value = '排查完成'
-            }
-          } catch {
-            /* 忽略非 chunk 事件 */
-          }
-        }
-      }
-    }
-    status.value = '排查完成'
+    await consumeSSE(resp.body, assistant)
+    status.value = '已完成'
   } catch (e) {
     if ((e as Error).name !== 'AbortError') {
-      ElMessage.error(`排查中断：${(e as Error).message}`)
-      status.value = '排查中断'
+      ElMessage.error(`请求中断：${(e as Error).message}`)
+      status.value = '中断'
     }
   } finally {
+    assistant.streaming = false
     running.value = false
+  }
+
+  // 推进 API 历史 + 自动落库
+  apiHistory.current.push(...sendUserMsg, { role: 'assistant', content: assistant.content })
+  await saveSession()
+}
+
+async function consumeSSE(body: ReadableStream<Uint8Array>, assistant: ChatMsg) {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let idx: number
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx).trim()
+      buf = buf.slice(idx + 1)
+      if (!line.startsWith('data:')) continue
+      const payload = line.slice(5).trim()
+      if (!payload || payload === '[DONE]') continue
+      try {
+        const evt = JSON.parse(payload)
+        const delta = evt?.choices?.[0]?.delta
+        if (delta?.content) {
+          assistant.content += delta.content
+          scrollChat()
+        }
+        const tc = delta?.tool_calls?.[0]
+        if (tc?.function?.name) {
+          assistant.tools = assistant.tools ?? []
+          assistant.tools.push({ name: tc.function.name })
+          status.value = `调用工具 ${tc.function.name}…`
+        }
+        if (tc?.tool_result) {
+          const t = assistant.tools?.find((x) => x.name === tc.tool_result.name && x.result === undefined)
+          if (t) {
+            t.result = tc.tool_result.content
+            t.isError = tc.tool_result.is_error
+          }
+          status.value = '正在分析…'
+        }
+      } catch {
+        /* 忽略非 chunk 事件 */
+      }
+    }
+  }
+}
+
+// 自动落库：首轮 POST 创建，后续轮 PUT 更新；失败不阻断对话
+async function saveSession() {
+  const lastAssistant = [...messages.value].reverse().find((m) => m.role === 'assistant' && m.content)
+  const payload = {
+    alert_id: sessionAlertId.value || undefined,
+    cluster: currentAlert.value?.cluster,
+    title: sessionAlertId.value
+      ? `排查：${currentAlert.value?.title ?? sessionAlertId.value}`
+      : (messages.value[0]?.content ?? '自由提问').slice(0, 40),
+    messages: JSON.stringify(
+      messages.value.map((m) => ({
+        role: m.role,
+        content: m.content,
+        tools: m.tools?.map((t) => ({ name: t.name })),
+      })),
+    ),
+    conclusion: lastAssistant?.content.slice(0, 2000),
+  }
+  try {
+    if (!savedInvId.value) {
+      const inv = await investigationApi.save(payload)
+      savedInvId.value = inv.id
+    } else {
+      await investigationApi.update(savedInvId.value, payload)
+    }
+  } catch {
+    /* 落库失败不影响排查 */
+  }
+}
+
+async function openHistory() {
+  historyVisible.value = true
+  historyLoading.value = true
+  try {
+    const resp = await investigationApi.listByAlert(alertId.value)
+    historyList.value = resp.items ?? []
+  } catch {
+    historyList.value = []
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+async function viewHistory(id: string) {
+  try {
+    const inv = await investigationApi.get(id)
+    historyView.value = { title: inv.title, messages: JSON.parse(inv.messages || '[]') }
+    historyViewVisible.value = true
+  } catch {
+    ElMessage.error('加载历史排查失败')
   }
 }
 
@@ -191,6 +405,11 @@ onMounted(async () => {
     configLoading.value = false
   }
   await loadAlerts()
+  // 从告警页「排查」跳转进来时预选该告警
+  const q = route.query.alert
+  if (typeof q === 'string' && q && alerts.value.some((a) => a.id === q)) {
+    alertId.value = q
+  }
 })
 onBeforeUnmount(() => abort?.abort())
 </script>
@@ -208,30 +427,86 @@ onBeforeUnmount(() => abort?.abort())
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
   flex-wrap: wrap;
 }
-.result-box {
+.chat-box {
+  max-height: 52vh;
+  overflow: auto;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.chat-box.readonly {
+  max-height: 60vh;
+}
+.msg {
+  max-width: 92%;
+}
+.msg.user {
+  align-self: flex-end;
+  text-align: right;
+}
+.msg.assistant {
+  align-self: flex-start;
+  width: 92%;
+}
+.msg-role {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 4px;
+}
+.msg-content {
+  border-radius: 8px;
   padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
 }
-.result-title {
-  font-weight: 600;
-  margin-bottom: 6px;
+.msg.user .msg-content {
+  background: var(--el-color-primary-dark-2);
+  color: #fff;
+  display: inline-block;
 }
-.stream-box {
-  height: 380px;
-  overflow: auto;
+.msg.assistant .msg-content {
   background: #0d1117;
   color: #e6edf3;
-  border-radius: 6px;
-  padding: 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
-  line-height: 1.6;
+}
+.tool-list {
+  margin-bottom: 6px;
+}
+.tool-chip {
+  display: inline-block;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--el-color-info-light-7);
+  color: var(--el-text-color-regular);
+  margin-right: 6px;
+}
+.tool-chip.err {
+  background: var(--el-color-danger-light-8);
+  color: var(--el-color-danger);
+}
+.tool-result {
+  max-height: 200px;
+  overflow: auto;
+  font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
+  margin: 4px 0;
+}
+.input-bar {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
 }
 .status {
   margin-top: 8px;

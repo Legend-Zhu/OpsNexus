@@ -173,6 +173,28 @@ export interface Alert {
   acked_by?: string
   acked_at?: string
   recovered_at?: string
+  /** 排查回写：关联排查会话次数 / 最近一次排查 id */
+  investigations?: number
+  last_investigation_id?: string
+}
+
+/** 排查会话（对话式 troubleshoot 落库） */
+export interface Investigation {
+  id: string
+  alert_id?: string
+  cluster?: string
+  title: string
+  messages: string // [{role, content, tools?}] JSON
+  conclusion?: string
+  model?: string
+  created_at: string
+  updated_at: string
+}
+
+/** 巡检报告投递设置（系统设置 → 巡检报告） */
+export interface PatrolReportSetting {
+  mode: 'always' | 'anomaly' | 'off'
+  channel_ids: string[]
 }
 
 /** 节点资源统计（Worker /local/stats） */

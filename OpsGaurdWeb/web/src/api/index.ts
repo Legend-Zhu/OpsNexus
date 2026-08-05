@@ -10,6 +10,7 @@ import type {
   ClusterNode,
   ClusterSummary,
   EventItem,
+  Investigation,
   Me,
   NodeStats,
   NotifyChannel,
@@ -18,6 +19,7 @@ import type {
   Operation,
   Patrol,
   PatrolReport,
+  PatrolReportSetting,
   PatrolRun,
   ProcessInfo,
   Project,
@@ -142,6 +144,8 @@ export const ainexusApi = {
   health: () => get<{ status: string }>('/v1/ainexus/health'),
   models: () => get<{ models: AINexusModelInfo[] }>('/v1/ainexus/models'),
   chat: (body: unknown) => post<unknown>('/v1/ainexus/chat', body),
+  // 对话式排查（SSE 流式；body 支持 alert_id/use_mcp 扩展字段）
+  chatUrl: () => '/api/v1/ainexus/chat',
   // 深度排查：告警 → 上下文注入 → 内嵌 Agent（SSE 流式）
   investigateUrl: () => '/api/v1/ainexus/investigate',
   // 网关运行时配置（系统设置 → AI 排查网关）
@@ -149,4 +153,21 @@ export const ainexusApi = {
   updateConfig: (body: Partial<AINexusConfig>) => put<AINexusConfig>('/v1/ainexus/config', body),
   testConfig: (body: { name?: string; type: string; base_url: string; api_key?: string; model: string }) =>
     post<{ ok: boolean; latency_ms: number; error?: string; model?: string }>('/v1/ainexus/config/test', body),
+}
+
+// ---- 排查会话（对话式 troubleshoot 落库） ----
+export const investigationApi = {
+  save: (body: { alert_id?: string; cluster?: string; title: string; messages: string; conclusion?: string; model?: string }) =>
+    post<Investigation>('/v1/investigations', body),
+  update: (id: string, body: { title?: string; messages: string; conclusion?: string; model?: string }) =>
+    put<Investigation>(`/v1/investigations/${id}`, body),
+  get: (id: string) => get<Investigation>(`/v1/investigations/${id}`),
+  listByAlert: (alertId: string) => get<{ items: Investigation[] }>(`/v1/alerts/${alertId}/investigations`),
+}
+
+// ---- 全局设置 ----
+export const settingsApi = {
+  // 巡检报告投递（系统设置 → 巡检报告）
+  patrolReport: () => get<PatrolReportSetting>('/v1/settings/patrol-report'),
+  updatePatrolReport: (body: PatrolReportSetting) => put<PatrolReportSetting>('/v1/settings/patrol-report', body),
 }
