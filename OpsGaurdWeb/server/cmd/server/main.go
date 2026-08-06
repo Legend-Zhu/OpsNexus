@@ -118,10 +118,13 @@ func main() {
 			return nil, func() {}, err
 		}
 		return sub, func() { cli.Close() }, nil
-	}, ingestSvc, st, log)
+		}, ingestSvc, st, log)
 	if err := ingestMgr.Start(context.Background()); err != nil {
 		log.Error("ingest manager start failed", "err", err)
 	}
+	// 集群增删 → 订阅跟随启停（cluster.Service 回调钩子）。
+	clusterSvc.OnClusterAdd(ingestMgr.Add)
+	clusterSvc.OnClusterRemove(ingestMgr.Remove)
 	defer ingestMgr.Stop()
 
 	// 告警规则服务（P6：管理 Worker monitoring config）
