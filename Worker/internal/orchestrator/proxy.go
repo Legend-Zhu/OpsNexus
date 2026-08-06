@@ -118,6 +118,45 @@ type HTTPCheckResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// FlowStep mirrors nodeagent.flowStepReq（多步 HTTP 事务探测的一个步骤）。
+type FlowStep struct {
+	Name         string            `json:"name"`
+	URL          string            `json:"url"`
+	Method       string            `json:"method,omitempty"`
+	Headers      map[string]string `json:"headers,omitempty"`
+	Body         string            `json:"body,omitempty"`
+	ExpectStatus []int             `json:"expectStatus,omitempty"`
+	ExpectBody   string            `json:"expectBody,omitempty"`
+	Extract      map[string]string `json:"extract,omitempty"` // var -> "$.json.path" 或 "re:正则"
+}
+
+// FlowCheckRequest mirrors nodeagent.flowReq。
+type FlowCheckRequest struct {
+	Steps   []FlowStep        `json:"steps"`
+	Vars    map[string]string `json:"vars,omitempty"`
+	Timeout string            `json:"timeout,omitempty"`
+}
+
+// FlowStepResult mirrors nodeagent.flowStepResp（提取值不回显，只有变量名）。
+type FlowStepResult struct {
+	Name      string   `json:"name"`
+	OK        bool     `json:"ok"`
+	Status    int      `json:"status"`
+	LatencyMS int64    `json:"latencyMs"`
+	Extracted []string `json:"extracted,omitempty"`
+	Error     string   `json:"error,omitempty"`
+}
+
+// FlowCheckResult mirrors nodeagent.flowResp。
+type FlowCheckResult struct {
+	Node       string           `json:"node"`
+	OK         bool             `json:"ok"`
+	Steps      []FlowStepResult `json:"steps"`
+	FailedStep string           `json:"failedStep,omitempty"`
+	LatencyMS  int64            `json:"latencyMs"`
+	Error      string           `json:"error,omitempty"`
+}
+
 // Processes fetches the node's host process list (top=cpu|mem, limit=N;
 // filter matches name/cmdline substring, case-insensitive).
 func (n *NodeClient) Processes(ctx context.Context, top, limit, filter string) (ProcessesResp, error) {
@@ -160,6 +199,15 @@ func (n *NodeClient) CheckHTTP(ctx context.Context, req HTTPCheckRequest) (HTTPC
 	var out HTTPCheckResult
 	if err := n.postJSON(ctx, "/api/v1/local/check/http", req, &out); err != nil {
 		return HTTPCheckResult{}, err
+	}
+	return out, nil
+}
+
+// CheckFlow runs a multi-step HTTP transaction probe from the node worker.
+func (n *NodeClient) CheckFlow(ctx context.Context, req FlowCheckRequest) (FlowCheckResult, error) {
+	var out FlowCheckResult
+	if err := n.postJSON(ctx, "/api/v1/local/check/flow", req, &out); err != nil {
+		return FlowCheckResult{}, err
 	}
 	return out, nil
 }

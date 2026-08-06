@@ -63,6 +63,30 @@ type hostProcsOut struct {
 	Results []hostProcsResult `json:"results"`
 }
 
+// ---- check_flow (multi-step HTTP transaction) ----
+
+type flowStepIn struct {
+	Name         string            `json:"name" description:"Step name, e.g. \"login\""`
+	URL          string            `json:"url" description:"Request URL; may reference vars as {{var}}"`
+	Method       string            `json:"method,omitempty" description:"HTTP method (default GET)"`
+	Headers      map[string]string `json:"headers,omitempty" description:"Request headers; values may use {{var}}"`
+	Body         string            `json:"body,omitempty" description:"Request body; may use {{var}}"`
+	ExpectStatus []int             `json:"expectStatus,omitempty" description:"Acceptable status codes. Default: any 2xx"`
+	ExpectBody   string            `json:"expectBody,omitempty" description:"Regex the response body must match"`
+	Extract      map[string]string `json:"extract,omitempty" description:"Vars to extract from the response for later steps: var -> \"$.json.path\" or \"re:regex\" (first capture group)"`
+}
+
+type checkFlowIn struct {
+	Steps   []flowStepIn      `json:"steps" description:"Ordered steps executed until one fails, e.g. POST /login (extract token) then GET /api/me with Bearer {{token}}"`
+	Vars    map[string]string `json:"vars,omitempty" description:"Initial variables available to steps (e.g. username/password)"`
+	Node    string            `json:"node,omitempty" description:"Run from this node only (hostname, node id, or addr). Default: all ready nodes"`
+	Timeout string            `json:"timeout,omitempty" description:"Per-request timeout, e.g. \"3s\" (default 3s, max 10s)"`
+}
+
+type checkFlowOut struct {
+	Results []orchestrator.FlowCheckResult `json:"results"`
+}
+
 // registerToolsChecks adds the ad-hoc probe tools.
 func (h *Handler) registerToolsChecks(s *mcp.Server) {
 	// check_port (TCP connectivity to any host:port, per node)
@@ -106,6 +130,26 @@ func (h *Handler) registerToolsChecks(s *mcp.Server) {
 		out, err := h.hostProcesses(context.Background(), in)
 		if err != nil {
 			return nil, hostProcsOut{}, err
+		}
+		return nil, out, nil
+	})
+
+	// check_flow (multi-step HTTP transaction probe, per node)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "check_flow",
+		Description: "Multi-step HTTP transaction probe, run from swarm nodes (all ready nodes by default, or a specific one). Steps run in order until one fails; each step can extract vars from its response (e.g. token) that later steps reference as {{var}}. Typical use: verify a login chain — POST /login (extract $.data.token) then GET an authed endpoint with Bearer {{token}}. Read-only; extracted values are never echoed back (only var names).",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in checkFlowIn) (*mcp.CallToolResult, checkFlowOut, error) {
+		if len(in.Steps) == 0 {
+			return nil, checkFlowOut{}, fmt.Errorf("steps is required")
+		}
+		for i, st := range in.Steps {
+			if st.Name == "" || st.URL == "" {
+				return nil, checkFlowOut{}, fmt.Errorf("steps[%d]: name and url are required", i)
+			}
+		}
+		out, err := h.checkFlow(context.Background(), in)
+		if err != nil {
+			return nil, checkFlowOut{}, err
 		}
 		return nil, out, nil
 	})
@@ -153,6 +197,34 @@ func (h *Handler) checkHTTP(ctx context.Context, in checkHTTPIn) (checkHTTPOut, 
 			out.Results = append(out.Results, orchestrator.HTTPCheckResult{
 				Node: addr, URL: in.URL,
 				Error: "node worker unreachable: " + err.Error(),
+			})
+			continue
+		}
+		out.Results = append(out.Results, res)
+	}
+	return out, nil
+}
+
+// checkFlow fans the multi-step transaction probe out to the target nodes.
+func (h *Handler) checkFlow(ctx context.Context, in checkFlowIn) (checkFlowOut, error) {
+	addrs, err := h.targetAddrs(ctx, in.Node)
+	if err != nil {
+		return checkFlowOut{}, err
+	}
+	steps := make([]orchestrator.FlowStep, 0, len(in.Steps))
+	for _, st := range in.Steps {
+		steps = append(steps, orchestrator.FlowStep{
+			Name: st.Name, URL: st.URL, Method: st.Method, Headers: st.Headers,
+			Body: st.Body, ExpectStatus: st.ExpectStatus, ExpectBody: st.ExpectBody, Extract: st.Extract,
+		})
+	}
+	req := orchestrator.FlowCheckRequest{Steps: steps, Vars: in.Vars, Timeout: in.Timeout}
+	out := checkFlowOut{Results: make([]orchestrator.FlowCheckResult, 0, len(addrs))}
+	for _, addr := range addrs {
+		res, err := h.orch.NodeClientByAddr(addr).CheckFlow(ctx, req)
+		if err != nil {
+			out.Results = append(out.Results, orchestrator.FlowCheckResult{
+				Node: addr, Error: "node worker unreachable: " + err.Error(),
 			})
 			continue
 		}

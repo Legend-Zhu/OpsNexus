@@ -28,15 +28,15 @@ const (
 
 // Entry is a single audit record.
 type Entry struct {
-	ID        string    `json:"id"`
-	TS        time.Time `json:"ts"`
-	Actor     string    `json:"actor"`     // caller identity (token name / remote addr)
-	Action    Action    `json:"action"`
-	Service   string    `json:"service,omitempty"`
-	Command   string    `json:"command,omitempty"` // exec/host command, truncated
-	Target    string    `json:"target,omitempty"`  // node / container / replica
-	OK        bool      `json:"ok"`
-	Detail    string    `json:"detail,omitempty"`
+	ID      string    `json:"id"`
+	TS      time.Time `json:"ts"`
+	Actor   string    `json:"actor"` // caller identity (token name / remote addr)
+	Action  Action    `json:"action"`
+	Service string    `json:"service,omitempty"`
+	Command string    `json:"command,omitempty"` // exec/host command, truncated
+	Target  string    `json:"target,omitempty"`  // node / container / replica
+	OK      bool      `json:"ok"`
+	Detail  string    `json:"detail,omitempty"`
 }
 
 // Store is a thread-safe ring buffer of audit entries.

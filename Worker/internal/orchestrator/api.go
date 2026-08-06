@@ -55,6 +55,7 @@ func (a *API) Routes() map[string]http.HandlerFunc {
 		"GET /api/v1/nodes/{id}/processes":     a.nodeProcesses,
 		"GET /api/v1/nodes/{id}/check/port":    a.nodeCheckPort,
 		"POST /api/v1/nodes/{id}/check/http":   a.nodeCheckHTTP,
+		"POST /api/v1/nodes/{id}/check/flow":   a.nodeCheckFlow,
 	}
 }
 

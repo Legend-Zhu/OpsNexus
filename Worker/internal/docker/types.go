@@ -25,10 +25,10 @@ type ServiceSpec struct {
 
 // TaskSpec holds the per-task template.
 type TaskSpec struct {
-	ContainerSpec ContainerSpec          `json:"ContainerSpec"`
+	ContainerSpec ContainerSpec         `json:"ContainerSpec"`
 	Resources     *ResourceRequirements `json:"Resources,omitempty"`
-	RestartPolicy *RestartPolicy         `json:"RestartPolicy,omitempty"`
-	Placement     *Placement             `json:"Placement,omitempty"`
+	RestartPolicy *RestartPolicy        `json:"RestartPolicy,omitempty"`
+	Placement     *Placement            `json:"Placement,omitempty"`
 	LogDriver     *Driver               `json:"LogDriver,omitempty"`
 	// ForceUpdate, when incremented, forces swarm to re-create the tasks
 	// (used by Restart / docker service update --force).
@@ -45,7 +45,7 @@ type ContainerSpec struct {
 	User        string             `json:"User,omitempty"`
 	Labels      map[string]string  `json:"Labels,omitempty"`
 	Mounts      []Mount            `json:"Mounts,omitempty"`
-	Healthcheck *HealthConfig     `json:"Healthcheck,omitempty"`
+	Healthcheck *HealthConfig      `json:"Healthcheck,omitempty"`
 	Secrets     []*SecretReference `json:"Secrets,omitempty"`
 	Configs     []*ConfigReference `json:"Configs,omitempty"`
 }
@@ -75,15 +75,15 @@ type Mount struct {
 // HealthConfig maps to the container healthcheck object.
 type HealthConfig struct {
 	Test        []string `json:"Test,omitempty"`
-	Interval    int64   `json:"Interval,omitempty"`    // nanoseconds
-	Timeout     int64   `json:"Timeout,omitempty"`
-	StartPeriod int64   `json:"StartPeriod,omitempty"`
-	Retries     int     `json:"Retries,omitempty"`
+	Interval    int64    `json:"Interval,omitempty"` // nanoseconds
+	Timeout     int64    `json:"Timeout,omitempty"`
+	StartPeriod int64    `json:"StartPeriod,omitempty"`
+	Retries     int      `json:"Retries,omitempty"`
 }
 
 // SecretReference / ConfigReference reference swarm secrets/configs.
 type SecretReference struct {
-	SecretName string                    `json:"SecretName,omitempty"`
+	SecretName string                     `json:"SecretName,omitempty"`
 	File       *SecretReferenceFileTarget `json:"File,omitempty"`
 }
 
@@ -95,8 +95,8 @@ type SecretReferenceFileTarget struct {
 }
 
 type ConfigReference struct {
-	ConfigName string                      `json:"ConfigName,omitempty"`
-	File        *ConfigReferenceFileTarget  `json:"File,omitempty"`
+	ConfigName string                     `json:"ConfigName,omitempty"`
+	File       *ConfigReferenceFileTarget `json:"File,omitempty"`
 }
 
 type ConfigReferenceFileTarget struct {
@@ -128,7 +128,7 @@ type RestartPolicy struct {
 
 // Placement holds scheduling constraints and spread preferences.
 type Placement struct {
-	Constraints []string             `json:"Constraints,omitempty"`
+	Constraints []string              `json:"Constraints,omitempty"`
 	Preferences []PlacementPreference `json:"Preferences,omitempty"`
 }
 
@@ -190,7 +190,7 @@ type Service struct {
 	CreatedAt     string        `json:"CreatedAt,omitempty"`
 	UpdatedAt     string        `json:"UpdatedAt,omitempty"`
 	Spec          ServiceSpec   `json:"Spec"`
-	ServiceStatus ServiceStatus  `json:"ServiceStatus,omitempty"`
+	ServiceStatus ServiceStatus `json:"ServiceStatus,omitempty"`
 	Endpoint      Endpoint      `json:"Endpoint,omitempty"`
 }
 
@@ -237,13 +237,13 @@ type ContainerStatus struct {
 
 // Node is a swarm member.
 type Node struct {
-	ID            string         `json:"ID"`
-	Version       Version        `json:"Version"`
-	CreatedAt     string         `json:"CreatedAt,omitempty"`
-	Spec          NodeSpec       `json:"Spec"`
+	ID            string          `json:"ID"`
+	Version       Version         `json:"Version"`
+	CreatedAt     string          `json:"CreatedAt,omitempty"`
+	Spec          NodeSpec        `json:"Spec"`
 	Description   NodeDescription `json:"Description"`
-	Status        NodeStatus     `json:"Status"`
-	ManagerStatus *ManagerStatus `json:"ManagerStatus,omitempty"`
+	Status        NodeStatus      `json:"Status"`
+	ManagerStatus *ManagerStatus  `json:"ManagerStatus,omitempty"`
 }
 
 // NodeSpec is the desired node configuration.
@@ -256,7 +256,7 @@ type NodeSpec struct {
 
 // NodeDescription holds static node facts.
 type NodeDescription struct {
-	Hostname  string       `json:"Hostname"`
+	Hostname  string        `json:"Hostname"`
 	Resources NodeResources `json:"Resources,omitempty"`
 }
 
@@ -331,7 +331,7 @@ type Stats struct {
 type CPUStats struct {
 	CPUUsage       CPUUsage `json:"cpu_usage"`
 	SystemCPUUsage uint64   `json:"system_cpu_usage,omitempty"`
-	OnlineCPUs    uint32   `json:"online_cpus,omitempty"`
+	OnlineCPUs     uint32   `json:"online_cpus,omitempty"`
 }
 
 // CPUUsage holds the total CPU usage counter.
@@ -367,11 +367,11 @@ type Info struct {
 
 // SwarmInfo carries the swarm membership of this daemon.
 type SwarmInfo struct {
-	NodeID            string `json:"NodeID"`
-	NodeAddr          string `json:"NodeAddr"`
-	LocalNodeState    string `json:"LocalNodeState"` // inactive | pending | active
-	ControlAvailable  bool   `json:"ControlAvailable"`
-	RemoteManagers    []any  `json:"RemoteManagers"`
+	NodeID           string `json:"NodeID"`
+	NodeAddr         string `json:"NodeAddr"`
+	LocalNodeState   string `json:"LocalNodeState"` // inactive | pending | active
+	ControlAvailable bool   `json:"ControlAvailable"`
+	RemoteManagers   []any  `json:"RemoteManagers"`
 }
 
 type apiError struct {

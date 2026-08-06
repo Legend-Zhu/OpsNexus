@@ -39,17 +39,17 @@ const (
 // Operation is a tracked lifecycle action. It is JSON-serializable for the
 // HTTP API (GET /api/v1/operations/{id}).
 type Operation struct {
-	ID         string           `json:"id"`
-	Type       OperationType    `json:"type"`
-	Service    string           `json:"service"`
-	Status     OperationStatus  `json:"status"`
-	StartedAt  time.Time        `json:"startedAt"`
-	FinishedAt *time.Time       `json:"finishedAt,omitempty"`
-	ServiceID  string           `json:"serviceId,omitempty"`
-	Error      string           `json:"error,omitempty"`
-	Steps      []string         `json:"steps,omitempty"`
-	Replicas   uint64           `json:"replicas,omitempty"`
-	Mode       string           `json:"mode,omitempty"`
+	ID         string          `json:"id"`
+	Type       OperationType   `json:"type"`
+	Service    string          `json:"service"`
+	Status     OperationStatus `json:"status"`
+	StartedAt  time.Time       `json:"startedAt"`
+	FinishedAt *time.Time      `json:"finishedAt,omitempty"`
+	ServiceID  string          `json:"serviceId,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	Steps      []string        `json:"steps,omitempty"`
+	Replicas   uint64          `json:"replicas,omitempty"`
+	Mode       string          `json:"mode,omitempty"`
 
 	// mu guards Status/Steps/FinishedAt against concurrent polling writes and
 	// snapshot reads. It is a pointer so snapshots (value copies) share it

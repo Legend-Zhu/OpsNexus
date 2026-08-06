@@ -26,8 +26,8 @@ type logCheck struct {
 	level    Level
 	action   string
 
-	mu      sync.Mutex
-	lastHit time.Time
+	mu       sync.Mutex
+	lastHit  time.Time
 	debounce time.Duration
 }
 

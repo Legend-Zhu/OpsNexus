@@ -40,6 +40,7 @@ func (a *API) Routes() map[string]http.HandlerFunc {
 		"GET /api/v1/local/logs":        a.logs,
 		"GET /api/v1/local/check/port":  a.checkPort,
 		"POST /api/v1/local/check/http": a.checkHTTP,
+		"POST /api/v1/local/check/flow": a.checkFlow,
 	}
 }
 

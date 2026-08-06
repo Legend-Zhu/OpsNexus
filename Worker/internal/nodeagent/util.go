@@ -26,7 +26,7 @@ type simpleErr struct{ msg string }
 
 func (e simpleErr) Error() string { return e.msg }
 
-func errEmpty(what string) error    { return simpleErr{what + " is empty"} }
+func errEmpty(what string) error { return simpleErr{what + " is empty"} }
 func errNotFound(what, id string) error {
 	return simpleErr{what + " " + id + " not found"}
 }

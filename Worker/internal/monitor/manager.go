@@ -29,11 +29,11 @@ type Manager struct {
 // NewManager creates a monitor manager.
 func NewManager(cli docker.Client, store *EventStore, log *slog.Logger) *Manager {
 	return &Manager{
-		cli:    cli,
-		store:  store,
-		log:    log,
+		cli:     cli,
+		store:   store,
+		log:     log,
 		cancels: map[string]context.CancelFunc{},
-		active: map[string]struct{}{},
+		active:  map[string]struct{}{},
 	}
 }
 

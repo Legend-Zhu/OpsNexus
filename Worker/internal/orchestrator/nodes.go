@@ -135,6 +135,27 @@ func (a *API) nodeCheckHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// nodeCheckFlow handles POST /api/v1/nodes/{id}/check/flow — 多步 HTTP 事务探测代理。
+func (a *API) nodeCheckFlow(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req FlowCheckRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	addr, err := a.nodeAddr(ctx, r.PathValue("id"))
+	if err != nil {
+		writeNodeErr(w, err)
+		return
+	}
+	res, err := a.orch.NodeClientByAddr(addr).CheckFlow(ctx, req)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 // nodeAddr 把 id（node ID 或 hostname）解析为 ready 节点的 worker 地址。
 // 节点不存在/未 ready 返回 errNotFound；docker 失败返回原始错误。
 func (a *API) nodeAddr(ctx context.Context, id string) (string, error) {

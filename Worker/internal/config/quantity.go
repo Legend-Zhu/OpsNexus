@@ -16,6 +16,7 @@ import (
 //	"1G"    -> 1073741824
 //	"256m"  -> 268435456
 //	"1024"  -> 1024
+//
 // ParseMemory parses a human-readable memory size into bytes. See the
 // package-level example in parseMemory's doc above.
 func ParseMemory(s string) (int64, error) {

@@ -62,13 +62,13 @@ type nodeIn struct {
 }
 
 type opOut struct {
-	ID         string `json:"id"`
-	Type       string `json:"type"`
-	Service    string `json:"service"`
-	Status     string `json:"status"`
-	ServiceID  string `json:"serviceId,omitempty"`
-	Replicas   uint64 `json:"replicas,omitempty"`
-	Error      string `json:"error,omitempty"`
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Service   string `json:"service"`
+	Status    string `json:"status"`
+	ServiceID string `json:"serviceId,omitempty"`
+	Replicas  uint64 `json:"replicas,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 type serviceSummary struct {
@@ -81,11 +81,11 @@ type serviceSummary struct {
 }
 
 type detailOut struct {
-	Service docker.Service         `json:"service"`
-	Tasks   []docker.Task          `json:"tasks"`
-	Running int                    `json:"running"`
-	Desired int                    `json:"desired"`
-	Healthy int                    `json:"healthy"`
+	Service docker.Service `json:"service"`
+	Tasks   []docker.Task  `json:"tasks"`
+	Running int            `json:"running"`
+	Desired int            `json:"desired"`
+	Healthy int            `json:"healthy"`
 }
 
 type eventsOut struct {

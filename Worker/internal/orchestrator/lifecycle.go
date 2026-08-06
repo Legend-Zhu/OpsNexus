@@ -123,9 +123,9 @@ func (o *Orchestrator) auditAction(ctx context.Context, action audit.Action, ser
 type SelfInfo struct {
 	NodeID       string `json:"nodeId"`
 	Hostname     string `json:"hostname"`
-	Role         string `json:"role"`       // manager | worker
-	Leader       bool   `json:"leader"`     // manager-only: swarm Raft leader
-	State        string `json:"state"`      // node Status.State
+	Role         string `json:"role"`         // manager | worker
+	Leader       bool   `json:"leader"`       // manager-only: swarm Raft leader
+	State        string `json:"state"`        // node Status.State
 	SwarmManager bool   `json:"swarmManager"` // this daemon runs swarm control plane
 	Addr         string `json:"addr,omitempty"`
 }
@@ -313,11 +313,11 @@ func (o *Orchestrator) ListServices(ctx context.Context, label string) ([]docker
 
 // ServiceDetail is the GET /services/{name} response: service + tasks + health.
 type ServiceDetail struct {
-	Service docker.Service  `json:"service"`
-	Tasks   []docker.Task   `json:"tasks"`
-	Running int             `json:"running"`
-	Desired int             `json:"desired"`
-	Healthy int             `json:"healthy"`
+	Service docker.Service `json:"service"`
+	Tasks   []docker.Task  `json:"tasks"`
+	Running int            `json:"running"`
+	Desired int            `json:"desired"`
+	Healthy int            `json:"healthy"`
 }
 
 // Inspect returns a service detail with task counts and health.
@@ -358,7 +358,7 @@ func (o *Orchestrator) GetOperation(id string) (Operation, bool) {
 
 type readyState struct {
 	running, desired, healthy int
-	taskErrors               []string
+	taskErrors                []string
 }
 
 func (o *Orchestrator) computeReady(ctx context.Context, serviceID string, hasHealth bool) (readyState, error) {

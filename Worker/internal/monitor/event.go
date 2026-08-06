@@ -16,10 +16,10 @@ import (
 type EventType string
 
 const (
-	EventPortDown       EventType = "port_down"
-	EventHTTPUnhealthy  EventType = "http_unhealthy"
-	EventLogMatch       EventType = "log_match"
-	EventResourceOver   EventType = "resource_over"
+	EventPortDown        EventType = "port_down"
+	EventHTTPUnhealthy   EventType = "http_unhealthy"
+	EventLogMatch        EventType = "log_match"
+	EventResourceOver    EventType = "resource_over"
 	EventResourceRecover EventType = "resource_recovered"
 )
 

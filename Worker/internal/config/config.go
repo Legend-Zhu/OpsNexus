@@ -14,30 +14,30 @@ type Config struct {
 
 // Service describes the desired swarm service.
 type Service struct {
-	Name            string             `yaml:"name" json:"name"`
-	Image           string             `yaml:"image" json:"image"`
-	Mode            string             `yaml:"mode,omitempty" json:"mode,omitempty"`                 // replicated | global
-	Replicas        *uint64            `yaml:"replicas,omitempty" json:"replicas,omitempty"`         // replicated only
-	ImagePullPolicy string             `yaml:"imagePullPolicy,omitempty" json:"imagePullPolicy,omitempty"` // always | missing | never
-	RegistryAuth    *RegistryAuth      `yaml:"registryAuth,omitempty" json:"registryAuth,omitempty"`
-	Networks        []string           `yaml:"networks,omitempty" json:"networks,omitempty"`
-	Ports           []PortConfig       `yaml:"ports,omitempty" json:"ports,omitempty"`
-	Env             []string           `yaml:"env,omitempty" json:"env,omitempty"`
-	Command         []string           `yaml:"command,omitempty" json:"command,omitempty"`
-	Args            []string           `yaml:"args,omitempty" json:"args,omitempty"`
-	Workdir         string             `yaml:"workdir,omitempty" json:"workdir,omitempty"`
-	User            string             `yaml:"user,omitempty" json:"user,omitempty"`
-	Mounts          []MountConfig      `yaml:"mounts,omitempty" json:"mounts,omitempty"`
-	Secrets         []string           `yaml:"secrets,omitempty" json:"secrets,omitempty"`
-	Configs         []string           `yaml:"configs,omitempty" json:"configs,omitempty"`
+	Name            string            `yaml:"name" json:"name"`
+	Image           string            `yaml:"image" json:"image"`
+	Mode            string            `yaml:"mode,omitempty" json:"mode,omitempty"`                       // replicated | global
+	Replicas        *uint64           `yaml:"replicas,omitempty" json:"replicas,omitempty"`               // replicated only
+	ImagePullPolicy string            `yaml:"imagePullPolicy,omitempty" json:"imagePullPolicy,omitempty"` // always | missing | never
+	RegistryAuth    *RegistryAuth     `yaml:"registryAuth,omitempty" json:"registryAuth,omitempty"`
+	Networks        []string          `yaml:"networks,omitempty" json:"networks,omitempty"`
+	Ports           []PortConfig      `yaml:"ports,omitempty" json:"ports,omitempty"`
+	Env             []string          `yaml:"env,omitempty" json:"env,omitempty"`
+	Command         []string          `yaml:"command,omitempty" json:"command,omitempty"`
+	Args            []string          `yaml:"args,omitempty" json:"args,omitempty"`
+	Workdir         string            `yaml:"workdir,omitempty" json:"workdir,omitempty"`
+	User            string            `yaml:"user,omitempty" json:"user,omitempty"`
+	Mounts          []MountConfig     `yaml:"mounts,omitempty" json:"mounts,omitempty"`
+	Secrets         []string          `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Configs         []string          `yaml:"configs,omitempty" json:"configs,omitempty"`
 	Labels          map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
-	Resources       *Resources         `yaml:"resources,omitempty" json:"resources,omitempty"`
-	Healthcheck     *Healthcheck       `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
-	Placement       *Placement         `yaml:"placement,omitempty" json:"placement,omitempty"`
-	Update          *UpdateConfig      `yaml:"update,omitempty" json:"update,omitempty"`
-	Rollback        *UpdateConfig      `yaml:"rollback,omitempty" json:"rollback,omitempty"`
-	Restart         *RestartPolicy     `yaml:"restart,omitempty" json:"restart,omitempty"`
-	LogDriver       *LogDriver         `yaml:"logDriver,omitempty" json:"logDriver,omitempty"`
+	Resources       *Resources        `yaml:"resources,omitempty" json:"resources,omitempty"`
+	Healthcheck     *Healthcheck      `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
+	Placement       *Placement        `yaml:"placement,omitempty" json:"placement,omitempty"`
+	Update          *UpdateConfig     `yaml:"update,omitempty" json:"update,omitempty"`
+	Rollback        *UpdateConfig     `yaml:"rollback,omitempty" json:"rollback,omitempty"`
+	Restart         *RestartPolicy    `yaml:"restart,omitempty" json:"restart,omitempty"`
+	LogDriver       *LogDriver        `yaml:"logDriver,omitempty" json:"logDriver,omitempty"`
 }
 
 // RegistryAuth references credentials for pulling from a private registry.
@@ -48,15 +48,15 @@ type RegistryAuth struct {
 
 // PortConfig maps to swarm.EndpointSpec.Ports.
 type PortConfig struct {
-	Published   uint32 `yaml:"published,omitempty" json:"published,omitempty"`
-	Target      uint32 `yaml:"target" json:"target"`
-	Protocol    string `yaml:"protocol,omitempty" json:"protocol,omitempty"`         // tcp | udp | sctp
-	Mode        string `yaml:"mode,omitempty" json:"mode,omitempty"`               // ingress | host
+	Published uint32 `yaml:"published,omitempty" json:"published,omitempty"`
+	Target    uint32 `yaml:"target" json:"target"`
+	Protocol  string `yaml:"protocol,omitempty" json:"protocol,omitempty"` // tcp | udp | sctp
+	Mode      string `yaml:"mode,omitempty" json:"mode,omitempty"`         // ingress | host
 }
 
 // MountConfig maps to mount.Mount.
 type MountConfig struct {
-	Type     string `yaml:"type" json:"type"`           // volume | bind | tmpfs
+	Type     string `yaml:"type" json:"type"` // volume | bind | tmpfs
 	Source   string `yaml:"source,omitempty" json:"source,omitempty"`
 	Target   string `yaml:"target" json:"target"`
 	ReadOnly bool   `yaml:"readonly,omitempty" json:"readonly,omitempty"`
@@ -96,11 +96,11 @@ type Preference struct {
 
 // UpdateConfig maps to swarm.UpdateConfig / RollbackConfig.
 type UpdateConfig struct {
-	Parallelism      uint64  `yaml:"parallelism,omitempty" json:"parallelism,omitempty"`
-	Delay            string  `yaml:"delay,omitempty" json:"delay,omitempty"`
-	FailureAction    string  `yaml:"failureAction,omitempty" json:"failureAction,omitempty"` // pause | continue | rollback
-	Monitor          string  `yaml:"monitor,omitempty" json:"monitor,omitempty"`
-	MaxFailureRatio  float32 `yaml:"maxFailureRatio,omitempty" json:"maxFailureRatio,omitempty"`
+	Parallelism     uint64  `yaml:"parallelism,omitempty" json:"parallelism,omitempty"`
+	Delay           string  `yaml:"delay,omitempty" json:"delay,omitempty"`
+	FailureAction   string  `yaml:"failureAction,omitempty" json:"failureAction,omitempty"` // pause | continue | rollback
+	Monitor         string  `yaml:"monitor,omitempty" json:"monitor,omitempty"`
+	MaxFailureRatio float32 `yaml:"maxFailureRatio,omitempty" json:"maxFailureRatio,omitempty"`
 }
 
 // RestartPolicy maps to swarm.RestartPolicy.
@@ -130,7 +130,7 @@ type Monitoring struct {
 
 // PortCheck is a TCP connectivity probe.
 type PortCheck struct {
-	Port     string `yaml:"port" json:"port"`         // published port to probe
+	Port     string `yaml:"port" json:"port"` // published port to probe
 	Protocol string `yaml:"protocol,omitempty" json:"protocol,omitempty"`
 	Interval string `yaml:"interval,omitempty" json:"interval,omitempty"`
 	Timeout  string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
@@ -139,18 +139,18 @@ type PortCheck struct {
 
 // HTTPCheck is an HTTP liveness/readiness probe.
 type HTTPCheck struct {
-	URL            string   `yaml:"url" json:"url"`
-	Method         string   `yaml:"method,omitempty" json:"method,omitempty"`
+	URL            string            `yaml:"url" json:"url"`
+	Method         string            `yaml:"method,omitempty" json:"method,omitempty"`
 	Headers        map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
-	ExpectedStatus []int    `yaml:"expectedStatus,omitempty" json:"expectedStatus,omitempty"`
-	ExpectedBody   string   `yaml:"expectedBody,omitempty" json:"expectedBody,omitempty"` // regex
-	Interval       string   `yaml:"interval,omitempty" json:"interval,omitempty"`
-	Timeout        string   `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	ExpectedStatus []int             `yaml:"expectedStatus,omitempty" json:"expectedStatus,omitempty"`
+	ExpectedBody   string            `yaml:"expectedBody,omitempty" json:"expectedBody,omitempty"` // regex
+	Interval       string            `yaml:"interval,omitempty" json:"interval,omitempty"`
+	Timeout        string            `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 }
 
 // LogCheck matches log lines against patterns.
 type LogCheck struct {
-	Pattern string   `yaml:"pattern" json:"pattern"`           // Go regex
+	Pattern string   `yaml:"pattern" json:"pattern"` // Go regex
 	Level   string   `yaml:"level,omitempty" json:"level,omitempty"`
 	Ignore  []string `yaml:"ignore,omitempty" json:"ignore,omitempty"`
 	Action  string   `yaml:"action,omitempty" json:"action,omitempty"` // alert | restart
@@ -158,7 +158,7 @@ type LogCheck struct {
 
 // ResourceThreshold triggers when a resource metric crosses a percentage threshold.
 type ResourceThreshold struct {
-	Metric    string `yaml:"metric" json:"metric"`           // cpu | memory
-	Threshold int    `yaml:"threshold" json:"threshold"`       // percent 0-100
+	Metric    string `yaml:"metric" json:"metric"`                     // cpu | memory
+	Threshold int    `yaml:"threshold" json:"threshold"`               // percent 0-100
 	Action    string `yaml:"action,omitempty" json:"action,omitempty"` // alert | restart
 }
