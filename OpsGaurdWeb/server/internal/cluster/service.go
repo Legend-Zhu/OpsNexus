@@ -247,6 +247,7 @@ func (s *Service) DeleteProject(id string) error {
 }
 
 // WorkerClient 按集群名构造 Worker HTTP 客户端（带注册的 token）。
+// 放宽超时到 30s：节点/指标等聚合接口随节点与容器数量增长（实测 5 节点集群 ~16s）。
 func (s *Service) WorkerClient(name string) (*workerproxy.Client, error) {
 	c, err := s.store.GetCluster(name)
 	if err != nil {
@@ -255,7 +256,9 @@ func (s *Service) WorkerClient(name string) (*workerproxy.Client, error) {
 	if c == nil {
 		return nil, ErrNotFound{Name: name}
 	}
-	return workerproxy.New(c.WorkerURL, c.Token), nil
+	cli := workerproxy.New(c.WorkerURL, c.Token)
+	cli.SetTimeout(30 * time.Second)
+	return cli, nil
 }
 
 // --- 告警（P3，经 store.Alert） ---

@@ -2,47 +2,58 @@ package cluster
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
+	pb "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy/pb"
+
+	"google.golang.org/grpc"
 )
 
-// mockWorker 返回一个模拟 Worker（self/healthz 固定响应，failSwarm 时非 manager）。
-func mockWorker(t *testing.T, failSwarm bool) *httptest.Server {
+// clusterWorkerServer 是 cluster 测试用的 mock Worker（只实现 Self RPC；
+// failSwarm 时返回非 manager 角色，模拟 Worker 可达但不是 swarm 控制面）。
+// 其余 RPC 走 UnimplementedManagementServiceServer。
+type clusterWorkerServer struct {
+	pb.UnimplementedManagementServiceServer
+	failSwarm bool
+}
+
+func (m *clusterWorkerServer) Self(context.Context, *pb.Empty) (*pb.SelfInfo, error) {
+	role, swarm := "manager", true
+	if m.failSwarm {
+		role, swarm = "worker", false
+	}
+	return &pb.SelfInfo{
+		NodeId: "abc123", Hostname: "node-1", Role: role,
+		Leader: false, State: "ready", SwarmManager: swarm, Addr: "10.0.0.1",
+	}, nil
+}
+
+// startGRPCWorker 在随机 TCP 端口上启动一个真实 gRPC 服务器，返回其
+// http://127.0.0.1:<port> URL（cluster.Service.probeWorker 经 workerproxy.New
+// 拨号，grpcTarget 会剥掉 scheme）。cleanup 注册到 t.Cleanup。
+func startGRPCWorker(t *testing.T, srv pb.ManagementServiceServer) string {
 	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-	mux.HandleFunc("GET /api/v1/self", func(w http.ResponseWriter, _ *http.Request) {
-		role, swarm := "manager", true
-		if failSwarm {
-			role, swarm = "worker", false
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"nodeId": "abc123", "hostname": "node-1", "role": role,
-			"leader": false, "state": "ready", "swarmManager": swarm, "addr": "10.0.0.1",
-		})
-	})
-	mux.HandleFunc("GET /api/v1/local/stats", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"node": "node-1",
-			"containers": []map[string]any{{
-				"containerId": "c1", "service": "web", "cpuPercent": 3.5,
-				"memPercent": 20.1, "memUsageBytes": 1048576, "memLimitBytes": 5242880,
-			}},
-		})
-	})
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
-	return ts
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	s := grpc.NewServer()
+	pb.RegisterManagementServiceServer(s, srv)
+	go func() { _ = s.Serve(lis) }()
+	t.Cleanup(func() { s.GracefulStop() })
+	return "http://" + lis.Addr().String()
+}
+
+// mockWorker 启动一个模拟 Worker gRPC 服务器，返回其 URL（failSwarm 时 Self
+// 返回非 manager，模拟可达但非控制面的 Worker）。
+func mockWorker(t *testing.T, failSwarm bool) string {
+	t.Helper()
+	return startGRPCWorker(t, &clusterWorkerServer{failSwarm: failSwarm})
 }
 
 func newTestService(t *testing.T, failSwarm bool) (*Service, string) {
@@ -53,7 +64,7 @@ func newTestService(t *testing.T, failSwarm bool) (*Service, string) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	return New(st), mockWorker(t, failSwarm).URL
+	return New(st), mockWorker(t, failSwarm)
 }
 
 // TestAddOnline 接入成功：探测通过 → 落库 online。
@@ -111,14 +122,18 @@ func TestListProbeAndOffline(t *testing.T) {
 	svc := New(st)
 
 	// 先接一个在线的
-	ts := mockWorker(t, false)
-	if _, err := svc.Add(context.Background(), &store.Cluster{Name: "dev", WorkerURL: ts.URL}); err != nil {
+	onlineURL := mockWorker(t, false)
+	if _, err := svc.Add(context.Background(), &store.Cluster{Name: "dev", WorkerURL: onlineURL}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	// 直接落库一个指向已关闭地址的集群（模拟 Worker 下线）
-	tsOffline := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	offlineURL := tsOffline.URL
-	tsOffline.Close()
+	// 直接落库一个指向已关闭端口的集群（模拟 Worker 下线）：开一个 listener
+	// 立即关闭，得到一个保证空闲的地址，拨号必失败 → offline。
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	offlineURL := "http://" + lis.Addr().String()
+	_ = lis.Close()
 	if err := st.PutCluster(&store.Cluster{Name: "down", WorkerURL: offlineURL}); err != nil {
 		t.Fatalf("put: %v", err)
 	}

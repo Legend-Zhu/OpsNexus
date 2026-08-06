@@ -2,23 +2,69 @@ package workerproxy
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
+	"net"
 	"testing"
+
+	pb "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy/pb"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 )
 
-// TestSelfDecode 解码 Worker /api/v1/self 响应。
-func TestSelfDecode(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer tok123" {
-			w.WriteHeader(401)
-			return
-		}
-		w.Write([]byte(`{"nodeId":"n1","hostname":"h1","role":"manager","leader":true,"state":"ready","swarmManager":true,"addr":"10.0.0.1"}`))
-	}))
-	defer ts.Close()
+// --- gRPC mock server helpers (bufconn, in-memory) ---
 
-	cli := New(ts.URL, "tok123")
+const testBufconnBufSize = 1024 * 1024
+
+// startBufconnServer registers srv as a ManagementServiceServer on an
+// in-memory gRPC server and returns a *Client wired to it via bufconn. The
+// returned Client's token is set from the token argument (passed as bearer
+// metadata just like New would). Cleanup is registered with t.Cleanup.
+func startBufconnServer(t *testing.T, srv pb.ManagementServiceServer, token string) *Client {
+	t.Helper()
+	lis := bufconn.Listen(testBufconnBufSize)
+	s := grpc.NewServer()
+	pb.RegisterManagementServiceServer(s, srv)
+	go func() { _ = s.Serve(lis) }()
+	t.Cleanup(func() { s.GracefulStop() })
+
+	dialer := func(context.Context, string) (net.Conn, error) { return lis.Dial() }
+	conn, err := grpc.NewClient(
+		"passthrough://bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc dial bufconn: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return &Client{target: "bufnet", token: token, conn: conn, stub: pb.NewManagementServiceClient(conn)}
+}
+
+// errSelfServer implements only Self (returns a gRPC Unauthenticated error to
+// simulate a missing/invalid bearer token).
+type errSelfServer struct {
+	pb.UnimplementedManagementServiceServer
+	requireToken bool
+}
+
+func (m *errSelfServer) Self(ctx context.Context, _ *pb.Empty) (*pb.SelfInfo, error) {
+	if m.requireToken {
+		// Mimic the server rejecting the call for missing auth.
+		return nil, status.Error(codes.Unauthenticated, "missing or invalid authorization")
+	}
+	return &pb.SelfInfo{}, nil
+}
+
+// --- tests ---
+
+// TestSelfDecode 解码 Worker Self RPC 响应（原 /api/v1/self）。
+func TestSelfDecode(t *testing.T) {
+	srv := &selfServer{}
+	cli := startBufconnServer(t, srv, "tok123")
+
 	si, err := cli.Self(context.Background())
 	if err != nil {
 		t.Fatalf("self: %v", err)
@@ -28,19 +74,12 @@ func TestSelfDecode(t *testing.T) {
 	}
 }
 
-// TestAuthRequired 无 token 请求 → 401 → ErrUnreachable。
+// TestAuthRequired 无 token → gRPC Unauthenticated → ErrUnreachable。
+// 原测试断言 Status==401；gRPC 没有真实 HTTP 状态，因此这里改成断言返回的是
+// *ErrUnreachable 且底层错误是 Unauthenticated（等价于旧的 401 拒绝语义）。
 func TestAuthRequired(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") == "" {
-			w.WriteHeader(401)
-			w.Write([]byte(`unauthorized`))
-			return
-		}
-		w.WriteHeader(200)
-	}))
-	defer ts.Close()
+	cli := startBufconnServer(t, &errSelfServer{requireToken: true}, "")
 
-	cli := New(ts.URL, "")
 	_, err := cli.Self(context.Background())
 	if err == nil {
 		t.Fatal("expected error for missing token")
@@ -49,19 +88,19 @@ func TestAuthRequired(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *ErrUnreachable, got %T", err)
 	}
-	if ue.Status != 401 {
-		t.Fatalf("expected status 401, got %d", ue.Status)
+	// 原测试断言 status 401；gRPC 下对应 Unauthenticated。保留对 ErrUnreachable
+	// 类型的断言，并把 HTTP 状态等价检查改为 codes.Unauthenticated。
+	if status.Code(ue.Err) != codes.Unauthenticated {
+		t.Fatalf("expected Unauthenticated, got %v", ue.Err)
 	}
 }
 
-// TestNodeStats 解码 /api/v1/local/stats。
+// TestNodeStats 解码 NodeStats RPC（原 /api/v1/local/stats）。
 func TestNodeStats(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte(`{"node":"node-1","containers":[{"containerId":"c1","service":"web","cpuPercent":3.5,"memPercent":20.1,"memUsageBytes":1048576,"memLimitBytes":5242880}]}`))
-	}))
-	defer ts.Close()
+	srv := &nodeStatsServer{}
+	cli := startBufconnServer(t, srv, "")
 
-	ns, err := New(ts.URL, "").NodeStats(context.Background())
+	ns, err := cli.NodeStats(context.Background())
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -71,13 +110,49 @@ func TestNodeStats(t *testing.T) {
 }
 
 // TestUnreachable 连接失败 → ErrUnreachable（status=0）。
+// 用一个立即关闭的 listener 模拟不可达的 Worker。
 func TestUnreachable(t *testing.T) {
-	cli := New("http://127.0.0.1:1", "")
-	_, err := cli.Self(context.Background())
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := lis.Addr().String()
+	_ = lis.Close() // 立即关闭，拨号必失败
+
+	cli := New(addr, "")
+	_, err = cli.Self(context.Background())
 	if err == nil {
 		t.Fatal("expected error for unreachable worker")
 	}
 	if _, ok := err.(*ErrUnreachable); !ok {
 		t.Fatalf("expected *ErrUnreachable, got %T", err)
 	}
+}
+
+// --- mock servers used by client_test.go ---
+
+type selfServer struct {
+	pb.UnimplementedManagementServiceServer
+}
+
+func (m *selfServer) Self(context.Context, *pb.Empty) (*pb.SelfInfo, error) {
+	return &pb.SelfInfo{
+		NodeId: "n1", Hostname: "h1", Role: "manager",
+		Leader: true, State: "ready", SwarmManager: true, Addr: "10.0.0.1",
+	}, nil
+}
+
+type nodeStatsServer struct {
+	pb.UnimplementedManagementServiceServer
+}
+
+func (m *nodeStatsServer) NodeStats(context.Context, *pb.Empty) (*pb.NodeStatsResponse, error) {
+	return &pb.NodeStatsResponse{
+		Node: "node-1",
+		Containers: []*pb.ContainerStat{{
+			ContainerId: "c1", Service: "web",
+			CpuPercent: 3.5, MemPercent: 20.1,
+			MemUsage: 1048576, MemLimit: 5242880,
+		}},
+	}, nil
 }

@@ -1,32 +1,19 @@
-// Workload operations over the Worker API: deploy/update/scale/restart/
-// remove, async operation polling, service detail, and SSE log streaming.
-//
-// Worker contract (see Worker/internal/orchestrator + nodeagent):
-//
-//	POST   /api/v1/services                     body=config(YAML/JSON) -> 202 Operation
-//	POST   /api/v1/services/{name}              update config           -> 202 Operation
-//	POST   /api/v1/services/{name}/scale        {"replicas":N}          -> 202 Operation
-//	POST   /api/v1/services/{name}/restart      -> 202 Operation
-//	DELETE /api/v1/services/{name}              -> 200 Operation
-//	GET    /api/v1/operations/{id}              Operation (poll)
-//	GET    /api/v1/services/{name}              ServiceDetail{service,tasks,running,desired,healthy}
-//	GET    /api/v1/services                     []Service (Docker native)
-//	GET    /api/v1/local/logs?service=X&follow&tail&since  SSE {"ts","stream","line"}
+// Workload operations over the Worker gRPC management API: deploy/update/
+// scale/restart/remove, async operation polling, service detail, log streaming,
+// and event/audit subscription. Method signatures match the previous HTTP
+// implementation so upper layers are unchanged.
 package workerproxy
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"strconv"
-	"strings"
+
+	pb "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy/pb"
 )
 
-// --- 操作（异步编排） ---
+// --- 操作（异步编排）---
 
 // OperationStatus 编排操作状态。
 type OperationStatus string
@@ -41,7 +28,7 @@ const (
 	OpCanceled OperationStatus = "canceled"
 )
 
-// Operation 对应 Worker GET /api/v1/operations/{id}。
+// Operation 对应 Worker GetOperation 响应。
 type Operation struct {
 	ID         string          `json:"id"`
 	Type       string          `json:"type"`
@@ -56,49 +43,86 @@ type Operation struct {
 	Mode       string          `json:"mode,omitempty"`
 }
 
-// Deploy 部署服务（config 为 Worker 的 YAML/JSON 配置体，Content-Type: yaml）。
+func opFromPB(o *pb.Operation) Operation {
+	if o == nil {
+		return Operation{}
+	}
+	out := Operation{
+		ID: o.GetId(), Type: o.GetType(), Service: o.GetService(),
+		Status: OperationStatus(o.GetStatus()), StartedAt: o.GetStartedAt(),
+		ServiceID: o.GetServiceId(), Error: o.GetError(),
+		Steps: o.GetSteps(), Replicas: o.GetReplicas(), Mode: o.GetMode(),
+	}
+	if f := o.GetFinishedAt(); f != "" {
+		out.FinishedAt = &f
+	}
+	return out
+}
+
+// Deploy 部署服务（configYAML 为 Worker 的 YAML 配置体）。
 func (c *Client) Deploy(ctx context.Context, configYAML string) (Operation, error) {
-	var op Operation
-	err := c.doWithHooks(ctx, http.MethodPost, "/api/v1/services", nil, []byte(configYAML), &op,
-		func(r *http.Request) { r.Header.Set("Content-Type", "text/yaml") })
-	return op, err
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	op, err := c.stub.Deploy(cctx, &pb.DeployRequest{ConfigBody: []byte(configYAML), IsJson: false})
+	if err != nil {
+		return Operation{}, c.wrapErr(err)
+	}
+	return opFromPB(op), nil
 }
 
 // Update 更新服务配置。
 func (c *Client) Update(ctx context.Context, name, configYAML string) (Operation, error) {
-	var op Operation
-	err := c.doWithHooks(ctx, http.MethodPost, "/api/v1/services/"+name, nil, []byte(configYAML), &op,
-		func(r *http.Request) { r.Header.Set("Content-Type", "text/yaml") })
-	return op, err
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	op, err := c.stub.Update(cctx, &pb.UpdateRequest{Name: name, ConfigBody: []byte(configYAML), IsJson: false})
+	if err != nil {
+		return Operation{}, c.wrapErr(err)
+	}
+	return opFromPB(op), nil
 }
 
 // Scale 调整副本数。
 func (c *Client) Scale(ctx context.Context, name string, replicas uint64) (Operation, error) {
-	var op Operation
-	body, _ := json.Marshal(map[string]uint64{"replicas": replicas})
-	err := c.do(ctx, http.MethodPost, "/api/v1/services/"+name+"/scale", nil, body, &op)
-	return op, err
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	op, err := c.stub.Scale(cctx, &pb.ScaleRequest{Name: name, Replicas: replicas})
+	if err != nil {
+		return Operation{}, c.wrapErr(err)
+	}
+	return opFromPB(op), nil
 }
 
 // Restart 强制重启服务（ForceUpdate）。
 func (c *Client) Restart(ctx context.Context, name string) (Operation, error) {
-	var op Operation
-	err := c.do(ctx, http.MethodPost, "/api/v1/services/"+name+"/restart", nil, nil, &op)
-	return op, err
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	op, err := c.stub.Restart(cctx, &pb.RestartRequest{Name: name})
+	if err != nil {
+		return Operation{}, c.wrapErr(err)
+	}
+	return opFromPB(op), nil
 }
 
 // Remove 删除服务。
 func (c *Client) Remove(ctx context.Context, name string) (Operation, error) {
-	var op Operation
-	err := c.do(ctx, http.MethodDelete, "/api/v1/services/"+name, nil, nil, &op)
-	return op, err
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	op, err := c.stub.Remove(cctx, &pb.RemoveRequest{Name: name})
+	if err != nil {
+		return Operation{}, c.wrapErr(err)
+	}
+	return opFromPB(op), nil
 }
 
 // Operation 查询操作状态。
 func (c *Client) Operation(ctx context.Context, id string) (Operation, error) {
-	var op Operation
-	err := c.do(ctx, http.MethodGet, "/api/v1/operations/"+id, nil, nil, &op)
-	return op, err
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	op, err := c.stub.GetOperation(cctx, &pb.GetOperationRequest{Id: id})
+	if err != nil {
+		return Operation{}, c.wrapErr(err)
+	}
+	return opFromPB(op), nil
 }
 
 // --- 服务视图 ---
@@ -108,15 +132,15 @@ type Workload struct {
 	ID      string            `json:"id"`
 	Name    string            `json:"name"`
 	Image   string            `json:"image,omitempty"`
-	Mode    string            `json:"mode,omitempty"`    // replicated | global
-	Replica string            `json:"replica,omitempty"` // 如 3/3
+	Mode    string            `json:"mode,omitempty"`
+	Replica string            `json:"replica,omitempty"`
 	Running uint64            `json:"running,omitempty"`
 	Desired uint64            `json:"desired,omitempty"`
 	Ports   []PortMapping     `json:"ports,omitempty"`
 	Labels  map[string]string `json:"labels,omitempty"`
 }
 
-// PortMapping 端口映射（发布端口 → 目标端口）。
+// PortMapping 端口映射。
 type PortMapping struct {
 	PublishedPort uint32 `json:"publishedPort"`
 	TargetPort    uint32 `json:"targetPort"`
@@ -124,7 +148,6 @@ type PortMapping struct {
 	Mode          string `json:"mode,omitempty"`
 }
 
-// dockerService Docker 原生 Service（最小子集，用于映射）。
 type dockerService struct {
 	ID            string     `json:"ID"`
 	Spec          dockerSpec `json:"Spec"`
@@ -171,7 +194,6 @@ func mapWorkload(ds dockerService) Workload {
 		w.Desired = ds.Spec.Mode.Replicated.Replicas
 	} else if ds.Spec.Mode.Global != nil {
 		w.Mode = "global"
-		w.Desired = 0 // global 无固定副本数
 	}
 	if ds.ServiceStatus != nil {
 		w.Running = ds.ServiceStatus.RunningTasks
@@ -197,13 +219,16 @@ func mapWorkload(ds dockerService) Workload {
 
 // ListWorkloads 列出集群服务（映射为前端友好视图）。
 func (c *Client) ListWorkloads(ctx context.Context, label string) ([]Workload, error) {
-	var raw []dockerService
-	err := c.do(ctx, http.MethodGet, "/api/v1/services", map[string]string{"label": label}, nil, &raw)
+	raw, err := c.Services(ctx, label)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Workload, 0, len(raw))
-	for _, ds := range raw {
+	var svcs []dockerService
+	if err := json.Unmarshal(raw, &svcs); err != nil {
+		return nil, fmt.Errorf("decode services: %w", err)
+	}
+	out := make([]Workload, 0, len(svcs))
+	for _, ds := range svcs {
 		out = append(out, mapWorkload(ds))
 	}
 	return out, nil
@@ -229,43 +254,6 @@ type TaskView struct {
 	ExitCode     int    `json:"exitCode,omitempty"`
 }
 
-// GetWorkload 获取服务详情（GET /api/v1/services/{name}）。
-func (c *Client) GetWorkload(ctx context.Context, name string) (WorkloadDetail, error) {
-	var raw struct {
-		Service dockerService `json:"service"`
-		Tasks   []dockerTask  `json:"tasks"`
-		Running int           `json:"running"`
-		Desired int           `json:"desired"`
-		Healthy int           `json:"healthy"`
-	}
-	err := c.do(ctx, http.MethodGet, "/api/v1/services/"+name, nil, nil, &raw)
-	if err != nil {
-		return WorkloadDetail{}, err
-	}
-	d := WorkloadDetail{Workload: mapWorkload(raw.Service), Healthy: raw.Healthy}
-	// 权威 running/desired 来自 Worker 顶层字段（真机 Inspect 的 service 无
-	// ServiceStatus）；仅在缺失时回退到 ServiceStatus 映射值。
-	if raw.Running > 0 || raw.Desired > 0 {
-		d.Running = uint64(raw.Running)
-		d.Desired = uint64(raw.Desired)
-		d.Replica = fmt.Sprintf("%d/%d", raw.Running, raw.Desired)
-	}
-	for _, t := range raw.Tasks {
-		d.Tasks = append(d.Tasks, TaskView{
-			ID:           t.ID,
-			Slot:         t.Slot,
-			NodeID:       t.NodeID,
-			State:        t.Status.State,
-			DesiredState: t.DesiredState,
-			Message:      t.Status.Message,
-			Err:          t.Status.Err,
-			ContainerID:  t.Status.ContainerStatus.ContainerID,
-			ExitCode:     t.Status.ContainerStatus.ExitCode,
-		})
-	}
-	return d, nil
-}
-
 type dockerTask struct {
 	ID           string `json:"ID"`
 	Slot         int    `json:"Slot"`
@@ -282,116 +270,127 @@ type dockerTask struct {
 	} `json:"Status"`
 }
 
-// LogLine 一行日志（Worker /local/logs SSE 事件体）。
+// GetWorkload 获取服务详情。
+func (c *Client) GetWorkload(ctx context.Context, name string) (WorkloadDetail, error) {
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.stub.GetService(cctx, &pb.GetServiceRequest{Name: name})
+	if err != nil {
+		return WorkloadDetail{}, c.wrapErr(err)
+	}
+	var svc dockerService
+	if err := json.Unmarshal(resp.GetServiceJson(), &svc); err != nil {
+		return WorkloadDetail{}, fmt.Errorf("decode service: %w", err)
+	}
+	var tasks []dockerTask
+	_ = json.Unmarshal(resp.GetTasksJson(), &tasks)
+
+	d := WorkloadDetail{Workload: mapWorkload(svc), Healthy: int(resp.GetHealthy())}
+	if r := resp.GetRunning(); r > 0 || resp.GetDesired() > 0 {
+		d.Running = uint64(r)
+		d.Desired = uint64(resp.GetDesired())
+		d.Replica = fmt.Sprintf("%d/%d", r, resp.GetDesired())
+	}
+	for _, t := range tasks {
+		d.Tasks = append(d.Tasks, TaskView{
+			ID: t.ID, Slot: t.Slot, NodeID: t.NodeID,
+			State: t.Status.State, DesiredState: t.DesiredState,
+			Message: t.Status.Message, Err: t.Status.Err,
+			ContainerID: t.Status.ContainerStatus.ContainerID,
+			ExitCode:    t.Status.ContainerStatus.ExitCode,
+		})
+	}
+	return d, nil
+}
+
+// --- 流式 ---
+
+// LogLine 一行日志。
 type LogLine struct {
 	TS     string `json:"ts"`
 	Stream string `json:"stream"`
 	Line   string `json:"line"`
 }
 
-// StreamLogs 流式拉取服务日志。事件体格式 data: {"ts","stream","line"}。
+// StreamLogs 流式拉取服务日志（gRPC server-streaming）。
 // handler 返回 false 时停止；ctx 取消或流结束即返回。
 func (c *Client) StreamLogs(ctx context.Context, service string, follow bool, tail int, since string, handler func(LogLine) bool) error {
-	q := map[string]string{
-		"service": service,
-		"follow":  strconv.FormatBool(follow),
-	}
-	if tail > 0 {
-		q["tail"] = strconv.Itoa(tail)
-	}
-	if since != "" {
-		q["since"] = since
-	}
-
-	url := c.baseURL + "/api/v1/local/logs"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stream, err := c.stub.StreamLogs(cctx, &pb.StreamLogsRequest{
+		Service: service, Follow: follow, Tail: int32(tail), Since: since,
+	})
 	if err != nil {
-		return &ErrUnreachable{URL: url, Err: err}
+		return c.wrapErr(err)
 	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	qq := req.URL.Query()
-	for k, v := range q {
-		if v != "" {
-			qq.Set(k, v)
+	for {
+		ll, err := stream.Recv()
+		if err == io.EOF {
+			return nil
 		}
-	}
-	req.URL.RawQuery = qq.Encode()
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return &ErrUnreachable{URL: url, Err: err}
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return &ErrUnreachable{URL: url, Status: resp.StatusCode, Err: fmt.Errorf("%s", strings.TrimSpace(string(raw)))}
-	}
-
-	sc := bufio.NewScanner(resp.Body)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	for sc.Scan() {
-		line := sc.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
+		if err != nil {
+			return c.wrapErr(err)
 		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" || payload == "[DONE]" {
-			continue
-		}
-		var ll LogLine
-		if err := json.Unmarshal([]byte(payload), &ll); err != nil {
-			continue
-		}
-		if !handler(ll) {
+		if !handler(LogLine{TS: ll.GetTs(), Stream: ll.GetStream(), Line: ll.GetLine()}) {
 			return nil
 		}
 	}
-	return sc.Err()
 }
 
-// doWithHooks 发起请求并解码 JSON（支持请求体钩子，如覆盖 Content-Type）。
-func (c *Client) doWithHooks(ctx context.Context, method, path string, query map[string]string, body []byte, v any, hook func(*http.Request)) error {
-	url := c.baseURL + path
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
-	if err != nil {
-		return &ErrUnreachable{URL: url, Err: err}
-	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if hook != nil {
-		hook(req)
-	}
-	q := req.URL.Query()
-	for k, val := range query {
-		if val != "" {
-			q.Set(k, val)
-		}
-	}
-	req.URL.RawQuery = q.Encode()
+// --- 事件/审计订阅（双向流，供 ingest.Subscriber 使用）---
 
-	resp, err := c.http.Do(req)
+// EventSubscription wraps a SubscribeEvents bidirectional stream. The caller
+// starts at AfterSeq, receives MonitorEvent messages, and sends Acks.
+type EventSubscription struct {
+	stream pb.ManagementService_SubscribeEventsClient
+}
+
+// Recv blocks for the next event from the Worker.
+func (s *EventSubscription) Recv() (*pb.MonitorEvent, error) {
+	return s.stream.Recv()
+}
+
+// Ack acknowledges receipt of seq so the Worker can GC persisted events.
+func (s *EventSubscription) Ack(seq int64) error {
+	return s.stream.Send(&pb.SubscribeRequest{AckSeq: seq})
+}
+
+// SubscribeEvents opens a bidirectional event subscription starting after
+// afterSeq (0 = from the beginning). The caller owns Recv/Ack; the stream
+// stays open until Recv returns io.EOF or an error.
+func (c *Client) SubscribeEvents(ctx context.Context, afterSeq int64) (*EventSubscription, error) {
+	stream, err := c.stub.SubscribeEvents(ctx)
 	if err != nil {
-		return &ErrUnreachable{URL: url, Err: err}
+		return nil, c.wrapErr(err)
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	// Send the initial cursor request.
+	if err := stream.Send(&pb.SubscribeRequest{AfterSeq: afterSeq}); err != nil {
+		return nil, c.wrapErr(err)
+	}
+	return &EventSubscription{stream: stream}, nil
+}
+
+// AuditSubscription wraps a SubscribeAudit bidirectional stream.
+type AuditSubscription struct {
+	stream pb.ManagementService_SubscribeAuditClient
+}
+
+func (s *AuditSubscription) Recv() (*pb.AuditEntry, error) {
+	return s.stream.Recv()
+}
+
+func (s *AuditSubscription) Ack(seq int64) error {
+	return s.stream.Send(&pb.SubscribeRequest{AckSeq: seq})
+}
+
+// SubscribeAudit opens a bidirectional audit subscription starting after afterSeq.
+func (c *Client) SubscribeAudit(ctx context.Context, afterSeq int64) (*AuditSubscription, error) {
+	stream, err := c.stub.SubscribeAudit(ctx)
 	if err != nil {
-		return &ErrUnreachable{URL: url, Status: resp.StatusCode, Err: err}
+		return nil, c.wrapErr(err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &ErrUnreachable{URL: url, Status: resp.StatusCode, Err: fmt.Errorf("%s", truncate(string(raw), 512))}
+	if err := stream.Send(&pb.SubscribeRequest{AfterSeq: afterSeq}); err != nil {
+		return nil, c.wrapErr(err)
 	}
-	if v == nil {
-		return nil
-	}
-	if err := json.Unmarshal(raw, v); err != nil {
-		return &ErrUnreachable{URL: url, Status: resp.StatusCode, Err: fmt.Errorf("decode: %w", err)}
-	}
-	return nil
+	return &AuditSubscription{stream: stream}, nil
 }

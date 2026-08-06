@@ -1,0 +1,372 @@
+// OpsGaurd management-plane gRPC contract between the server (OpsGaurdWeb)
+// and the Worker agent.
+//
+// This service replaces the previous HTTP management API (workerproxy ↔
+// orchestrator/api.go). The node-level local API (nodeagent, used for
+// manager↔node proxying) stays on HTTP and is out of scope.
+//
+// Direction & network policy: the server initiates every call (the network
+// only allows server → worker). SubscribeEvents / SubscribeAudit are
+// bidirectional streams opened by the server: the same server-initiated
+// connection carries Worker→server event delivery, so the one-way policy
+// still holds while push semantics are achieved.
+//
+// go_package is intentionally omitted here; it is supplied per-module via
+// protoc -go_opt=Mopsguard.proto=... so the same .proto compiles into two
+// independent module paths (Worker server side, OpsGaurdWeb client side).
+
+syntax = "proto3";
+
+package opsguard.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// ManagementService is the full server↔worker management API.
+service ManagementService {
+  // ---- liveness ----
+  rpc Ping(Empty) returns (Pong);
+  rpc Self(Empty) returns (SelfInfo);
+
+  // ---- workload read ----
+  // ListServices returns Docker-native service objects (server maps to the
+  // frontend-friendly Workload view).
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+  rpc GetService(GetServiceRequest) returns (ServiceDetail);
+
+  // ---- workload write (orchestration) ----
+  // Writes are only executed on the swarm Raft leader; non-leader managers
+  // forward to the leader over an internal gRPC client (same service).
+  rpc Deploy(DeployRequest) returns (Operation);
+  rpc Update(UpdateRequest) returns (Operation);
+  rpc Scale(ScaleRequest) returns (Operation);
+  rpc Restart(RestartRequest) returns (Operation);
+  rpc Remove(RemoveRequest) returns (Operation);
+  rpc GetOperation(GetOperationRequest) returns (Operation);
+
+  // ---- node / host inspection ----
+  rpc ListNodes(Empty) returns (ListNodesResponse);
+  rpc NodeStats(Empty) returns (NodeStatsResponse);
+  rpc NodeProcesses(NodeProcessesRequest) returns (ProcessesResponse);
+
+  // ---- connectivity / HTTP probes ----
+  rpc CheckPort(CheckPortRequest) returns (PortCheckResult);
+  rpc CheckHTTP(CheckHTTPRequest) returns (HTTPCheckResult);
+  rpc CheckFlow(CheckFlowRequest) returns (FlowCheckResult);
+
+  // ---- point-in-time event/audit query (frontend pass-through) ----
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
+  rpc ListAudit(ListAuditRequest) returns (ListAuditResponse);
+
+  // ---- streaming ----
+  // Server-streaming log lines (replaces the SSE /local/logs endpoint).
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogLine);
+
+  // Bidirectional event subscription (replaces the webhook push). The server
+  // opens the stream; the first message it sends carries the resume cursor
+  // (after_seq). The Worker streams events back, and the server acks each
+  // received seq so the Worker can garbage-collect persisted-but-acked
+  // entries. On reconnect the server resumes from the last persisted cursor.
+  rpc SubscribeEvents(stream SubscribeRequest) returns (stream MonitorEvent);
+  rpc SubscribeAudit(stream SubscribeRequest) returns (stream AuditEntry);
+}
+
+// ---- common ----
+
+message Empty {}
+
+message Pong {
+  string status = 1;
+}
+
+message SelfInfo {
+  string node_id = 1;
+  string hostname = 2;
+  string role = 3;          // manager | worker
+  bool leader = 4;          // manager-only: swarm Raft leader
+  string state = 5;         // node Status.State
+  bool swarm_manager = 6;   // whether this daemon runs the swarm control plane
+  string addr = 7;
+}
+
+// ---- workload ----
+
+message ListServicesRequest {
+  string label = 1;
+}
+
+// ListServicesResponse carries the raw Docker service JSON. The server maps it
+// to its frontend-friendly Workload type (mapping logic is presentation-only
+// and lives server-side), so we pass it through as opaque bytes — keeping the
+// proto stable against Docker API shape changes.
+message ListServicesResponse {
+  bytes services_json = 1;
+}
+
+message GetServiceRequest {
+  string name = 1;
+}
+
+// ServiceDetail mirrors the Worker GET /api/v1/services/{name} response: the
+// raw service + tasks + running/desired/healthy counts. service_json / tasks_json
+// carry Docker-native JSON (the server already has typed decoders for them).
+message ServiceDetail {
+  bytes service_json = 1;
+  bytes tasks_json = 2;
+  int32 running = 3;
+  int32 desired = 4;
+  int32 healthy = 5;
+}
+
+// ---- workload write ----
+
+// DeployRequest carries a YAML or JSON service config body (Content-Type is
+// implied by is_json); the Worker validates and applies it.
+message DeployRequest {
+  bytes config_body = 1;
+  bool is_json = 2;
+}
+
+message UpdateRequest {
+  string name = 1;
+  bytes config_body = 2;
+  bool is_json = 3;
+}
+
+message ScaleRequest {
+  string name = 1;
+  uint64 replicas = 2;
+}
+
+message RestartRequest {
+  string name = 1;
+}
+
+message RemoveRequest {
+  string name = 1;
+}
+
+message GetOperationRequest {
+  string id = 1;
+}
+
+// Operation mirrors orchestrator.OperationSnapshot.
+message Operation {
+  string id = 1;
+  string type = 2;
+  string service = 3;
+  string status = 4; // pending|running|healthy|done|failed|partial|canceled
+  string started_at = 5;
+  string finished_at = 6;
+  string service_id = 7;
+  string error = 8;
+  repeated string steps = 9;
+  uint64 replicas = 10;
+  string mode = 11;
+}
+
+// ---- nodes / host ----
+
+message ListNodesResponse {
+  repeated Node nodes = 1;
+}
+
+// Node mirrors workerproxy.Node (the aggregated per-node view).
+message Node {
+  string id = 1;
+  string hostname = 2;
+  string role = 3;
+  string state = 4;
+  string availability = 5;
+  string addr = 6;
+  bool leader = 7;
+  string manager_reach = 8;
+  bool reachable = 9;
+  double cpu_cores = 10;
+  uint64 mem_bytes = 11;
+  double cpu_percent = 12;
+  double mem_percent = 13;
+  int32 container_count = 14;
+}
+
+message NodeStatsResponse {
+  string node = 1;
+  repeated ContainerStat containers = 2;
+}
+
+message ContainerStat {
+  string container_id = 1;
+  string service = 2;
+  string task_id = 3;
+  double cpu_percent = 4;
+  double mem_percent = 5;
+  uint64 mem_usage = 6;
+  uint64 mem_limit = 7;
+}
+
+message NodeProcessesRequest {
+  string node_id = 1;
+  string top = 2;    // cpu|mem
+  int32 limit = 3;
+  string filter = 4;
+}
+
+message ProcessesResponse {
+  string node = 1;
+  int32 total = 2;
+  repeated ProcessInfo processes = 3;
+}
+
+message ProcessInfo {
+  int32 pid = 1;
+  string name = 2;
+  string cmdline = 3;
+  string state = 4;
+  uint64 mem_kb = 5;
+  double cpu_percent = 6;
+}
+
+// ---- probes ----
+
+message CheckPortRequest {
+  string node_id = 1;
+  string host = 2;
+  int32 port = 3;
+  string timeout = 4;
+}
+
+message PortCheckResult {
+  string node = 1;
+  string host = 2;
+  string port = 3;
+  bool ok = 4;
+  int64 latency_ms = 5;
+  string error = 6;
+}
+
+message CheckHTTPRequest {
+  string node_id = 1;
+  string url = 2;
+  string method = 3;
+  map<string, string> headers = 4;
+  repeated int32 expected_status = 5;
+  string expected_body = 6;
+  string timeout = 7;
+}
+
+message HTTPCheckResult {
+  string node = 1;
+  string url = 2;
+  bool ok = 3;
+  int32 status = 4;
+  int64 latency_ms = 5;
+  string error = 6;
+}
+
+message CheckFlowRequest {
+  string node_id = 1;
+  repeated FlowStep steps = 2;
+  map<string, string> vars = 3;
+  string timeout = 4;
+}
+
+message FlowStep {
+  string name = 1;
+  string url = 2;
+  string method = 3;
+  map<string, string> headers = 4;
+  string body = 5;
+  repeated int32 expect_status = 6;
+  string expect_body = 7;
+  map<string, string> extract = 8;
+}
+
+message FlowCheckResult {
+  string node = 1;
+  bool ok = 2;
+  repeated FlowStepResult steps = 3;
+  string failed_step = 4;
+  int64 latency_ms = 5;
+  string error = 6;
+}
+
+message FlowStepResult {
+  string name = 1;
+  bool ok = 2;
+  int32 status = 3;
+  int64 latency_ms = 4;
+  repeated string extracted = 5;
+  string error = 6;
+}
+
+// ---- events / audit (point queries) ----
+
+message ListEventsRequest {
+  string service = 1;
+  string type = 2;
+  int32 limit = 3;
+}
+
+// ListEventsResponse carries raw monitor.Event JSON (the server already has a
+// typed IngestEvent decoder for the webhook path, reused here).
+message ListEventsResponse {
+  bytes events_json = 1;
+}
+
+message ListAuditRequest {
+  string action = 1;
+  int32 limit = 2;
+}
+
+message ListAuditResponse {
+  bytes entries_json = 1;
+}
+
+// ---- streaming ----
+
+message StreamLogsRequest {
+  string service = 1;
+  bool follow = 2;
+  int32 tail = 3;
+  string since = 4;
+}
+
+message LogLine {
+  string ts = 1;
+  string stream = 2;
+  string line = 3;
+}
+
+// SubscribeRequest is sent by the server on a Subscribe* stream. The first
+// message carries after_seq (resume cursor); subsequent messages ack received
+// sequences. A zero after_seq starts from the beginning.
+message SubscribeRequest {
+  int64 after_seq = 1;
+  // ack_seq, when > 0, acknowledges all sequences <= ack_seq as delivered.
+  int64 ack_seq = 2;
+}
+
+// MonitorEvent mirrors monitor.Event + the persistence seq.
+message MonitorEvent {
+  int64 seq = 1; // monotonic sequence assigned by the Worker event queue
+  string id = 2;
+  google.protobuf.Timestamp ts = 3;
+  string service = 4;
+  string type = 5;
+  string level = 6;
+  string msg = 7;
+  string detail = 8;
+}
+
+// AuditEntry mirrors audit.Entry + the persistence seq.
+message AuditEntry {
+  int64 seq = 1;
+  string id = 2;
+  google.protobuf.Timestamp ts = 3;
+  string actor = 4;
+  string action = 5;
+  string service = 6;
+  string command = 7;
+  string target = 8;
+  bool ok = 9;
+  string detail = 10;
+}

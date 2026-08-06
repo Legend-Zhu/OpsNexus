@@ -46,7 +46,10 @@ func (a *API) Routes() map[string]http.HandlerFunc {
 
 // ---- stats ----
 
-type containerStat struct {
+// ContainerStat is a single container's resource usage snapshot. Exported so
+// the gRPC management service can return the same shape without duplicating
+// the collection logic.
+type ContainerStat struct {
 	ContainerID string  `json:"containerId"`
 	Service     string  `json:"service,omitempty"`
 	TaskID      string  `json:"taskId,omitempty"`
@@ -56,21 +59,22 @@ type containerStat struct {
 	MemLimit    uint64  `json:"memLimitBytes"`
 }
 
-type statsResp struct {
+// StatsResp is the local-node container-stats response, shared by the HTTP
+// /api/v1/local/stats handler and the gRPC NodeStats RPC.
+type StatsResp struct {
 	Node       string          `json:"node"`
-	Containers []containerStat `json:"containers"`
+	Containers []ContainerStat `json:"containers"`
 }
 
-func (a *API) stats(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+// LocalStats collects this node's running swarm-service container stats. Shared
+// by the HTTP handler and the gRPC server so the collection logic lives once.
+func (a *API) LocalStats(ctx context.Context) (StatsResp, error) {
 	host, _ := hostname()
-	// containers that are part of a swarm service
 	cs, err := a.cli.ListContainers(ctx, docker.Filter{"label": {"com.docker.swarm.service.id"}})
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
-		return
+		return StatsResp{}, err
 	}
-	resp := statsResp{Node: host, Containers: make([]containerStat, 0, len(cs))}
+	resp := StatsResp{Node: host, Containers: make([]ContainerStat, 0, len(cs))}
 	for _, c := range cs {
 		if c.State != "running" {
 			continue
@@ -84,7 +88,7 @@ func (a *API) stats(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		csd := containerStat{
+		resp.Containers = append(resp.Containers, ContainerStat{
 			ContainerID: c.ID,
 			Service:     c.Labels["com.docker.swarm.service.name"],
 			TaskID:      c.Labels["com.docker.swarm.task.id"],
@@ -92,8 +96,16 @@ func (a *API) stats(w http.ResponseWriter, r *http.Request) {
 			MemPercent:  round2(memPercentOf(second)),
 			MemUsage:    second.MemoryStats.Usage,
 			MemLimit:    second.MemoryStats.Limit,
-		}
-		resp.Containers = append(resp.Containers, csd)
+		})
+	}
+	return resp, nil
+}
+
+func (a *API) stats(w http.ResponseWriter, r *http.Request) {
+	resp, err := a.LocalStats(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err)
+		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

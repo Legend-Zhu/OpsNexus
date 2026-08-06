@@ -5,8 +5,15 @@
 #   - worker nodes:  per-node local API (stats / container exec / host exec)
 # The manager aggregates/proxies cross-node calls to the node workers.
 #
-# Host command execution (exec_host_command) requires the privileged +
-# pid=host runtime so the Worker can nsenter into the host's PID 1 namespaces.
+# LIMITATION: swarm services silently IGNORE `privileged` and `pid: host`
+# (deploy logs "Ignoring unsupported options"). Under swarm the Worker therefore
+# sees only its own PID namespace — host process listing, host-wide stats and
+# exec_host_command (nsenter) are unavailable. If full host visibility is
+# required, run the Worker as a plain container instead:
+#   docker run -d --privileged --pid host --network host \
+#     -v /var/run/docker.sock:/var/run/docker.sock:ro \
+#     -v /etc/opsguard/agent-config.yaml:/etc/opsguard/agent-config.yaml:ro \
+#     opsguard-worker:1.0.0 -agent-config /etc/opsguard/agent-config.yaml
 #
 # Deploy:
 #   docker build -t opsguard-worker:1.0.0 -f Dockerfile .
@@ -19,9 +26,8 @@ services:
   worker:
     image: opsguard-worker:1.0.0
     hostname: "{{.Node.Hostname}}"
-    # privileged + pid=host: allow nsenter host-command execution and stats
-    # collection across the whole host. Remove for a reduced-security mode
-    # (host exec disabled; node stats limited to swarm containers).
+    # NOTE: swarm ignores both options below (kept for documentation of the
+    # required privileges when running as a plain container — see header).
     privileged: true
     pid: host
     deploy:
@@ -35,17 +41,26 @@ services:
           memory: 256M
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
-      # Every worker listens on the same port; the manager proxies to node
-      # workers on this port via the node's swarm address.
-      - WORKER_PORT=8080
+    # Every worker listens on the same port; the manager proxies to node
+    # workers on this port via the node's swarm address. The proxy port is
+    # derived from the -addr flag (default :8080), not an env var.
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Agent config (command policy / role). Mount the same file on all
       # nodes; the sample in deploy/agent-config.yaml.example is safe-by-default.
       - /etc/opsguard/agent-config.yaml:/etc/opsguard/agent-config.yaml:ro
+      # Persistent state (event/audit SQLite queues). Manager-role workers
+      # own these; node-role workers ignore the volume. Survives restarts so
+      # the gRPC Subscribe* streams resume without event loss.
+      - /var/lib/opsguard:/var/lib/opsguard
     command: ["-agent-config", "/etc/opsguard/agent-config.yaml"]
     ports:
+      # HTTP: /mcp (Streamable HTTP), /healthz, node-level local API.
       - "8080:8080"
+      # gRPC: management API (server↔worker). The server connects here and
+      # opens SubscribeEvents/SubscribeAudit streams to pull events back over
+      # the one-way-allowed direction (server → worker).
+      - "9080:9080"
     logging:
       driver: json-file
       options:

@@ -104,9 +104,6 @@ func New(h *api.Handlers) *gin.Engine {
 		clusters.GET("/:name/nodes", h.ListNodes)
 		clusters.GET("/:name/nodes/:id/processes", h.NodeProcesses)
 
-		// 告警 ingest（Worker webhook 入口）
-		v1.POST("/ingest/events", h.IngestEvent)
-
 		// 告警中心
 		alerts := v1.Group("/alerts")
 		{

@@ -13,8 +13,9 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
 )
 
-// WorkerPort is the HTTP port every node-role worker listens on. The manager
-// proxies to node workers through this port.
+// WorkerPort is the default HTTP port every node-role worker listens on. The
+// manager proxies to node workers through this port; when workers listen on a
+// custom port, override it via Orchestrator.SetWorkerPort.
 const WorkerPort = "8080"
 
 // NodeClient talks to a node-role worker's local API over HTTP.
@@ -24,11 +25,16 @@ type NodeClient struct {
 }
 
 // NewNodeClient builds a client for a node worker at the given address
-// (host or IP; the port is added if absent).
-func NewNodeClient(addr string) *NodeClient {
+// (host or IP; the port is added if absent — the optional port argument
+// overrides the default WorkerPort).
+func NewNodeClient(addr string, port ...string) *NodeClient {
 	base := addr
 	if !hasPort(base) {
-		base = addr + ":" + WorkerPort
+		p := WorkerPort
+		if len(port) > 0 && port[0] != "" {
+			p = port[0]
+		}
+		base = addr + ":" + p
 	}
 	if !hasScheme(base) {
 		base = "http://" + base
@@ -348,7 +354,7 @@ func (o *Orchestrator) NodeAddrs(ctx context.Context) (map[string]string, error)
 
 // NodeClientByAddr builds a client for a node worker at the given address.
 func (o *Orchestrator) NodeClientByAddr(addr string) *NodeClient {
-	return NewNodeClient(addr)
+	return NewNodeClient(addr, o.nodePort())
 }
 
 // SelfNodeID returns this daemon's swarm node ID.
@@ -373,5 +379,5 @@ func (o *Orchestrator) nodeClientForTask(ctx context.Context, task docker.Task) 
 	if !ok {
 		return nil, fmt.Errorf("no address for node %s", task.NodeID)
 	}
-	return NewNodeClient(addr), nil
+	return NewNodeClient(addr, o.nodePort()), nil
 }

@@ -57,10 +57,11 @@ func NewHandlers() *Handlers {
 // SetClusterService wires the cluster registry service (P1).
 func (h *Handlers) SetClusterService(s *cluster.Service) { h.clusters = s }
 
-// SetIngestService wires the webhook ingest service (P3) and its token.
-func (h *Handlers) SetIngestService(s *ingest.Service, token string) {
+// SetIngestService wires the ingest service (P3). The token parameter is
+// retained for API stability but unused now that ingest is driven by the gRPC
+// subscriber (no HTTP webhook entry to authenticate).
+func (h *Handlers) SetIngestService(s *ingest.Service, _ string) {
 	h.ingestSvc = s
-	h.ingestToken = token
 }
 
 // SetPatrolService wires the patrol service (P5).

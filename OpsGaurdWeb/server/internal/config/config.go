@@ -68,8 +68,6 @@ type StoreConfig struct {
 type ServerConfig struct {
 	Addr   string `yaml:"addr" json:"addr"`
 	APIKey string `yaml:"api_key" json:"apiKey"` // 网关鉴权，空则不启用
-	// IngestToken 校验 Worker webhook 推送（POST /api/v1/ingest/events?token=）。
-	IngestToken string `yaml:"ingest_token" json:"ingestToken"`
 }
 
 // ClusterConfig binds a cluster name to its Worker endpoints.

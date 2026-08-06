@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net"
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/audit"
@@ -22,6 +23,8 @@ type Orchestrator struct {
 	readyTimeout time.Duration
 	mon          MonitorRegistrar // optional P2 hook; nil disables
 	audit        *audit.Store     // optional audit log; nil disables
+	workerPort   string           // node-worker HTTP proxy port (default WorkerPort)
+	grpcPort     string           // management gRPC port (default "9080"); leader write-forwarding targets it
 }
 
 // MonitorRegistrar is the P2 monitoring hook implemented by monitor.Manager.
@@ -74,24 +77,56 @@ func (o *Orchestrator) LeaderAddr(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("no swarm leader found")
 }
 
-// ProxyWriteToLeader forwards a write request to the leader's HTTP API.
-// Returns the leader's status code and response body. Used by non-leader
-// manager instances: the leader is the only one that performs control-plane
-// writes, so followers proxy /api/v1/services* mutations to it.
-func (o *Orchestrator) ProxyWriteToLeader(ctx context.Context, method, path string, body []byte) (int, []byte, error) {
-	addr, err := o.LeaderAddr(ctx)
-	if err != nil {
-		return 0, nil, err
-	}
-	nc := NewNodeClient(addr)
-	return nc.Proxy(method, path, body)
-}
-
 // SetReadyTimeout overrides the readiness polling deadline (e.g. for tests).
 func (o *Orchestrator) SetReadyTimeout(d time.Duration) {
 	if d > 0 {
 		o.readyTimeout = d
 	}
+}
+
+// SetWorkerPort overrides the port used when proxying to node workers
+// (default WorkerPort). Pass the port this worker itself listens on —
+// every worker in the cluster is expected to share the same port.
+func (o *Orchestrator) SetWorkerPort(port string) {
+	if port != "" {
+		o.workerPort = port
+	}
+}
+
+// nodePort returns the effective node-worker proxy port.
+func (o *Orchestrator) nodePort() string {
+	if o.workerPort != "" {
+		return o.workerPort
+	}
+	return WorkerPort
+}
+
+// SetGRPCPort pins the management gRPC port. Non-leader managers forward
+// writes to the leader's gRPC server on this port. Every worker in the cluster
+// is expected to share the same port.
+func (o *Orchestrator) SetGRPCPort(port string) {
+	if port != "" {
+		o.grpcPort = port
+	}
+}
+
+// grpcPortOf returns the effective management gRPC port.
+func (o *Orchestrator) grpcPortOf() string {
+	if o.grpcPort != "" {
+		return o.grpcPort
+	}
+	return "9080"
+}
+
+// LeaderGRPCAddr resolves the swarm leader's management gRPC address
+// (host:port). Used by the gRPC server to forward writes when this instance is
+// not the leader.
+func (o *Orchestrator) LeaderGRPCAddr(ctx context.Context) (string, error) {
+	addr, err := o.LeaderAddr(ctx)
+	if err != nil {
+		return "", err
+	}
+	return net.JoinHostPort(addr, o.grpcPortOf()), nil
 }
 
 // SetMonitor wires the P2 monitoring registrar (nil disables).

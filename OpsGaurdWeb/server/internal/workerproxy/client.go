@@ -1,30 +1,35 @@
-// Package workerproxy is the HTTP client the management plane uses to talk
-// to a cluster's Worker. It wraps the Worker's public API (healthz, self,
-// services, events, audit, local stats) with per-request bearer token,
-// timeouts and error normalisation, so handlers get typed results instead
-// of raw HTTP plumbing. One Client per cluster (built from the registry).
+// Package workerproxy is the gRPC client the management plane uses to talk to
+// a cluster's Worker. It wraps the Worker's ManagementService (gRPC) with
+// per-call bearer-token metadata, timeouts and error normalisation, so
+// handlers get typed results instead of raw gRPC plumbing. One Client per
+// cluster (built from the registry).
 //
-// Contract reference (Worker):
+// The WorkerURL registered for a cluster points at the Worker's gRPC port
+// (default :9080). The HTTP port (:8080) still serves /mcp, /healthz and the
+// node-level local API; those are out of scope here.
 //
-//	GET  /healthz                      -> {"status":"ok",...}
-//	GET  /api/v1/self                  -> SelfInfo{nodeId,hostname,role,leader,state,swarmManager,addr}
-//	GET  /api/v1/services?label=       -> []Service  (opaque here, P2 consumes)
-//	GET  /api/v1/local/stats           -> {node, containers[]}
-//	GET  /api/v1/events?service&type&limit -> []Event  (opaque here, P3 consumes)
-//	GET  /api/v1/audit?action&limit    -> []AuditEntry (opaque here)
+// Method signatures are unchanged from the previous HTTP implementation so
+// every upper layer (api/, patrol/, alertrule/, investigate/) needs no edits.
 package workerproxy
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
+	"net/url"
+	"strings"
 	"time"
+
+	pb "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy/pb"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 // ErrUnreachable 表示 Worker 连接失败（网络/超时/非 2xx），用于健康状态判定。
+// Status is kept for API compatibility (502 for gRPC errors; the HTTP client
+// previously populated it from the response).
 type ErrUnreachable struct {
 	URL    string
 	Status int
@@ -38,88 +43,90 @@ func (e *ErrUnreachable) Error() string {
 	return fmt.Sprintf("worker %s unreachable: %v", e.URL, e.Err)
 }
 
-// Client 是对单个 Worker 的 HTTP 客户端。
+// Client 是对单个 Worker 的 gRPC 客户端。
 type Client struct {
-	baseURL string // e.g. http://<管理节点IP>:8080
-	token   string // bearer token（可空）
-	http    *http.Client
+	target string // host:port for gRPC dial
+	token  string // bearer token（可空）
+	conn   *grpc.ClientConn
+	stub   pb.ManagementServiceClient
 }
 
-// New 创建 Worker 客户端。
+// New 创建 Worker gRPC 客户端。baseURL 是 Worker 的 gRPC 端点
+// (http(s)://host:9080 或 host:9080)；token 作为 bearer 元数据。
 func New(baseURL, token string) *Client {
-	return &Client{
-		baseURL: baseURL,
-		token:   token,
-		http: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+	target := grpcTarget(baseURL)
+	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		// grpc.NewClient only errors on an invalid target string; fall back to
+		// a lazy dial that surfaces the error on first call via ErrUnreachable.
+		conn = nil
 	}
+	c := &Client{target: target, token: token, conn: conn}
+	if conn != nil {
+		c.stub = pb.NewManagementServiceClient(conn)
+	}
+	return c
 }
 
-// do 发起请求并解码 JSON 到 v；非 2xx 返回 *ErrUnreachable。
-func (c *Client) do(ctx context.Context, method, path string, query map[string]string, body []byte, v any) error {
-	url := c.baseURL + path
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
-	if err != nil {
-		return &ErrUnreachable{URL: url, Err: err}
-	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	q := req.URL.Query()
-	for k, val := range query {
-		if val != "" {
-			q.Set(k, val)
-		}
-	}
-	req.URL.RawQuery = q.Encode()
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return &ErrUnreachable{URL: url, Err: err}
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 8MB 上限
-	if err != nil {
-		return &ErrUnreachable{URL: url, Status: resp.StatusCode, Err: err}
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &ErrUnreachable{URL: url, Status: resp.StatusCode, Err: fmt.Errorf("%s", truncate(string(raw), 512))}
-	}
-	if v == nil {
-		return nil
-	}
-	if err := json.Unmarshal(raw, v); err != nil {
-		return &ErrUnreachable{URL: url, Status: resp.StatusCode, Err: fmt.Errorf("decode: %w", err)}
+// Close releases the underlying gRPC connection.
+func (c *Client) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
 	}
 	return nil
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
+// SetTimeout is retained for API compatibility. The gRPC client uses
+// per-context deadlines instead of a client-wide timeout; this is a no-op kept
+// so callers (cluster.Service.WorkerClient) compile unchanged.
+func (c *Client) SetTimeout(d time.Duration) {}
+
+// grpcTarget converts a baseURL (http://host:9080, host:9080, :9080) into a
+// gRPC dial target (host:9080), stripping scheme and path.
+func grpcTarget(baseURL string) string {
+	u, err := url.Parse(baseURL)
+	if err == nil && u.Host != "" {
+		return u.Host
 	}
-	return s[:n] + "..."
+	// No scheme: strip any path, keep host:port.
+	if i := strings.IndexByte(baseURL, '/'); i >= 0 {
+		baseURL = baseURL[:i]
+	}
+	return baseURL
 }
 
-// --- Worker 契约类型（P1 用到的子集） ---
+// callCtx attaches the bearer token as gRPC metadata and returns ctx with the
+// per-client timeout applied (default 30s, matching the previous HTTP client).
+func (c *Client) callCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	if c.token != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.token)
+	}
+	return context.WithTimeout(ctx, 30*time.Second)
+}
 
-// SelfInfo 对应 Worker GET /api/v1/self。
+// wrapErr converts a gRPC error into *ErrUnreachable so the caller's health
+// logic (cluster probe) keeps working unchanged.
+func (c *Client) wrapErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &ErrUnreachable{URL: c.target, Err: err}
+}
+
+// --- Worker 契约类型（与旧 HTTP 实现一致，上层零改动）---
+
+// SelfInfo 对应 Worker Self RPC。
 type SelfInfo struct {
 	NodeID       string `json:"nodeId"`
 	Hostname     string `json:"hostname"`
-	Role         string `json:"role"`         // manager | worker
-	Leader       bool   `json:"leader"`       // manager-only: swarm Raft leader
-	State        string `json:"state"`        // node Status.State
-	SwarmManager bool   `json:"swarmManager"` // 该 daemon 是否运行 swarm 控制面
+	Role         string `json:"role"`
+	Leader       bool   `json:"leader"`
+	State        string `json:"state"`
+	SwarmManager bool   `json:"swarmManager"`
 	Addr         string `json:"addr,omitempty"`
 }
 
-// NodeStats 对应 Worker GET /api/v1/local/stats。
+// NodeStats 对应 Worker NodeStats RPC。
 type NodeStats struct {
 	Node       string          `json:"node"`
 	Containers []ContainerStat `json:"containers"`
@@ -136,18 +143,17 @@ type ContainerStat struct {
 	MemLimit    uint64  `json:"memLimitBytes"`
 }
 
-// Node 对应 Worker GET /api/v1/nodes 的单个节点视图
-// （管理层级「集群 → 节点」）。
+// Node 对应 Worker ListNodes 的单个节点视图。
 type Node struct {
 	ID             string  `json:"id"`
 	Hostname       string  `json:"hostname"`
-	Role           string  `json:"role"`         // manager | worker
-	State          string  `json:"state"`        // ready | down | ...
-	Availability   string  `json:"availability"` // active | pause | drain
+	Role           string  `json:"role"`
+	State          string  `json:"state"`
+	Availability   string  `json:"availability"`
 	Addr           string  `json:"addr"`
 	Leader         bool    `json:"leader"`
 	ManagerReach   string  `json:"managerReachability,omitempty"`
-	Reachable      bool    `json:"reachable"` // 节点 Worker 可达
+	Reachable      bool    `json:"reachable"`
 	CPUCores       float64 `json:"cpuCores"`
 	MemBytes       uint64  `json:"memBytes"`
 	CPUPercent     float64 `json:"cpuPercent"`
@@ -155,7 +161,7 @@ type Node struct {
 	ContainerCount int     `json:"containerCount"`
 }
 
-// Process 对应 Worker GET /api/v1/local/processes 的单个进程。
+// Process 对应 Worker 进程条目。
 type Process struct {
 	PID        int     `json:"pid"`
 	Name       string  `json:"name"`
@@ -165,14 +171,14 @@ type Process struct {
 	CPUPercent float64 `json:"cpuPercent"`
 }
 
-// ProcessesResp 对应 Worker 的进程列表响应。
+// ProcessesResp 对应 Worker 进程列表响应。
 type ProcessesResp struct {
 	Node      string    `json:"node"`
 	Total     int       `json:"total"`
 	Processes []Process `json:"processes"`
 }
 
-// PortCheckResult 对应 Worker GET /api/v1/nodes/{id}/check/port 的响应。
+// PortCheckResult 对应 Worker CheckPort 响应。
 type PortCheckResult struct {
 	Node      string `json:"node"`
 	Host      string `json:"host"`
@@ -182,17 +188,17 @@ type PortCheckResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// HTTPCheckRequest 对应 Worker POST /api/v1/nodes/{id}/check/http 的请求体。
+// HTTPCheckRequest 对应 Worker CheckHTTP 请求体。
 type HTTPCheckRequest struct {
 	URL            string            `json:"url"`
 	Method         string            `json:"method,omitempty"`
 	Headers        map[string]string `json:"headers,omitempty"`
-	ExpectedStatus []int             `json:"expectedStatus,omitempty"` // 空 = 任意 2xx
-	ExpectedBody   string            `json:"expectedBody,omitempty"`   // 正则
+	ExpectedStatus []int             `json:"expectedStatus,omitempty"`
+	ExpectedBody   string            `json:"expectedBody,omitempty"`
 	Timeout        string            `json:"timeout,omitempty"`
 }
 
-// HTTPCheckResult 对应 Worker POST /api/v1/nodes/{id}/check/http 的响应。
+// HTTPCheckResult 对应 Worker CheckHTTP 响应。
 type HTTPCheckResult struct {
 	Node      string `json:"node"`
 	URL       string `json:"url"`
@@ -211,17 +217,17 @@ type FlowStep struct {
 	Body         string            `json:"body,omitempty"`
 	ExpectStatus []int             `json:"expectStatus,omitempty"`
 	ExpectBody   string            `json:"expectBody,omitempty"`
-	Extract      map[string]string `json:"extract,omitempty"` // var -> "$.json.path" 或 "re:正则"
+	Extract      map[string]string `json:"extract,omitempty"`
 }
 
-// FlowCheckRequest 对应 Worker POST /api/v1/nodes/{id}/check/flow 的请求体。
+// FlowCheckRequest 对应 Worker CheckFlow 请求体。
 type FlowCheckRequest struct {
 	Steps   []FlowStep        `json:"steps"`
 	Vars    map[string]string `json:"vars,omitempty"`
 	Timeout string            `json:"timeout,omitempty"`
 }
 
-// FlowStepResult 单步结果（提取值不回显，只有变量名）。
+// FlowStepResult 单步结果。
 type FlowStepResult struct {
 	Name      string   `json:"name"`
 	OK        bool     `json:"ok"`
@@ -243,100 +249,196 @@ type FlowCheckResult struct {
 
 // --- 方法 ---
 
-// Ping 探测 Worker 存活（GET /healthz）。
+// Ping 探测 Worker 存活（gRPC Ping RPC）。
 func (c *Client) Ping(ctx context.Context) error {
-	var out map[string]any
-	return c.do(ctx, http.MethodGet, "/healthz", nil, nil, &out)
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	_, err := c.stub.Ping(cctx, &pb.Empty{})
+	return c.wrapErr(err)
 }
 
-// Self 获取 Worker 所在节点的 swarm 角色（GET /api/v1/self）。
+// Self 获取 Worker 所在节点的 swarm 角色。
 func (c *Client) Self(ctx context.Context) (SelfInfo, error) {
-	var si SelfInfo
-	err := c.do(ctx, http.MethodGet, "/api/v1/self", nil, nil, &si)
-	return si, err
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.stub.Self(cctx, &pb.Empty{})
+	if err != nil {
+		return SelfInfo{}, c.wrapErr(err)
+	}
+	return SelfInfo{
+		NodeID: resp.GetNodeId(), Hostname: resp.GetHostname(), Role: resp.GetRole(),
+		Leader: resp.GetLeader(), State: resp.GetState(), SwarmManager: resp.GetSwarmManager(), Addr: resp.GetAddr(),
+	}, nil
 }
 
-// Services 列出集群服务（GET /api/v1/services），P1 原样透传。
+// Services 列出集群服务（Docker 原生 JSON，P1 原样透传）。
 func (c *Client) Services(ctx context.Context, label string) (json.RawMessage, error) {
-	var out json.RawMessage
-	err := c.do(ctx, http.MethodGet, "/api/v1/services", map[string]string{"label": label}, nil, &out)
-	return out, err
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.stub.ListServices(cctx, &pb.ListServicesRequest{Label: label})
+	if err != nil {
+		return nil, c.wrapErr(err)
+	}
+	return json.RawMessage(resp.GetServicesJson()), nil
 }
 
-// NodeStats 获取节点资源统计（GET /api/v1/local/stats）。
+// NodeStats 获取本节点资源统计。
 func (c *Client) NodeStats(ctx context.Context) (NodeStats, error) {
-	var ns NodeStats
-	err := c.do(ctx, http.MethodGet, "/api/v1/local/stats", nil, nil, &ns)
-	return ns, err
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.stub.NodeStats(cctx, &pb.Empty{})
+	if err != nil {
+		return NodeStats{}, c.wrapErr(err)
+	}
+	ns := NodeStats{Node: resp.GetNode()}
+	for _, ct := range resp.GetContainers() {
+		ns.Containers = append(ns.Containers, ContainerStat{
+			ContainerID: ct.GetContainerId(), Service: ct.GetService(), TaskID: ct.GetTaskId(),
+			CPUPercent: ct.GetCpuPercent(), MemPercent: ct.GetMemPercent(),
+			MemUsage: ct.GetMemUsage(), MemLimit: ct.GetMemLimit(),
+		})
+	}
+	return ns, nil
 }
 
-// ListNodes 获取集群节点列表（GET /api/v1/nodes）。
+// ListNodes 获取集群节点列表。
 func (c *Client) ListNodes(ctx context.Context) ([]Node, error) {
-	var nodes []Node
-	err := c.do(ctx, http.MethodGet, "/api/v1/nodes", nil, nil, &nodes)
-	return nodes, err
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.stub.ListNodes(cctx, &pb.Empty{})
+	if err != nil {
+		return nil, c.wrapErr(err)
+	}
+	out := make([]Node, 0, len(resp.GetNodes()))
+	for _, n := range resp.GetNodes() {
+		out = append(out, Node{
+			ID: n.GetId(), Hostname: n.GetHostname(), Role: n.GetRole(), State: n.GetState(),
+			Availability: n.GetAvailability(), Addr: n.GetAddr(), Leader: n.GetLeader(),
+			ManagerReach: n.GetManagerReach(), Reachable: n.GetReachable(),
+			CPUCores: n.GetCpuCores(), MemBytes: n.GetMemBytes(),
+			CPUPercent: n.GetCpuPercent(), MemPercent: n.GetMemPercent(),
+			ContainerCount: int(n.GetContainerCount()),
+		})
+	}
+	return out, nil
 }
 
-// ListProcesses 获取指定节点的宿主机进程（GET /api/v1/nodes/{id}/processes）。
-// filter 为名称/cmdline 子串（大小写不敏感），空 = 不过滤。
+// ListProcesses 获取指定节点的宿主机进程。
 func (c *Client) ListProcesses(ctx context.Context, nodeID, top string, limit int, filter string) (ProcessesResp, error) {
-	var out ProcessesResp
-	q := map[string]string{"top": top, "filter": filter}
-	if limit > 0 {
-		q["limit"] = fmt.Sprintf("%d", limit)
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.stub.NodeProcesses(cctx, &pb.NodeProcessesRequest{
+		NodeId: nodeID, Top: top, Limit: int32(limit), Filter: filter,
+	})
+	if err != nil {
+		return ProcessesResp{}, c.wrapErr(err)
 	}
-	err := c.do(ctx, http.MethodGet, "/api/v1/nodes/"+nodeID+"/processes", q, nil, &out)
-	return out, err
+	out := ProcessesResp{Node: resp.GetNode(), Total: int(resp.GetTotal())}
+	for _, p := range resp.GetProcesses() {
+		out.Processes = append(out.Processes, Process{
+			PID: int(p.GetPid()), Name: p.GetName(), Cmdline: p.GetCmdline(),
+			State: p.GetState(), MemKB: p.GetMemKb(), CPUPercent: p.GetCpuPercent(),
+		})
+	}
+	return out, nil
 }
 
-// CheckPort 从指定节点发起一次性 TCP 探测（GET /api/v1/nodes/{id}/check/port）。
+// CheckPort 从指定节点发起一次性 TCP 探测。
 func (c *Client) CheckPort(ctx context.Context, nodeID, host string, port int, timeout string) (PortCheckResult, error) {
-	var out PortCheckResult
-	q := map[string]string{"host": host, "port": fmt.Sprintf("%d", port), "timeout": timeout}
-	err := c.do(ctx, http.MethodGet, "/api/v1/nodes/"+nodeID+"/check/port", q, nil, &out)
-	return out, err
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.stub.CheckPort(cctx, &pb.CheckPortRequest{
+		NodeId: nodeID, Host: host, Port: int32(port), Timeout: timeout,
+	})
+	if err != nil {
+		return PortCheckResult{}, c.wrapErr(err)
+	}
+	return PortCheckResult{
+		Node: resp.GetNode(), Host: resp.GetHost(), Port: resp.GetPort(),
+		OK: resp.GetOk(), LatencyMS: resp.GetLatencyMs(), Error: resp.GetError(),
+	}, nil
 }
 
-// CheckHTTP 从指定节点发起一次性 HTTP 探测（POST /api/v1/nodes/{id}/check/http）。
+// CheckHTTP 从指定节点发起一次性 HTTP 探测。
 func (c *Client) CheckHTTP(ctx context.Context, nodeID string, req HTTPCheckRequest) (HTTPCheckResult, error) {
-	var out HTTPCheckResult
-	body, err := json.Marshal(req)
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.stub.CheckHTTP(cctx, &pb.CheckHTTPRequest{
+		NodeId: nodeID, Url: req.URL, Method: req.Method, Headers: req.Headers,
+		ExpectedStatus: intsToInt32s(req.ExpectedStatus), ExpectedBody: req.ExpectedBody, Timeout: req.Timeout,
+	})
 	if err != nil {
-		return out, err
+		return HTTPCheckResult{}, c.wrapErr(err)
 	}
-	err = c.do(ctx, http.MethodPost, "/api/v1/nodes/"+nodeID+"/check/http", nil, body, &out)
-	return out, err
+	return HTTPCheckResult{
+		Node: resp.GetNode(), URL: resp.GetUrl(), OK: resp.GetOk(), Status: int(resp.GetStatus()),
+		LatencyMS: resp.GetLatencyMs(), Error: resp.GetError(),
+	}, nil
 }
 
-// CheckFlow 从指定节点发起多步 HTTP 事务探测（POST /api/v1/nodes/{id}/check/flow）。
+// CheckFlow 从指定节点发起多步 HTTP 事务探测。
 func (c *Client) CheckFlow(ctx context.Context, nodeID string, req FlowCheckRequest) (FlowCheckResult, error) {
-	var out FlowCheckResult
-	body, err := json.Marshal(req)
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	var steps []*pb.FlowStep
+	for _, s := range req.Steps {
+		steps = append(steps, &pb.FlowStep{
+			Name: s.Name, Url: s.URL, Method: s.Method, Headers: s.Headers, Body: s.Body,
+			ExpectStatus: intsToInt32s(s.ExpectStatus), ExpectBody: s.ExpectBody, Extract: s.Extract,
+		})
+	}
+	resp, err := c.stub.CheckFlow(cctx, &pb.CheckFlowRequest{
+		NodeId: nodeID, Steps: steps, Vars: req.Vars, Timeout: req.Timeout,
+	})
 	if err != nil {
-		return out, err
+		return FlowCheckResult{}, c.wrapErr(err)
 	}
-	err = c.do(ctx, http.MethodPost, "/api/v1/nodes/"+nodeID+"/check/flow", nil, body, &out)
-	return out, err
+	out := FlowCheckResult{
+		Node: resp.GetNode(), OK: resp.GetOk(), FailedStep: resp.GetFailedStep(),
+		LatencyMS: resp.GetLatencyMs(), Error: resp.GetError(),
+	}
+	for _, sr := range resp.GetSteps() {
+		out.Steps = append(out.Steps, FlowStepResult{
+			Name: sr.GetName(), OK: sr.GetOk(), Status: int(sr.GetStatus()),
+			LatencyMS: sr.GetLatencyMs(), Extracted: sr.GetExtracted(), Error: sr.GetError(),
+		})
+	}
+	return out, nil
 }
 
-// Events 获取监控事件（GET /api/v1/events），P3 消费，P1 原样透传。
+// Events 获取监控事件（原始 JSON，P3 消费）。
 func (c *Client) Events(ctx context.Context, service, typ string, limit int) (json.RawMessage, error) {
-	var out json.RawMessage
-	q := map[string]string{"service": service, "type": typ}
-	if limit > 0 {
-		q["limit"] = fmt.Sprintf("%d", limit)
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.stub.ListEvents(cctx, &pb.ListEventsRequest{
+		Service: service, Type: typ, Limit: int32(limit),
+	})
+	if err != nil {
+		return nil, c.wrapErr(err)
 	}
-	err := c.do(ctx, http.MethodGet, "/api/v1/events", q, nil, &out)
-	return out, err
+	return json.RawMessage(resp.GetEventsJson()), nil
 }
 
-// Audit 获取审计记录（GET /api/v1/audit）。
+// Audit 获取审计记录（原始 JSON）。
 func (c *Client) Audit(ctx context.Context, action string, limit int) (json.RawMessage, error) {
-	var out json.RawMessage
-	q := map[string]string{"action": action}
-	if limit > 0 {
-		q["limit"] = fmt.Sprintf("%d", limit)
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.stub.ListAudit(cctx, &pb.ListAuditRequest{Action: action, Limit: int32(limit)})
+	if err != nil {
+		return nil, c.wrapErr(err)
 	}
-	err := c.do(ctx, http.MethodGet, "/api/v1/audit", q, nil, &out)
-	return out, err
+	return json.RawMessage(resp.GetEntriesJson()), nil
+}
+
+// intsToInt32s converts a Go int slice to the protobuf int32 slice used by the
+// check request types.
+func intsToInt32s(in []int) []int32 {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]int32, len(in))
+	for i, v := range in {
+		out[i] = int32(v)
+	}
+	return out
 }

@@ -3,14 +3,19 @@ package patrol
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
+	pb "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy/pb"
+
+	"google.golang.org/grpc"
 )
 
 // TestParseFlow 合法/非法 YAML。
@@ -53,95 +58,146 @@ func TestValidCron(t *testing.T) {
 	}
 }
 
-func mockWorker(t *testing.T) *httptest.Server {
+// patrolWorkerServer 是 patrol 测试用的 mock Worker，实现所有节点级/服务级检查
+// RPC。语义与原 HTTP mock 一致：n1 一切正常，n2 全失败（端口不通/HTTP 503/
+// 无 java 进程/flow 卡 login）；flow 还校验 secret 替换后的密码确实到达。
+// 其余 RPC 走 UnimplementedManagementServiceServer。
+type patrolWorkerServer struct {
+	pb.UnimplementedManagementServiceServer
+}
+
+func (m *patrolWorkerServer) Self(context.Context, *pb.Empty) (*pb.SelfInfo, error) {
+	return &pb.SelfInfo{
+		NodeId: "n1", Hostname: "h1", Role: "manager",
+		Leader: true, State: "ready", SwarmManager: true,
+	}, nil
+}
+
+func (m *patrolWorkerServer) NodeStats(context.Context, *pb.Empty) (*pb.NodeStatsResponse, error) {
+	return &pb.NodeStatsResponse{
+		Node: "h1",
+		Containers: []*pb.ContainerStat{{
+			ContainerId: "c1", Service: "web", CpuPercent: 95.0, MemPercent: 88.0,
+			MemUsage: 100, MemLimit: 200,
+		}},
+	}, nil
+}
+
+func (m *patrolWorkerServer) GetService(_ context.Context, req *pb.GetServiceRequest) (*pb.ServiceDetail, error) {
+	// 旧 HTTP mock 返回 {service:{ID,Spec:{Name},ServiceStatus:{2,2}},...}
+	// workerproxy 从 Docker 原生 ServiceStatus 取 running/desired；这里同样
+	// 用 service_json(单个 dockerService) + running/desired/healthy 字段。
+	svcJSON, _ := json.Marshal(map[string]any{
+		"ID":   "s1",
+		"Spec": map[string]any{"Name": req.GetName()},
+		"ServiceStatus": map[string]any{"RunningTasks": 2, "DesiredTasks": 2},
+	})
+	return &pb.ServiceDetail{
+		ServiceJson: svcJSON,
+		TasksJson:   []byte("[]"),
+		Running:     2,
+		Desired:     2,
+		Healthy:     2,
+	}, nil
+}
+
+// 节点级检查 mock：n1 一切正常，n2 全失败。
+func (m *patrolWorkerServer) ListNodes(context.Context, *pb.Empty) (*pb.ListNodesResponse, error) {
+	return &pb.ListNodesResponse{Nodes: []*pb.Node{
+		{Id: "n1", Hostname: "h1", State: "ready", Role: "manager"},
+		{Id: "n2", Hostname: "h2", State: "ready", Role: "worker"},
+	}}, nil
+}
+
+func (m *patrolWorkerServer) CheckPort(_ context.Context, req *pb.CheckPortRequest) (*pb.PortCheckResult, error) {
+	ok := req.GetNodeId() == "n1"
+	out := &pb.PortCheckResult{
+		Node: req.GetNodeId(), Host: req.GetHost(), Port: portToStr(req.GetPort()),
+		Ok: ok, LatencyMs: 1,
+	}
+	if !ok {
+		out.Error = "dial tcp: connection refused"
+	}
+	return out, nil
+}
+
+func (m *patrolWorkerServer) CheckHTTP(_ context.Context, req *pb.CheckHTTPRequest) (*pb.HTTPCheckResult, error) {
+	ok := req.GetNodeId() == "n1"
+	out := &pb.HTTPCheckResult{
+		Node: req.GetNodeId(), Url: "http://x/healthz", Ok: ok,
+		Status: 200, LatencyMs: 1,
+	}
+	if !ok {
+		out.Status = 503
+		out.Error = "status 503 not 2xx"
+	}
+	return out, nil
+}
+
+func (m *patrolWorkerServer) NodeProcesses(_ context.Context, req *pb.NodeProcessesRequest) (*pb.ProcessesResponse, error) {
+	var procs []*pb.ProcessInfo
+	// 原 mock: 仅 n1 + filter==java 返回 2 个 java 进程
+	if req.GetNodeId() == "n1" && req.GetFilter() == "java" {
+		procs = append(procs,
+			&pb.ProcessInfo{Pid: 100, Name: "java", Cmdline: "java -jar app.jar"},
+			&pb.ProcessInfo{Pid: 101, Name: "java", Cmdline: "java -jar worker.jar"},
+		)
+	}
+	return &pb.ProcessesResponse{
+		Node: req.GetNodeId(), Total: int32(len(procs)), Processes: procs,
+	}, nil
+}
+
+// CheckFlow mock:校验 secret 替换后的密码确实到达;n2 卡在 login 步。
+func (m *patrolWorkerServer) CheckFlow(_ context.Context, req *pb.CheckFlowRequest) (*pb.FlowCheckResult, error) {
+	out := &pb.FlowCheckResult{Node: req.GetNodeId(), LatencyMs: 3}
+	switch {
+	case req.GetNodeId() != "n1":
+		out.Ok = false
+		out.FailedStep = "login"
+		out.Steps = []*pb.FlowStepResult{{Name: "login", Ok: false, Error: "status 401 not 2xx"}}
+	case req.GetVars()["pass"] != "s3cret-from-store":
+		// secret 未被替换/替换错 → 视为探测失败
+		out.Ok = false
+		out.FailedStep = "login"
+		out.Steps = []*pb.FlowStepResult{{Name: "login", Ok: false, Error: "bad credentials"}}
+	default:
+		out.Ok = true
+		out.Steps = []*pb.FlowStepResult{
+			{Name: "login", Ok: true, Status: 200, Extracted: []string{"token"}},
+			{Name: "verify", Ok: true, Status: 200},
+		}
+	}
+	return out, nil
+}
+
+// portToStr 把端口号转成字符串（旧 HTTP mock 用 query string，原样是字符串）。
+func portToStr(p int32) string {
+	if p == 0 {
+		return ""
+	}
+	return strconv.Itoa(int(p))
+}
+
+// startGRPCWorker 在随机 TCP 端口上启动一个真实 gRPC 服务器，返回其
+// http://127.0.0.1:<port> URL（workerproxy.New 经 grpcTarget 拨号会剥掉 scheme）。
+// cleanup 注册到 t.Cleanup。
+func startGRPCWorker(t *testing.T, srv pb.ManagementServiceServer) string {
 	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/self", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"nodeId": "n1", "hostname": "h1", "role": "manager",
-			"leader": true, "state": "ready", "swarmManager": true,
-		})
-	})
-	mux.HandleFunc("GET /api/v1/local/stats", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"node": "h1", "containers": []map[string]any{
-			{"containerId": "c1", "service": "web", "cpuPercent": 95.0, "memPercent": 88.0,
-				"memUsageBytes": 100, "memLimitBytes": 200},
-		}})
-	})
-	mux.HandleFunc("GET /api/v1/services/{name}", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"service": map[string]any{
-				"ID": "s1", "Spec": map[string]any{"Name": r.PathValue("name")},
-				// workerproxy 从 Docker 原生 ServiceStatus 取 running/desired
-				"ServiceStatus": map[string]any{"RunningTasks": 2, "DesiredTasks": 2},
-			},
-			"tasks": []any{}, "running": 2, "desired": 2, "healthy": 2,
-		})
-	})
-	// 节点级检查 mock：n1 一切正常，n2 全失败（端口不通/HTTP 503/无 java 进程）
-	mux.HandleFunc("GET /api/v1/nodes", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]map[string]any{
-			{"id": "n1", "hostname": "h1", "state": "ready", "role": "manager"},
-			{"id": "n2", "hostname": "h2", "state": "ready", "role": "worker"},
-		})
-	})
-	mux.HandleFunc("GET /api/v1/nodes/{id}/check/port", func(w http.ResponseWriter, r *http.Request) {
-		ok := r.PathValue("id") == "n1"
-		out := map[string]any{"node": r.PathValue("id"), "host": r.URL.Query().Get("host"),
-			"port": r.URL.Query().Get("port"), "ok": ok, "latencyMs": 1}
-		if !ok {
-			out["error"] = "dial tcp: connection refused"
-		}
-		_ = json.NewEncoder(w).Encode(out)
-	})
-	mux.HandleFunc("POST /api/v1/nodes/{id}/check/http", func(w http.ResponseWriter, r *http.Request) {
-		ok := r.PathValue("id") == "n1"
-		out := map[string]any{"node": r.PathValue("id"), "url": "http://x/healthz", "ok": ok, "status": 200, "latencyMs": 1}
-		if !ok {
-			out["status"] = 503
-			out["error"] = "status 503 not 2xx"
-		}
-		_ = json.NewEncoder(w).Encode(out)
-	})
-	mux.HandleFunc("GET /api/v1/nodes/{id}/processes", func(w http.ResponseWriter, r *http.Request) {
-		procs := []map[string]any{}
-		if r.PathValue("id") == "n1" && r.URL.Query().Get("filter") == "java" {
-			procs = append(procs,
-				map[string]any{"pid": 100, "name": "java", "cmdline": "java -jar app.jar"},
-				map[string]any{"pid": 101, "name": "java", "cmdline": "java -jar worker.jar"})
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"node": r.PathValue("id"), "total": len(procs), "processes": procs,
-		})
-	})
-	// flow mock:校验 secret 替换后的密码确实到达;n2 卡在 login 步
-	mux.HandleFunc("POST /api/v1/nodes/{id}/check/flow", func(w http.ResponseWriter, r *http.Request) {
-		var req map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		vars, _ := req["vars"].(map[string]any)
-		out := map[string]any{"node": r.PathValue("id"), "latencyMs": 3}
-		switch {
-		case r.PathValue("id") != "n1":
-			out["ok"] = false
-			out["failedStep"] = "login"
-			out["steps"] = []map[string]any{{"name": "login", "ok": false, "error": "status 401 not 2xx"}}
-		case vars["pass"] != "s3cret-from-store":
-			// secret 未被替换/替换错 → 视为探测失败
-			out["ok"] = false
-			out["failedStep"] = "login"
-			out["steps"] = []map[string]any{{"name": "login", "ok": false, "error": "bad credentials"}}
-		default:
-			out["ok"] = true
-			out["steps"] = []map[string]any{
-				{"name": "login", "ok": true, "status": 200, "extracted": []string{"token"}},
-				{"name": "verify", "ok": true, "status": 200},
-			}
-		}
-		_ = json.NewEncoder(w).Encode(out)
-	})
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
-	return ts
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	s := grpc.NewServer()
+	pb.RegisterManagementServiceServer(s, srv)
+	go func() { _ = s.Serve(lis) }()
+	t.Cleanup(func() { s.GracefulStop() })
+	return "http://" + lis.Addr().String()
+}
+
+func mockWorker(t *testing.T) string {
+	t.Helper()
+	return startGRPCWorker(t, &patrolWorkerServer{})
 }
 
 func newTestPatrol(t *testing.T) (*Service, string) {
@@ -151,7 +207,7 @@ func newTestPatrol(t *testing.T) (*Service, string) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	url := mockWorker(t).URL
+	url := mockWorker(t)
 	cs := cluster.New(st)
 	// 直接落库一个在线集群
 	if err := st.PutCluster(&store.Cluster{Name: "dev", WorkerURL: url, Status: store.ClusterOnline}); err != nil {
@@ -313,7 +369,8 @@ func TestClosedLoop(t *testing.T) {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	// 渠道接收端（webhook）：同时收告警通知（带 alert 字段）与报告（带 content 字段）
+	// 渠道接收端（webhook）：同时收告警通知（带 alert 字段）与报告（带 content 字段）。
+	// 这是 notify 包的 webhook 接收端（普通 HTTP POST），不是 Worker，保留 httptest。
 	var captured []map[string]any
 	capSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var m map[string]any
@@ -323,27 +380,13 @@ func TestClosedLoop(t *testing.T) {
 	}))
 	t.Cleanup(capSrv.Close)
 
-	// 可切换成败的单节点 Worker mock
+	// 可切换成败的单节点 Worker mock（gRPC）：failPort 控制端口探测成败。
 	failPort := true
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/nodes", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]map[string]any{
-			{"id": "n1", "hostname": "h1", "state": "ready", "role": "manager"},
-		})
-	})
-	mux.HandleFunc("GET /api/v1/nodes/{id}/check/port", func(w http.ResponseWriter, r *http.Request) {
-		out := map[string]any{"node": "h1", "host": r.URL.Query().Get("host"),
-			"port": r.URL.Query().Get("port"), "ok": !failPort, "latencyMs": 1}
-		if failPort {
-			out["error"] = "connection refused"
-		}
-		_ = json.NewEncoder(w).Encode(out)
-	})
-	wSrv := httptest.NewServer(mux)
-	t.Cleanup(wSrv.Close)
+	wSrv := &closedLoopWorkerServer{failFunc: func() bool { return failPort }}
+	workerURL := startGRPCWorker(t, wSrv)
 
 	cs := cluster.New(st)
-	if err := st.PutCluster(&store.Cluster{Name: "dev", WorkerURL: wSrv.URL, Status: store.ClusterOnline}); err != nil {
+	if err := st.PutCluster(&store.Cluster{Name: "dev", WorkerURL: workerURL, Status: store.ClusterOnline}); err != nil {
 		t.Fatalf("put cluster: %v", err)
 	}
 	notifySvc := notify.New(st)
@@ -525,4 +568,29 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// closedLoopWorkerServer 是 TestClosedLoop 专用的可切换成败的单节点 Worker mock。
+// failFunc 返回 true 时端口探测失败（连接拒绝），false 时通过。
+type closedLoopWorkerServer struct {
+	pb.UnimplementedManagementServiceServer
+	failFunc func() bool
+}
+
+func (m *closedLoopWorkerServer) ListNodes(context.Context, *pb.Empty) (*pb.ListNodesResponse, error) {
+	return &pb.ListNodesResponse{Nodes: []*pb.Node{
+		{Id: "n1", Hostname: "h1", State: "ready", Role: "manager"},
+	}}, nil
+}
+
+func (m *closedLoopWorkerServer) CheckPort(_ context.Context, req *pb.CheckPortRequest) (*pb.PortCheckResult, error) {
+	fail := m.failFunc()
+	out := &pb.PortCheckResult{
+		Node: "h1", Host: req.GetHost(), Port: portToStr(req.GetPort()),
+		Ok: !fail, LatencyMs: 1,
+	}
+	if fail {
+		out.Error = "connection refused"
+	}
+	return out, nil
 }
