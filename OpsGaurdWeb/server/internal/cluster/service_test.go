@@ -201,3 +201,38 @@ func TestProbeTimeout(t *testing.T) {
 		t.Fatalf("probe took too long: %v", elapsed)
 	}
 }
+
+// TestClusterLifecycleHooks 验证集群增删触发注册回调（事件订阅管理器依赖此
+// 跟随启停）。Add 成功 → onAdd(name)；Remove 成功 → onRemove(name)；失败不触发。
+func TestClusterLifecycleHooks(t *testing.T) {
+	svc, workerURL := newTestService(t, false)
+
+	var added, removed []string
+	svc.OnClusterAdd(func(name string) { added = append(added, name) })
+	svc.OnClusterRemove(func(name string) { removed = append(removed, name) })
+
+	// Add 触发 onAdd
+	if _, err := svc.Add(context.Background(), &store.Cluster{Name: "dev", WorkerURL: workerURL}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if len(added) != 1 || added[0] != "dev" {
+		t.Fatalf("onAdd should fire once with 'dev', got %v", added)
+	}
+
+	// Remove 触发 onRemove
+	if err := svc.Remove(context.Background(), "dev"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != "dev" {
+		t.Fatalf("onRemove should fire once with 'dev', got %v", removed)
+	}
+
+	// Remove 不存在的集群 → 不触发 onRemove
+	if err := svc.Remove(context.Background(), "nonexistent"); err == nil {
+		t.Fatal("remove nonexistent should error")
+	}
+	if len(removed) != 1 {
+		t.Fatalf("failed remove should not fire onRemove, got %v", removed)
+	}
+}
+

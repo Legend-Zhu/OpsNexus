@@ -36,12 +36,23 @@ type Service struct {
 	store *store.Store
 	// probeTimeout 单次健康探测超时。
 	probeTimeout time.Duration
+
+	// onAdd / onRemove 集群增删回调（如事件订阅管理器跟随启停）。回调在
+	// Add/Remove 成功落库后同步调用，失败不触发。
+	onAdd    []func(name string)
+	onRemove []func(name string)
 }
 
 // New 创建集群服务。
 func New(st *store.Store) *Service {
 	return &Service{store: st, probeTimeout: 5 * time.Second}
 }
+
+// OnClusterAdd 注册集群新增回调（可多个，按注册顺序调用）。
+func (s *Service) OnClusterAdd(fn func(name string)) { s.onAdd = append(s.onAdd, fn) }
+
+// OnClusterRemove 注册集群删除回调。
+func (s *Service) OnClusterRemove(fn func(name string)) { s.onRemove = append(s.onRemove, fn) }
 
 // List 返回全部集群，逐个探测并刷新状态（online/offline + lastSeen + err）。
 // 探测失败不中断列表，仅标记 offline 并附带错误。
@@ -129,6 +140,9 @@ func (s *Service) Add(ctx context.Context, in *store.Cluster) (*store.Cluster, e
 	if err := s.store.PutCluster(c); err != nil {
 		return nil, err
 	}
+	for _, fn := range s.onAdd {
+		fn(name)
+	}
 	return c, nil
 }
 
@@ -168,7 +182,13 @@ func (s *Service) Remove(ctx context.Context, name string) error {
 	if existing == nil {
 		return ErrNotFound{Name: name}
 	}
-	return s.store.DeleteCluster(name)
+	if err := s.store.DeleteCluster(name); err != nil {
+		return err
+	}
+	for _, fn := range s.onRemove {
+		fn(name)
+	}
+	return nil
 }
 
 // --- 项目（管理层级第一层：项目 → 集群） ---
