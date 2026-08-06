@@ -733,7 +733,8 @@ watch(tab, (t) => {
 onMounted(async () => {
   loading.value = true
   await fetchCluster()
-  await Promise.all([loadNodes()])
+  // 并行加载节点 + 工作负载，让 tab 标签数字（容器与服务 N）进页面即显示。
+  await Promise.all([loadNodes(), loadWorkloads()])
   loading.value = false
 })
 
