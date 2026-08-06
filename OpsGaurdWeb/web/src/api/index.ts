@@ -84,9 +84,9 @@ export const workloadApi = {
 // ---- 监控事件 / 审计 ----
 export const eventApi = {
   list: (cluster: string, params?: { type?: string; limit?: number }) =>
-    get<EventItem[]>(`/v1/clusters/${cluster}/events`, { params }),
+    get<{ items: EventItem[] }>(`/v1/clusters/${cluster}/events`, { params }),
   audit: (cluster: string, params?: { action?: string; limit?: number }) =>
-    get<AuditItem[]>(`/v1/clusters/${cluster}/audit`, { params }),
+    get<{ items: AuditItem[] }>(`/v1/clusters/${cluster}/audit`, { params }),
 }
 
 // ---- 告警中心（P3） ----

@@ -553,7 +553,8 @@ async function loadMetrics() {
 // ---- 事件 ----
 async function loadEvents() {
   try {
-    events.value = await eventApi.list(clusterName.value, { limit: 100 })
+    const resp = await eventApi.list(clusterName.value, { limit: 100 })
+    events.value = resp.items ?? []
   } catch {
     events.value = []
   }
