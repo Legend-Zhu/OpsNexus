@@ -61,8 +61,8 @@ docker push {{ registryAddr }}/myapp:v1</pre>
           </el-form-item>
           <el-form-item label="项目名">
             <el-select v-model="buildForm.project" filterable allow-create default-first-option
-              placeholder="选择已有项目或输入新名" style="width: 180px">
-              <el-option v-for="p in projects" :key="p.project.id" :label="p.project.name" :value="p.project.name" />
+              placeholder="选择仓库已有命名空间或输入新名" style="width: 200px">
+              <el-option v-for="p in projectOptions" :key="p" :label="p" :value="p" />
             </el-select>
           </el-form-item>
           <el-form-item label="镜像名">
@@ -168,15 +168,14 @@ docker push {{ registryAddr }}/myapp:v1</pre>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { FolderOpened, Refresh } from '@element-plus/icons-vue'
-import { registryApi, projectApi } from '@/api'
-import type { BuildTask, ProjectView, RegistryInfo, RegistryRepo } from '@/types'
+import { registryApi } from '@/api'
+import type { BuildTask, RegistryInfo, RegistryRepo } from '@/types'
 
 const loading = ref(true)
 const info = ref<RegistryInfo | null>(null)
 const enabled = computed(() => !!info.value)
 const registryAddr = computed(() => (info.value ? `${info.value.hostname}:${info.value.port}` : ''))
 
-const projects = ref<ProjectView[]>([])
 const zipFile = ref<File | null>(null)
 const buildForm = reactive({ project: '', name: '', tag: '' })
 const building = ref(false)
@@ -185,6 +184,17 @@ const builds = ref<BuildTask[]>([])
 const images = ref<RegistryRepo[]>([])
 const imagesLoading = ref(false)
 const logBoxRef = ref<HTMLElement>()
+
+// 项目名 = 镜像仓库的命名空间(repo 首段,如 ops/myapp 的 ops),从现有镜像
+// 列表提取,也允许输入新名——与管理端「项目」体系无关
+const projectOptions = computed(() => {
+  const set = new Set<string>()
+  for (const r of images.value) {
+    const idx = r.name.indexOf('/')
+    if (idx > 0) set.add(r.name.slice(0, idx))
+  }
+  return [...set].sort()
+})
 
 // 镜像路径段：小写字母/数字/_.-(registry 仓库名约束;后端同规则校验)
 const nameSegOk = (s: string) => /^[a-z0-9_.\-]+$/.test(s)
@@ -325,12 +335,6 @@ onMounted(async () => {
   if (info.value) {
     void loadImages()
     void loadBuilds()
-  }
-  try {
-    const resp = await projectApi.list()
-    projects.value = resp.items ?? []
-  } catch {
-    projects.value = []
   }
 })
 onBeforeUnmount(stopPoll)
