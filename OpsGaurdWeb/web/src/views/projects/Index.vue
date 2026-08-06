@@ -17,16 +17,8 @@
         <p v-if="v.project.desc" class="proj-desc">{{ v.project.desc }}</p>
         <p v-else class="proj-desc muted">—</p>
 
-        <div v-if="v.clusters?.length" class="proj-clusters">
-          <router-link
-            v-for="c in v.clusters"
-            :key="c.name"
-            :to="`/clusters/${c.name}`"
-            class="proj-cluster"
-          >
-            <span class="dot" :class="c.status" />
-            {{ c.name }}
-          </router-link>
+        <div v-if="v.cluster_count" class="proj-clusters">
+          <span class="og-dim">{{ v.cluster_count }} 个集群已接入</span>
         </div>
         <p v-else class="og-dim">尚未接入集群</p>
 
