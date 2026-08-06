@@ -11,6 +11,7 @@ export interface ClusterSummary {
   desc?: string
   status: 'online' | 'offline' | 'unknown'
   last_seen: string
+  has_token?: boolean
 }
 
 /** 集群详情 */

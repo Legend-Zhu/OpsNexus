@@ -59,7 +59,12 @@
           <div class="form-tip">Worker 的 gRPC 管理端口（默认 9080）；MCP 端点自动取 HTTP 端口 /mcp</div>
         </el-form-item>
         <el-form-item label="Token">
-          <el-input v-model="form.token" type="password" show-password placeholder="Worker Bearer token（可选）" />
+          <el-input v-model="form.token" type="password" show-password :placeholder="editing && !editingHasToken ? '尚未配置（Worker 未开启鉴权）' : editing ? '已配置，留空不修改' : 'Worker Bearer token（可选）'" />
+          <div v-if="editing" class="form-tip">
+            <span v-if="editingHasToken" style="color: #67c23a">✓ 已配置 token</span>
+            <span v-else style="color: #e6a23c">⚠ 未配置 token——Worker 未开启鉴权，任何能访问 gRPC 端口的人均可操作集群</span>
+          </div>
+          <div v-else class="form-tip">Worker 开启鉴权（auth.enabled）时填写；未配置则 Worker 不校验请求方身份</div>
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.desc" placeholder="可选" />
@@ -87,6 +92,7 @@ const projects = ref<Project[]>([])
 
 const dialogVisible = ref(false)
 const editing = ref(false)
+const editingHasToken = ref(false)
 const formRef = ref<FormInstance>()
 const form = reactive<AddClusterPayload>({ name: '', project_id: '', worker_url: '', token: '', desc: '' })
 
@@ -136,6 +142,7 @@ function openDialog() {
 
 function openEdit(row: ClusterSummary) {
   editing.value = true
+  editingHasToken.value = !!row.has_token
   Object.assign(form, {
     name: row.name,
     project_id: row.project_id ?? '',

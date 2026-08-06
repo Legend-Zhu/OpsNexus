@@ -155,6 +155,8 @@ func (s *Service) Update(ctx context.Context, in *store.Cluster) (*store.Cluster
 	if existing == nil {
 		return nil, ErrNotFound{Name: in.Name}
 	}
+	// ProjectID 用空串清除归属、非空赋值（前端永远传，支持改/清项目）。
+	existing.ProjectID = in.ProjectID
 	if in.WorkerURL != "" {
 		existing.WorkerURL = in.WorkerURL
 	}

@@ -31,13 +31,16 @@ type Cluster struct {
 	Desc      string        `json:"desc,omitempty"`
 	Status    ClusterStatus `json:"status"`
 	LastSeen  time.Time     `json:"last_seen"`
+	// HasToken 仅在 Public() 输出时填充：true=已配 token。不暴露值本身。
+	HasToken bool `json:"has_token,omitempty"`
 	// Err 最近一次健康探测错误（不持久化，运行时填充）
 	Err string `json:"-"`
 }
 
-// Public 返回去除敏感字段（Token/Err）的对外视图。
+// Public 返回去除敏感字段（Token/Err）的对外视图，保留 HasToken 布尔标记。
 func (c *Cluster) Public() *Cluster {
 	out := *c
+	out.HasToken = c.Token != ""
 	out.Token = ""
 	out.Err = ""
 	return &out
