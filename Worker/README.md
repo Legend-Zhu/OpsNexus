@@ -11,7 +11,9 @@ LLM agents. Design doc: `docs/Worker-设计方案.md`.
   Update/Scale/Restart/Remove 全生命周期，滚动更新、失败回滚语义由 swarm 驱动。
 - **监控**：按 config 的 `monitoring` 块跑四类探针——端口连通（TCP）、接口健康
   （HTTP 状态码/正则 body）、日志异常（ServiceLogs 流 + 正则 + 去抖）、资源使用
-  （容器 stats 差值 CPU%/内存%）。事件入内存 ring buffer，`GET /api/v1/events` 查询。
+  （容器 stats 差值 CPU%/内存%）。事件落 **SQLite 持久化队列**（单调 seq、ack + GC），
+  经 gRPC `SubscribeEvents` 双向流回推管理端（server 发起连接，符合单向网络策略），
+  也可点查询（gRPC `ListEvents`）。
 - **MCP（16 工具）**：Streamable HTTP（`/mcp`，协议 `2026-07-28`，stateless）。
   编排类 list/get/deploy/update/scale/restart/remove、get_service_logs、get_events、
   get_operation、list/get_node、get_self；**命令执行** `exec_in_container`（跨节点路由）
@@ -27,8 +29,8 @@ LLM agents. Design doc: `docs/Worker-设计方案.md`.
   `imagePullPolicy=always` 预拉取。
 - **安全**：日志脱敏（env/auth/secret 值 → `[REDACTED]`）；写操作要求 manager 节点
   （swarm control-plane）；宿主机执行需显式开启 `allowHostExec`；Bearer token 鉴权
-  （`auth.tokens` + OAuth metadata 端点）；**mTLS 双向**（`-tls-ca` 强制客户端证书）；
-  **审计日志**（编排/命令打点，`GET /api/v1/audit`，可 webhook 推送）。
+  （`auth.tokens` + OAuth metadata 端点，HTTP 与 gRPC 共用）；**mTLS 双向**（`-tls-ca` 强制客户端证书）；
+  **审计日志**（编排/命令打点，SQLite 持久化，经 gRPC `SubscribeAudit` 流回推管理端）。
 
 ## Build
 
@@ -103,29 +105,39 @@ monitoring:
     - { metric: memory, threshold: 85 }
 ```
 
-## HTTP API
+## 端口与 API
 
-**Orchestration (manager-role):**
+Worker 双端口并存（gRPC 重构后职责分离）：
+
+- **HTTP `:8080`**（或部署自定义）：`/mcp`（MCP Streamable HTTP）+ `/healthz` + 节点级
+  local API（下方"每节点 local"表）。management 接口已从此端口移除。
+- **gRPC `:9080`**（或部署自定义）：完整 `ManagementService`（见 `proto/opsguard.proto`）——
+  server↔worker 管理 API 的唯一通道。
+
+### gRPC ManagementService（`:9080`，manager-role）
+
+| RPC | 说明 |
+|---|---|
+| `Ping` / `Self` | 存活 / 本节点 swarm 角色 |
+| `ListServices` / `GetService` | 服务列表 / 详情（+tasks+health） |
+| `Deploy`/`Update`/`Scale`/`Restart`/`Remove` | 编排（非 leader 自动 gRPC 转发 leader） |
+| `GetOperation` | 异步 operation 状态 |
+| `ListNodes` / `NodeStats` / `NodeProcesses` | 集群节点 / 本节点容器 / 宿主进程 |
+| `CheckPort`/`CheckHTTP`/`CheckFlow` | 从指定节点发起 TCP/HTTP/多步事务探测 |
+| `ListEvents`/`ListAudit` | 事件/审计点查询 |
+| `StreamLogs` | server-streaming 日志流（替代 SSE） |
+| `SubscribeEvents`/`SubscribeAudit` | **双向流**：server 发起带游标，worker 回推事件，server ack |
+
+> **Auth**: when `auth.enabled=true`, gRPC 调用需 metadata `authorization: Bearer <token>`
+> （HTTP 与 gRPC 共用同一 token 集，token 名作审计 actor）。
+
+### HTTP（`:8080`，仅保留如下端点）
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/v1/services` | Deploy (config body) |
-| GET | `/api/v1/services` | List (`?label=`) |
-| GET | `/api/v1/services/{name}` | Detail + tasks + health |
-| POST | `/api/v1/services/{name}` | Update |
-| DELETE | `/api/v1/services/{name}` | Remove |
-| POST | `/api/v1/services/{name}/scale` | Scale `{replicas:N}` |
-| POST | `/api/v1/services/{name}/restart` | Force re-create tasks |
-| GET | `/api/v1/operations[/{id}]` | Operation tracking |
-| GET | `/api/v1/events` | Monitoring events (`?service=&type=&limit=`) |
-| GET | `/api/v1/audit` | Audit log (lifecycle + command executions, `?action=&limit=`) |
-| GET | `/api/v1/self` | This node's swarm role |
+| POST | `/mcp` | MCP Streamable HTTP（manager-role，协议 `2026-07-28`，stateless） |
 | GET | `/.well-known/oauth-protected-resource` | OAuth 2.1 resource metadata (public) |
 | GET | `/healthz` | Liveness (public) |
-
-> **Auth**: when `auth.enabled=true` (agent config), every endpoint above except
-> the public ones requires `Authorization: Bearer <token>` (token name becomes
-> the audit actor). Tokens can be distributed centrally via `WORKER_TOKENS`.
 
 **Per-node local (every node; used by the manager for cross-node calls):**
 

@@ -1,6 +1,6 @@
 # OpsGaurd Web 管理端
 
-智能运维平台的**集群管理端**（类 Rancher）：管理多个 Docker Swarm 集群（经各集群 Worker 的 HTTP API / MCP），并把 **AiNexus**（AI 对话网关/Agent）**内嵌进后端进程**做异常排查——非独立服务，无独立端口，无进程间 HTTP。
+智能运维平台的**集群管理端**（类 Rancher）：管理多个 Docker Swarm 集群（经各集群 Worker 的 **gRPC 管理 API** + MCP），并把 **AiNexus**（AI 对话网关/Agent）**内嵌进后端进程**做异常排查——非独立服务，无独立端口，无进程间 HTTP。
 
 ```
 ┌──────────────── OpsGaurdWeb 管理端（单进程） ────────────────┐
@@ -17,7 +17,7 @@
 │              └─ /ainexus/*              内嵌 AiNexus 原生端点 │
 │                    （providers/tools/MCP/Agent 同进程）        │
 └──────────────┬───────────────────────────────────────────────┘
-               │ 代理（Worker HTTP API + MCP）
+               │ gRPC 管理 API + MCP（Worker 侧 :9080 / :8080）
         ┌──────▼──────┐
         │ 集群 Worker  │  ← 内嵌 AiNexus 的 MCP 客户端连 Worker /mcp
         │ (swarm 编排/ │    采集证据（16 工具：编排/监控/命令执行）
@@ -43,8 +43,9 @@ OpsGaurdWeb/
     │   ├── api/                  # handlers（clusters 已接真逻辑）
     │   ├── ainexus/              # AiNexus 内嵌网关（vendor 自仓库根 ./AiNexus）
     │   ├── cluster/              # 集群注册表服务（CRUD + Worker 健康探测）
-    │   ├── workerproxy/          # Worker HTTP 代理客户端
-    │   ├── store/                # LevelDB 持久化（版本迁移 + 集群表 + 序列）
+    │   ├── workerproxy/          # Worker gRPC 客户端（封装 ManagementService RPC）
+    │   ├── ingest/               # 事件订阅（gRPC SubscribeEvents 流 → 落库 + 告警聚合）
+    │   ├── store/                # LevelDB 持久化（版本迁移 + 集群表 + 序列 + 订阅游标）
     │   ├── config/               # 管理端配置加载
     │   └── router/               # 路由注册（含 /ainexus/* 原生端点）
     └── configs/config.yaml       # 配置示例（store.path / ainexus.providers / mcp_servers）
@@ -80,4 +81,4 @@ npm run build      # 产物 dist/
 | 后端 | Go + Gin |
 | AI 排查 | AiNexus（**内嵌进后端**，vendor 自仓库根 `./AiNexus`，单进程运行） |
 
-> 当前进度：**P1–P6 全部完成 ✅** —— 集群注册表 + Worker 健康探测 + 工作负载（部署/缩放/重启/移除 + SSE 日志）+ 告警中心（webhook ingest/聚合/认领/恢复 + **告警联动通知**）+ 集群监控 + 异常排查闭环（告警→上下文注入→内嵌 AiNexus Agent→Worker MCP 采证）+ 智能巡检（YAML 流程 + cron 调度 + AI 报告）+ **通知中心**（渠道/策略/发送记录 + 互联网代理）+ **认证**（本地用户 + OIDC/SSO）+ **告警规则**（管理 Worker monitoring config）。双节点真机联调待做。
+> 当前进度：**P1–P6 全部完成 ✅** —— 集群注册表 + Worker 健康探测 + 工作负载（部署/缩放/重启/移除 + SSE 日志）+ 告警中心（**gRPC 事件订阅**/聚合/认领/恢复 + **告警联动通知**）+ 集群监控 + 异常排查闭环（告警→上下文注入→内嵌 AiNexus Agent→Worker MCP 采证）+ 智能巡检（YAML 流程 + cron 调度 + AI 报告）+ **通知中心**（渠道/策略/发送记录 + 互联网代理）+ **认证**（本地用户 + OIDC/SSO）+ **告警规则**（管理 Worker monitoring config）。双节点真机联调待做。

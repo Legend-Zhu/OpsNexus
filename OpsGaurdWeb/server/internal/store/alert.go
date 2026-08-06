@@ -2,7 +2,7 @@
 //
 // Key layout (mirrors 设计方案 §七):
 //
-//	event/<seq>                       -> IngestEvent（来自 Worker webhook，追加时序）
+//	event/<seq>                       -> IngestEvent（经 gRPC SubscribeEvents 流收到，追加时序）
 //	alert/<id>                        -> Alert（按 service+type 聚合）
 //	alert/idx/<status>/<cluster>/<ts>/<id> -> "" （列表过滤/排序索引）
 //
@@ -50,10 +50,10 @@ const (
 	LevelError Level = "error"
 )
 
-// IngestEvent 是来自 Worker webhook 的原始监控事件。
+// IngestEvent 是经 gRPC SubscribeEvents 流收到的原始监控事件（subscriber 注入 cluster）。
 type IngestEvent struct {
 	ID      string    `json:"id"`
-	Cluster string    `json:"cluster,omitempty"` // webhook query 参数注入
+	Cluster string    `json:"cluster,omitempty"` // 订阅消费者按集群名注入
 	TS      time.Time `json:"ts"`
 	Service string    `json:"service"`
 	Type    EventType `json:"type"`
@@ -91,7 +91,7 @@ type Alert struct {
 	// 关联）：告警列表展示「已排查」标记，形成告警→排查闭环。
 	Investigations      int    `json:"investigations,omitempty"`
 	LastInvestigationID string `json:"last_investigation_id,omitempty"`
-	// LastEventID 最近一次归并事件的 id（webhook 幂等去重用，不对外返回）。
+	// LastEventID 最近一次归并事件的 id（订阅消费者幂等去重用，不对外返回）。
 	LastEventID string `json:"-"`
 }
 
