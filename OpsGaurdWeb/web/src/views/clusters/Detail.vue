@@ -311,23 +311,25 @@ monitoring:
 
         <h4>任务</h4>
         <el-table :data="detail.tasks" size="small">
-          <el-table-column prop="id" label="任务 ID" min-width="150" show-overflow-tooltip />
+          <el-table-column prop="id" label="任务 ID" width="110" show-overflow-tooltip>
+            <template #default="{ row }"><span class="mono" :title="row.id">{{ shortId(row.id) }}</span></template>
+          </el-table-column>
           <el-table-column prop="slot" label="Slot" width="60" />
-          <el-table-column prop="nodeId" label="节点" width="90" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.nodeId || '—' }}</template>
+          <el-table-column prop="nodeId" label="节点" width="140" show-overflow-tooltip>
+            <template #default="{ row }">{{ nodeNameOf(row.nodeId) }}</template>
           </el-table-column>
           <el-table-column prop="state" label="状态" width="100">
             <template #default="{ row }">
               <el-tag size="small" :type="row.state === 'running' ? 'success' : 'info'">{{ row.state }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="containerId" label="容器" min-width="150" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.containerId || '—' }}</template>
+          <el-table-column prop="containerId" label="容器" width="120" show-overflow-tooltip>
+            <template #default="{ row }"><span class="mono" :title="row.containerId">{{ shortId(row.containerId) }}</span></template>
           </el-table-column>
         </el-table>
 
         <div class="log-header">
-          <h4>日志</h4>
+          <h4>日志<span class="log-hint">（聚合自 {{ detail.desired || detail.tasks?.length || 0 }} 个副本）</span></h4>
           <div>
             <el-button size="small" @click="toggleLogFollow">{{ logFollow ? '停止跟随' : '跟随最新' }}</el-button>
             <el-button size="small" @click="loadLogs(false)">刷新</el-button>
@@ -399,6 +401,17 @@ let logAbort: AbortController | null = null
 
 function pct(v?: number) {
   return Math.max(0, Math.min(100, v ?? 0))
+}
+// nodeNameOf 把 swarm node ID 映射为主机名（任务表格用 nodes 列表反查）。
+function nodeNameOf(nodeId?: string) {
+  if (!nodeId) return '—'
+  const n = nodes.value.find((x) => x.id === nodeId)
+  return n ? n.hostname : nodeId.slice(0, 12)
+}
+// shortId 截短 Docker/swarm 内部 ID（任务/容器），取前 12 位 + 完整值 tooltip。
+function shortId(id?: string) {
+  if (!id) return '—'
+  return id.length > 12 ? id.slice(0, 12) : id
 }
 function fmtBytes(n?: number) {
   if (!n) return '0 B'
@@ -785,6 +798,12 @@ onBeforeUnmount(() => logAbort?.abort())
   align-items: center;
   justify-content: space-between;
   margin-top: 8px;
+}
+.log-hint {
+  font-size: 12px;
+  font-weight: normal;
+  color: #909399;
+  margin-left: 8px;
 }
 .log-box {
   height: 320px;
