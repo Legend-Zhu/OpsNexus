@@ -43,6 +43,10 @@ type AuthConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 	// Tokens maps a token name -> secret. The name is used as the audit actor.
 	Tokens map[string]string `yaml:"tokens" json:"tokens,omitempty"`
+	// AuthorizationServer 是 OpsGaurd IdP 的 issuer URL，写入 RFC 9728
+	// protected-resource metadata 的 authorization_servers 字段，供 MCP/OAuth
+	// 客户端发现授权服务器（OAuth 2.1 完整流闭环）。可经 OPSGUARD_IDP_ISSUER 注入。
+	AuthorizationServer string `yaml:"authorization_server" json:"authorizationServer,omitempty"`
 }
 
 // WorkerConfig identifies this instance's role and connectivity.
@@ -184,6 +188,9 @@ func (c *Config) ApplyEnvOverrides() {
 				c.Auth.Tokens[strings.TrimSpace(k)] = strings.TrimSpace(val)
 			}
 		}
+	}
+	if v := os.Getenv("OPSGUARD_IDP_ISSUER"); v != "" {
+		c.Auth.AuthorizationServer = strings.TrimSpace(v)
 	}
 }
 

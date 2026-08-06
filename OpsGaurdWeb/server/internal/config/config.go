@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -28,6 +29,17 @@ type Config struct {
 	Clusters map[string]ClusterConfig `yaml:"clusters" json:"clusters"`
 	// Registry 内嵌镜像仓库(OCI /v2)+ 页面传包构建(docker CLI)。
 	Registry registrycfg.Config `yaml:"registry" json:"registry"`
+	// IdP 让 OpsGaurd 自身作为 OIDC 身份提供者，其他系统可跳转过来认证。
+	// nil 或 enabled=false = 不启用（默认）。详见 internal/idp。
+	IdP *IdPConfig `yaml:"idp,omitempty" json:"idp,omitempty"`
+}
+
+// IdPConfig 是 OpsGaurd 作为 OIDC IdP 的配置（独立于 auth.sso，后者是作为 RP 对接上游）。
+type IdPConfig struct {
+	Enabled         bool   `yaml:"enabled" json:"enabled"`
+	Issuer          string `yaml:"issuer" json:"issuer"`                    // 对外可达地址，须 https（localhost 例外便于开发）
+	AccessTokenTTL  string `yaml:"access_token_ttl" json:"accessTokenTtl"`  // 默认 1h
+	RefreshTokenTTL string `yaml:"refresh_token_ttl" json:"refreshTokenTtl"` // 默认 720h（30d）
 }
 
 // AuthConfig 认证配置。
@@ -124,5 +136,28 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("ainexus: %w", err)
 		}
 	}
+	if c.IdP != nil && c.IdP.Enabled {
+		if c.IdP.Issuer == "" {
+			return fmt.Errorf("idp.issuer is required when idp.enabled is true")
+		}
+		// 生产强制 https；localhost 例外便于本地开发。
+		if !isHTTPSorLocalhost(c.IdP.Issuer) {
+			return fmt.Errorf("idp.issuer must be an https:// URL (got %q)", c.IdP.Issuer)
+		}
+	}
 	return nil
+}
+
+// isHTTPSorLocalhost issuer 是否合规：https:// 或 http://localhost/http://127.0.0.1。
+func isHTTPSorLocalhost(issuer string) bool {
+	if issuer == "" {
+		return false
+	}
+	if strings.HasPrefix(issuer, "https://") {
+		return true
+	}
+	if strings.HasPrefix(issuer, "http://localhost") || strings.HasPrefix(issuer, "http://127.0.0.1") {
+		return true
+	}
+	return false
 }

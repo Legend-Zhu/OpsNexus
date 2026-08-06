@@ -91,6 +91,11 @@
         </el-descriptions>
       </el-tab-pane>
 
+      <!-- 身份提供者（OpsGaurd 作为 OIDC IdP，供其他系统接入） -->
+      <el-tab-pane label="身份提供者" name="idp">
+        <IdpClients />
+      </el-tab-pane>
+
       <!-- 模型配置（模型池：provider + 模型清单，唯一配置模型的地方） -->
       <el-tab-pane label="模型配置" name="model-config">
         <ModelConfig />
@@ -178,6 +183,7 @@ import AINexusGateway from './AINexusGateway.vue'
 import ModelConfig from './ModelConfig.vue'
 import PatrolReport from './PatrolReport.vue'
 import Secrets from './Secrets.vue'
+import IdpClients from './IdpClients.vue'
 
 const tab = ref('rules')
 const rules = ref<AlertRule[]>([])

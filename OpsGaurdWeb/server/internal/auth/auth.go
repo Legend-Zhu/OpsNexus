@@ -109,22 +109,36 @@ func (s *Service) ListUsers() ([]*store.User, error) { return s.st.ListUsers() }
 
 // Login 本地登录：校验密码 → 签发 token。
 func (s *Service) Login(username, password string) (token string, err error) {
-	u, err := s.st.GetUserByUsername(username)
+	u, _, err := s.LoginUser(username, password)
 	if err != nil {
 		return "", err
 	}
+	return s.IssueToken(u.Username, u.Role)
+}
+
+// LoginUser 本地登录并返回用户对象与签发的 token。
+// system.Login 在 IdP 启用时用返回的 user 建立 IdP SSO 会话 cookie。
+func (s *Service) LoginUser(username, password string) (*store.User, string, error) {
+	u, err := s.st.GetUserByUsername(username)
+	if err != nil {
+		return nil, "", err
+	}
 	if u == nil || !u.Enabled {
-		return "", fmt.Errorf("invalid credentials")
+		return nil, "", fmt.Errorf("invalid credentials")
 	}
 	parts := strings.SplitN(u.Password, ":", 2)
 	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid credentials")
+		return nil, "", fmt.Errorf("invalid credentials")
 	}
 	got := hashPassword(password, parts[1])
 	if subtle.ConstantTimeCompare([]byte(got), []byte(parts[0])) != 1 {
-		return "", fmt.Errorf("invalid credentials")
+		return nil, "", fmt.Errorf("invalid credentials")
 	}
-	return s.IssueToken(u.Username, u.Role)
+	token, err := s.IssueToken(u.Username, u.Role)
+	if err != nil {
+		return nil, "", err
+	}
+	return u, token, nil
 }
 
 // IssueToken 签发 HMAC token（payload=username|role|exp，签名=HMAC(secret)）。
@@ -192,6 +206,22 @@ func (s *Service) Middleware(public []string) gin.HandlerFunc {
 		c.Set("username", username)
 		c.Set("role", role)
 		c.Next()
+	}
+}
+
+// RequireRole 角色守卫：仅放行指定角色（须在 Middleware 之后使用）。
+// 当前角色集 admin|viewer；写接口与 client/用户管理应挂 RequireRole("admin")。
+func (s *Service) RequireRole(roles ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role, _ := c.Get("role")
+		roleStr, _ := role.(string)
+		for _, r := range roles {
+			if roleStr == r {
+				c.Next()
+				return
+			}
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "message": "forbidden: insufficient role"})
 	}
 }
 

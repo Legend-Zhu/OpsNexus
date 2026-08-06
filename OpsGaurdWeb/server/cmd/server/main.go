@@ -19,6 +19,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/auth"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/config"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/idp"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
@@ -133,8 +134,10 @@ func main() {
 	// 认证服务（P6：本地用户 + SSO/OIDC 抽象）
 	authSvc := auth.New(st, cfg.Auth.TokenSecret, parseDuration(cfg.Auth.TokenTTL, 24*time.Hour), oidcFromConfig(cfg.Auth.SSO))
 	h.SetAuthService(authSvc)
-	if cfg.Auth.TokenSecret != "" || cfg.Auth.SSO != nil {
-		// 配置了密钥/SSO → 启用认证；未配置（内网 bootstrap）→ 不启用
+	// IdP 启用隐含需要认证（admin 守卫、会话建立依赖 token 中间件）。
+	idpEnabled := cfg.IdP != nil && cfg.IdP.Enabled
+	if cfg.Auth.TokenSecret != "" || cfg.Auth.SSO != nil || idpEnabled {
+		// 配置了密钥/SSO/IdP → 启用认证；未配置（内网 bootstrap）→ 不启用
 		// 引导：无任何用户时播种默认 admin（admin/opsguard-admin，首登后应修改）
 		users, _ := authSvc.ListUsers()
 		if len(users) == 0 {
@@ -144,9 +147,30 @@ func main() {
 				log.Info("bootstrapped default admin (admin)")
 			}
 		}
-		public := []string{"/healthz", "/api/v1/auth/login", "/api/v1/auth/sso", "/api/v1/auth/callback", "/ainexus"}
+		public := []string{
+			"/healthz",
+			"/api/v1/auth/login", "/api/v1/auth/sso", "/api/v1/auth/callback",
+			"/ainexus",
+			// IdP 公开端点：authorize 靠 cookie 会话、token 靠 client 凭证/PKCE，
+			// jwks/discovery/introspect/userinfo 供 RP 发现与调用。
+			"/api/v1/idp/authorize", "/api/v1/idp/token", "/api/v1/idp/jwks",
+			"/api/v1/idp/userinfo", "/api/v1/idp/introspect", "/api/v1/idp/logout",
+			"/.well-known/openid-configuration",
+		}
 		h.SetAuthMiddleware(authSvc.Middleware(public))
-		log.Info("auth enabled", "sso", cfg.Auth.SSO != nil)
+		log.Info("auth enabled", "sso", cfg.Auth.SSO != nil, "idp", idpEnabled)
+	}
+
+	// IdP（OpsGaurd 作为 OIDC 身份提供者）：其他系统可跳转 /api/v1/idp/authorize
+	// 到本系统认证。签名 RSA 密钥从 LevelDB 加载（首次启动自动生成）。
+	if idpEnabled {
+		idpSvc, err := idp.NewService(idpConfigFromConfig(cfg.IdP), st)
+		if err != nil {
+			log.Error("idp service init failed", "err", err)
+			os.Exit(1)
+		}
+		h.SetIdPService(idpSvc)
+		log.Info("idp enabled (OpsGaurd as OIDC provider)", "issuer", cfg.IdP.Issuer)
 	}
 
 	log.Info("server starting",
@@ -197,6 +221,19 @@ func oidcFromConfig(sso *config.SSOConfig) *auth.OIDCConfig {
 		FrontendURL:  sso.OIDC.FrontendURL,
 		Scopes:       sso.OIDC.Scopes,
 		DefaultRole:  sso.OIDC.DefaultRole,
+	}
+}
+
+// idpConfigFromConfig 把 config.IdPConfig 映射为 idp.Config（解耦 config↔idp 包依赖）。
+func idpConfigFromConfig(c *config.IdPConfig) *idp.Config {
+	if c == nil {
+		return nil
+	}
+	return &idp.Config{
+		Enabled:         c.Enabled,
+		Issuer:          c.Issuer,
+		AccessTokenTTL:  c.AccessTokenTTL,
+		RefreshTokenTTL: c.RefreshTokenTTL,
 	}
 }
 

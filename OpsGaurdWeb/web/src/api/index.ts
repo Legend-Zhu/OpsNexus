@@ -11,6 +11,7 @@ import type {
   ClusterNode,
   ClusterSummary,
   EventItem,
+  IdpClient,
   Investigation,
   Me,
   NodeStats,
@@ -142,6 +143,18 @@ export const authApi = {
   ssoLoginUrl: () => '/api/v1/auth/sso/login',
   users: () => get<{ items: User[] }>('/v1/users'),
   createUser: (body: { username: string; password: string; role?: string }) => post<User>('/v1/users', body),
+}
+
+// ---- IdP（OpsGaurd 作为 OIDC 身份提供者）：client 管理（admin） ----
+export const idpApi = {
+  listClients: () => get<{ items: IdpClient[] }>('/v1/idp/clients'),
+  createClient: (body: { name: string; redirect_uris: string[]; scopes?: string[]; public: boolean; token_ttl?: string }) =>
+    post<{ client: IdpClient; secret: string }>('/v1/idp/clients', body),
+  getClient: (id: string) => get<IdpClient>(`/v1/idp/clients/${id}`),
+  updateClient: (id: string, body: Partial<Pick<IdpClient, 'name' | 'redirect_uris' | 'scopes' | 'token_ttl'>>) =>
+    put<IdpClient>(`/v1/idp/clients/${id}`, body),
+  deleteClient: (id: string) => del<{ deleted?: string }>(`/v1/idp/clients/${id}`),
+  rotateSecret: (id: string) => post<{ secret: string }>(`/v1/idp/clients/${id}/rotate-secret`),
 }
 
 // ---- AiNexus 异常排查 ----

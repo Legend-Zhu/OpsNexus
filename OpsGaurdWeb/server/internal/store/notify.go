@@ -136,6 +136,22 @@ type User struct {
 	Role      string    `json:"role"`                    // admin | viewer
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
+	// IdP 扩展字段（OIDC profile claims 下发用）。omitempty 保证旧记录反序列化无影响。
+	Email       string    `json:"email,omitempty"`
+	DisplayName string    `json:"display_name,omitempty"`
+	Groups      []string  `json:"groups,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`
+}
+
+// GetUserID 返回稳定主体标识，IdP 下发 sub 时优先用 ID（username 可能改名）。
+func (u *User) GetUserID() string {
+	if u == nil {
+		return ""
+	}
+	if u.ID != "" {
+		return u.ID
+	}
+	return u.Username
 }
 
 // Public 返回去除敏感字段（密码）的对外视图。

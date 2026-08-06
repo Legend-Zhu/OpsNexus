@@ -389,7 +389,7 @@ seq/<kind>                        -> 自增序列（告警 id、事件 seq 等�
 
 > **已确认（2026-08-04）**：资源模型口径 ✅、AiNexus 整合进后端 ✅、巡检单实例 ✅、通知可配置+飞书/短信+互联网代理 ✅、SSO ✅、存储 LevelDB ✅、告警规则管理 Worker config ✅。以下为剩余实施期关注点：
 
-1. **SSO 落地方式**：对接哪种 SSO（OIDC? 企业网关? 自建?）；本地账号 fallback 的边界（v1 是否保留本地登录入口）。
+1. **SSO 落地方式**：~~对接哪种 SSO（OIDC? 企业网关? 自建?）；本地账号 fallback 的边界（v1 是否保留本地登录入口）。~~ **已落地（2026-08-06）**：OpsGaurd 自身作为 OIDC 身份提供者（IdP），其他系统（企业内业务应用、Worker/MCP 工具）跳转 `/api/v1/idp/authorize` 过来认证；对外提供标准 Discovery/JWKS/Authorize/Token/UserInfo/Introspect 端点，授权码 + PKCE，RS256 签名。管理台「系统设置 → 身份提供者」注册 client。本地账号保留为 fallback 与引导管理员。对接指南见 `docs/IdP-接入指南.md`。同时 `auth.sso.oidc` 仍保留作为 RP 对接上游企业 SSO 的能力（方向相反，两者可并存）。
 2. **通知互联网代理**：代理服务的形态（独立小服务 HTTP 转发？还是复用现有网关？）；短信服务商（阿里云/腾讯云）与飞书 Webhook 的凭据存放（代理侧）。
 3. **LevelDB 数据量/备份**：单实例 KV 在告警/事件量级增长后的压缩与归档策略（`alert/idx/*` 索引修剪、数据目录备份窗口）；是否需要定期 compact 与冷备。
 4. **AiNexus 内嵌边界**：vendor 时保留 AiNexus 的 providers/tools/MCP/Agent 全部能力；管理端与内嵌网关共享一个 gin 引擎后，需确认 `/ainexus/*` 原生端点与 `/api/v1/ainexus/*` 的业务化包装不冲突；内嵌后关闭网关自身 APIKey 校验，鉴权收敛到管理端。

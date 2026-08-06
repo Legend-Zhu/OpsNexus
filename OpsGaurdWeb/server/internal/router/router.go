@@ -64,6 +64,19 @@ func New(h *api.Handlers) *gin.Engine {
 		v1.GET("/auth/sso/status", h.SSOStatus)
 		v1.GET("/auth/callback", h.SSOCallback)
 
+		// IdP（OpsGaurd 作为 OIDC 身份提供者）公开端点。
+		// authorize/token 靠 cookie 会话 + client 凭证/PKCE 自认证，不走 Bearer；
+		// jwks / discovery 供 RP 发现公钥与端点。注册在 AuthMiddleware 之前。
+		if idpSvc := h.IdP(); idpSvc != nil {
+			v1.GET("/idp/authorize", idpSvc.Authorize)
+			v1.POST("/idp/token", idpSvc.Token)
+			v1.GET("/idp/jwks", idpSvc.JWKS)
+			v1.GET("/idp/userinfo", idpSvc.UserInfo) // 自身用 Bearer access token
+			v1.POST("/idp/introspect", idpSvc.Introspect)
+			v1.GET("/idp/logout", idpSvc.Logout)
+			r.GET("/.well-known/openid-configuration", idpSvc.Discovery)
+		}
+
 		if authMW != nil {
 			v1.Use(authMW)
 		}
@@ -181,6 +194,21 @@ func New(h *api.Handlers) *gin.Engine {
 		v1.GET("/auth/me", h.Me)
 		v1.GET("/users", h.ListUsers)
 		v1.POST("/users", h.CreateUser)
+
+		// IdP client 管理（admin only）：注册 / 编辑 / 删除 / 轮换密钥。
+		// IdP 未启用时不挂载（h.IdP()==nil）。
+		if h.IdP() != nil {
+			idpAdmin := v1.Group("/idp/clients")
+			if adminMW := h.AdminMiddleware(); adminMW != nil {
+				idpAdmin.Use(adminMW)
+			}
+			idpAdmin.GET("", h.ListClients)
+			idpAdmin.POST("", h.CreateClient)
+			idpAdmin.GET("/:id", h.GetClient)
+			idpAdmin.PUT("/:id", h.UpdateClient)
+			idpAdmin.DELETE("/:id", h.DeleteClient)
+			idpAdmin.POST("/:id/rotate-secret", h.RotateClientSecret)
+		}
 
 		// AiNexus 异常排查（内嵌网关，进程内直调；config 为页面管理的网关配置）
 		ainexus := v1.Group("/ainexus")

@@ -284,10 +284,18 @@ func (h *Handlers) Login(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
-	token, err := h.authSvc.Login(req.Username, req.Password)
+	user, token, err := h.authSvc.LoginUser(req.Username, req.Password)
 	if err != nil {
 		fail(c, http.StatusUnauthorized, err.Error())
 		return
+	}
+	// IdP 启用时，登录成功同步建立 IdP SSO 会话 cookie，
+	// 使该用户随后跳转 /authorize 授权其他 RP 时免再登录（单点登录体验）。
+	if h.idpSvc != nil {
+		if _, err := h.idpSvc.EstablishSession(c, user, 0); err != nil {
+			// 会话建立失败不影响登录本身，仅记日志（cookie 缺失会在 authorize 时跳登录）。
+			_ = err
+		}
 	}
 	ok(c, http.StatusOK, gin.H{"token": token})
 }

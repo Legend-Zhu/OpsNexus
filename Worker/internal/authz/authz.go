@@ -8,7 +8,7 @@ package authz
 import (
 	"crypto/subtle"
 	"crypto/tls"
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -23,6 +23,11 @@ type Middleware struct {
 	// PublicPaths are exempt from auth (e.g. OAuth metadata discovery,
 	// health checks). Matching is exact on the request path.
 	PublicPaths []string
+	// AuthorizationServer is the OpsGaurd IdP issuer URL advertised in the
+	// RFC 9728 protected-resource metadata (authorization_servers field), so
+	// MCP/OAuth clients can discover where to obtain a token. Empty = omit
+	// (bearer-token-only deployments).
+	AuthorizationServer string
 }
 
 // New builds the middleware from the agent auth config.
@@ -31,6 +36,7 @@ func New(cfg *agent.AuthConfig) *Middleware {
 	if cfg != nil {
 		m.enabled = cfg.Enabled
 		m.tokens = cfg.Tokens
+		m.AuthorizationServer = cfg.AuthorizationServer
 	}
 	return m
 }
@@ -79,11 +85,25 @@ type ProtectedResourceMetadata struct {
 }
 
 // MetadataHandler serves the OAuth 2.1 protected-resource metadata JSON.
+// 当 Middleware 配置了 AuthorizationServer（OpsGaurd IdP issuer）时，
+// 填入 authorization_servers 字段，供 MCP/OAuth 客户端按 RFC 9728 发现授权服务器。
 func MetadataHandler(m *Middleware) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"resource":%q,"scopes_supported":["worker:read","worker:write"],"bearer_methods_supported":["header"]}`,
-			"https://"+r.Host+"/")
+		doc := ProtectedResourceMetadata{
+			Resource:               "https://" + r.Host + "/",
+			ScopesSupported:        []string{"worker:read", "worker:write"},
+			BearerMethodsSupported: []string{"header"},
+		}
+		if m != nil && m.AuthorizationServer != "" {
+			doc.AuthorizationServers = []string{m.AuthorizationServer}
+		}
+		data, err := json.Marshal(doc)
+		if err != nil {
+			http.Error(w, `{"error":"metadata serialization failed"}`, http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write(data)
 	})
 }
 

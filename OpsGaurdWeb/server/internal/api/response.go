@@ -9,6 +9,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/alertrule"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/auth"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/idp"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
@@ -44,6 +45,7 @@ type Handlers struct {
 	ruleSvc     *alertrule.Service
 	authSvc     *auth.Service
 	registrySvc *registry.Service
+	idpSvc      *idp.Service // OpsGaurd 作为 OIDC IdP（nil = 未启用）
 	AINexusRT   *ainexusrt.Service // 内嵌 AiNexus 网关运行时（热重载配置；Server() 为空 = 未启用）
 	// AuthMiddleware 认证中间件（P6；nil = 未启用认证）。
 	AuthMiddleware gin.HandlerFunc
@@ -79,11 +81,26 @@ func (h *Handlers) SetAuthService(s *auth.Service) { h.authSvc = s }
 // SetAuthMiddleware wires the auth middleware (P6; nil disables auth).
 func (h *Handlers) SetAuthMiddleware(m gin.HandlerFunc) { h.AuthMiddleware = m }
 
+// AdminMiddleware 返回 admin 角色守卫中间件（须在 AuthMiddleware 之后使用）。
+// authSvc 未初始化或认证未启用时返回 nil（router 层据此决定是否挂载）。
+func (h *Handlers) AdminMiddleware() gin.HandlerFunc {
+	if h.authSvc == nil {
+		return nil
+	}
+	return h.authSvc.RequireRole("admin")
+}
+
 // SetAINexusRT wires the AiNexus gateway runtime service (P7; hot-reload).
 func (h *Handlers) SetAINexusRT(s *ainexusrt.Service) { h.AINexusRT = s }
 
 // SetRegistryService wires the embedded registry service（镜像仓库 + 构建）。
 func (h *Handlers) SetRegistryService(s *registry.Service) { h.registrySvc = s }
+
+// SetIdPService wires the IdP (OIDC provider) service. nil = IdP 未启用。
+func (h *Handlers) SetIdPService(s *idp.Service) { h.idpSvc = s }
+
+// IdP 返回 IdP 服务（router 挂载 /api/v1/idp/* + discovery 用；nil = 未启用）。
+func (h *Handlers) IdP() *idp.Service { return h.idpSvc }
 
 // Registry 返回内嵌镜像仓库服务（router 挂载 /v2 用；nil = 未启用）。
 func (h *Handlers) Registry() *registry.Service { return h.registrySvc }

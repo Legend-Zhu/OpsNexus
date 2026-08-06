@@ -347,6 +347,25 @@ export interface User {
   role: string
   enabled: boolean
   created_at: string
+  /** IdP 扩展字段（OIDC profile claims 下发用） */
+  email?: string
+  display_name?: string
+  groups?: string[]
+}
+
+/** IdP Client（注册到 OpsGaurd IdP 的 OIDC 客户端 / 依赖方） */
+export interface IdpClient {
+  id: string
+  name: string
+  redirect_uris: string[]
+  grant_types?: string[]
+  response_types?: string[]
+  scopes?: string[]
+  token_ttl?: string
+  /** true = PKCE-only 公共客户端（无 secret，Worker/MCP 用） */
+  public: boolean
+  created_at: string
+  updated_at?: string
 }
 
 /** 监控事件（来自 Worker /api/v1/events） */

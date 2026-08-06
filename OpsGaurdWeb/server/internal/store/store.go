@@ -33,10 +33,18 @@ const (
 	BucketInvestigation = "investigation" // 排查会话落库（对话式 troubleshoot）
 	BucketSecret        = "secret"        // 密钥引用（巡检 flow 拨测账号等）
 	BucketCursor        = "cursor"        // 事件/审计订阅游标（cluster -> last_seq）
+
+	// IdP（OpsGaurd 作为 OIDC 身份提供者）相关 bucket。v2 新增，无历史数据迁移。
+	BucketClient        = "idpclient"  // OIDC client（RP）注册表
+	BucketAuthCode      = "idpcode"    // 授权码（一次性，短 TTL）
+	BucketAccessToken   = "idpatoken"  // access token jti（用于 introspect / 吊销）
+	BucketRefreshToken  = "idprtoken"  // refresh token（不透明随机串）
+	BucketSigningKey    = "idpkey"     // IdP JWT 签名 RSA 私钥
+	BucketIDPSession    = "idpsession" // IdP SSO 会话（cookie sid -> 记录）
 )
 
 // schemaVersion 当前数据版本；每次不兼容变更 +1 并追加 migrate 函数。
-const schemaVersion = 1
+const schemaVersion = 2
 
 // Store 是 LevelDB 数据存储的门面。
 type Store struct {
@@ -91,6 +99,11 @@ var migrations = map[int]func(*Store) error{
 		// v1：初始 schema，无历史数据需要转换
 		return s.putVersion(1)
 	},
+	2: func(s *Store) error {
+		// v2：新增 IdP bucket（client/authcode/atoken/rtoken/key/session）。
+		// 纯结构新增，无需迁移旧数据；仅推进版本号。
+		return s.putVersion(2)
+	},
 }
 
 func (s *Store) getVersion() (int, error) {
@@ -124,6 +137,32 @@ func (s *Store) put(key string, v any) error {
 		return fmt.Errorf("marshal %q: %w", key, err)
 	}
 	return s.db.Put([]byte(key), data, nil)
+}
+
+// WriteBatch 原子地批量写入与删除（leveldb.Batch 单次 db.Write）。
+// puts 为 (key,value) 对（value 经 JSON 序列化）；dels 为待删 key。
+// 用于"签发 token + 落 session"等多 key 必须原子提交的场景。
+func (s *Store) WriteBatch(puts []KV, dels []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	batch := new(leveldb.Batch)
+	for _, p := range puts {
+		data, err := json.Marshal(p.Value)
+		if err != nil {
+			return fmt.Errorf("marshal %q: %w", p.Key, err)
+		}
+		batch.Put([]byte(p.Key), data)
+	}
+	for _, k := range dels {
+		batch.Delete([]byte(k))
+	}
+	return s.db.Write(batch, nil)
+}
+
+// KV 是 WriteBatch 的单个键值项。
+type KV struct {
+	Key   string
+	Value any
 }
 
 // NextSeq 原子递增并返回 seq/<kind> 序列号。

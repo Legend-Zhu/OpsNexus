@@ -21,6 +21,16 @@ auth:
   #     scopes: []                                    # 默认 profile email（openid 恒包含）
   #     default_role: "viewer"                        # 新 SSO 用户默认角色（首个用户自动 admin）
 
+# IdP（OpsGaurd 自身作为 OIDC 身份提供者）：其他系统（企业内业务应用、Worker/MCP 工具）
+# 可跳转 /api/v1/idp/authorize 到本系统完成认证。启用后自动开启认证中间件并播种 admin。
+# 工作流：管理员在「系统设置 → 身份提供者」注册 client（redirect_uri/secret/PKCE）→
+# 对接方按 OIDC 授权码+PKCE 流接入（discovery: /.well-known/openid-configuration）。
+# idp:
+#   enabled: true
+#   issuer: "https://opsguard.example.com"     # 对外可达地址，生产须 https（localhost 例外便于开发）
+#   access_token_ttl: "1h"                      # access token 有效期，默认 1h
+#   refresh_token_ttl: "720h"                   # refresh token 有效期，默认 30 天
+
 # 持久化：LevelDB 数据目录（嵌入式 KV，拷贝目录即备份）
 store:
   path: "./data"
