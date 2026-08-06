@@ -18,7 +18,7 @@ version: "3.8"
 
 services:
   worker:
-    image: opsguard-worker:1.0.1
+    image: opsguard-worker:1.0.2
     hostname: "{{.Node.Hostname}}"
     privileged: true
     pid: host
@@ -34,11 +34,19 @@ services:
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /etc/opsguard/agent-config.yaml:/etc/opsguard/agent-config.yaml:ro
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        read_only: true
+      - type: bind
+        source: /etc/opsguard/agent-config.yaml
+        target: /etc/opsguard/agent-config.yaml
+        read_only: true
       # 持久化状态（事件/审计 SQLite 队列）。manager 角色写；重启不丢事件，
       # gRPC Subscribe* 流断线重连带游标续拉。
-      - /var/lib/opsguard:/var/lib/opsguard
+      - type: bind
+        source: /var/lib/opsguard
+        target: /var/lib/opsguard
     command: ["-agent-config", "/etc/opsguard/agent-config.yaml", "-addr", ":8090", "-grpc-addr", ":9090"]
     ports:
       # HTTP: /mcp + /healthz + local API
