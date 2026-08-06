@@ -8,6 +8,7 @@ package orchestrator
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
@@ -46,8 +47,12 @@ func (o *Orchestrator) ListNodesView(ctx context.Context) ([]NodeView, error) {
 	}
 	selfID, _ := o.SelfNodeID(ctx)
 
-	out := make([]NodeView, 0, len(nodes))
-	for _, n := range nodes {
+	// Per-node stats are fetched concurrently — each node's aggregation already
+	// takes ~1s (CPU sampling), so serializing N nodes would make this O(N
+	// seconds). The slice is preallocated; each goroutine writes its own slot.
+	views := make([]NodeView, len(nodes))
+	var wg sync.WaitGroup
+	for i, n := range nodes {
 		v := NodeView{
 			ID:           n.ID,
 			Hostname:     n.Description.Hostname,
@@ -62,19 +67,25 @@ func (o *Orchestrator) ListNodesView(ctx context.Context) ([]NodeView, error) {
 			v.Leader = n.ManagerStatus.Leader
 			v.ManagerReach = n.ManagerStatus.Reachability
 		}
-		if n.ID == selfID {
-			v.Reachable = true // 本 daemon 直读
-			v.CPUPercent, v.MemPercent, v.ContainerCount = o.localNodeAggregate(ctx, v.CPUCores, v.MemBytes)
-		} else if addr, ok := addrs[n.ID]; ok {
-			stats, err := o.NodeClientByAddr(addr).Stats(ctx)
-			if err == nil {
-				v.Reachable = true
-				v.CPUPercent, v.MemPercent, v.ContainerCount = aggregateStats(stats.Containers, v.CPUCores, v.MemBytes)
+		views[i] = v
+
+		wg.Add(1)
+		go func(i int, n docker.Node) {
+			defer wg.Done()
+			if n.ID == selfID {
+				views[i].Reachable = true // 本 daemon 直读
+				views[i].CPUPercent, views[i].MemPercent, views[i].ContainerCount = o.localNodeAggregate(ctx, views[i].CPUCores, views[i].MemBytes)
+			} else if addr, ok := addrs[n.ID]; ok {
+				stats, err := o.NodeClientByAddr(addr).Stats(ctx)
+				if err == nil {
+					views[i].Reachable = true
+					views[i].CPUPercent, views[i].MemPercent, views[i].ContainerCount = aggregateStats(stats.Containers, views[i].CPUCores, views[i].MemBytes)
+				}
 			}
-		}
-		out = append(out, v)
+		}(i, n)
 	}
-	return out, nil
+	wg.Wait()
+	return views, nil
 }
 
 // ResolveNodeAddr 把 id（node ID 或 hostname）解析为 ready 节点的 worker 地址。
@@ -104,28 +115,76 @@ func NodeNotFound(err error) bool {
 
 // localNodeAggregate reads this daemon's running swarm-service containers and
 // aggregates CPU/memory percent against the node's total resources.
+//
+// CPU sampling needs two snapshots 1s apart per container. To keep this O(1s)
+// regardless of container count, we take all first samples concurrently, sleep
+// once, then take all second samples concurrently — instead of the previous
+// per-container serial sleep(1s) which made the call O(N seconds).
 func (o *Orchestrator) localNodeAggregate(ctx context.Context, cores float64, memBytes uint64) (cpuPct, memPct float64, count int) {
 	cs, err := o.cli.ListContainers(ctx, docker.Filter{"label": {"com.docker.swarm.service.id"}})
 	if err != nil {
 		return 0, 0, 0
 	}
+	// Filter to running containers first.
+	running := make([]docker.Container, 0, len(cs))
+	for _, c := range cs {
+		if c.State == "running" {
+			running = append(running, c)
+		}
+	}
+	if len(running) == 0 {
+		return 0, 0, 0
+	}
+
+	// First snapshot: one goroutine per container.
+	first := make([]docker.Stats, len(running))
+	okFirst := make([]bool, len(running))
+	var wg sync.WaitGroup
+	for i, c := range running {
+		wg.Add(1)
+		go func(i int, id string) {
+			defer wg.Done()
+			if s, err := o.cli.ContainerStats(ctx, id); err == nil {
+				first[i] = s
+				okFirst[i] = true
+			}
+		}(i, c.ID)
+	}
+	wg.Wait()
+
+	// Single sampling interval for all containers.
+	select {
+	case <-ctx.Done():
+		return 0, 0, 0
+	case <-time.After(time.Second):
+	}
+
+	// Second snapshot: concurrent again.
+	second := make([]docker.Stats, len(running))
+	okSecond := make([]bool, len(running))
+	for i, c := range running {
+		if !okFirst[i] {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, id string) {
+			defer wg.Done()
+			if s, err := o.cli.ContainerStats(ctx, id); err == nil {
+				second[i] = s
+				okSecond[i] = true
+			}
+		}(i, c.ID)
+	}
+	wg.Wait()
+
 	var sumCPU float64
 	var sumMem uint64
-	for _, c := range cs {
-		if c.State != "running" {
+	for i := range running {
+		if !okFirst[i] || !okSecond[i] {
 			continue
 		}
-		first, err := o.cli.ContainerStats(ctx, c.ID)
-		if err != nil {
-			continue
-		}
-		time.Sleep(time.Second)
-		second, err := o.cli.ContainerStats(ctx, c.ID)
-		if err != nil {
-			continue
-		}
-		sumCPU += cpuDeltaPercent(first, second)
-		sumMem += memUsageOf(second)
+		sumCPU += cpuDeltaPercent(first[i], second[i])
+		sumMem += memUsageOf(second[i])
 		count++
 	}
 	if cores > 0 {
