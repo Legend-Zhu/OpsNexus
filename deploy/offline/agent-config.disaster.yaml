@@ -12,9 +12,12 @@ worker:
 # webhooks:
 #   - "http://10.60.189.6:8080/api/v1/ingest/events"
 
-# Bearer-token 鉴权：内网暂关（开启后管理端集群配置需带 token）
+# Bearer-token 鉴权：生产环境必须开启——不配则 gRPC/HTTP/MCP 端口裸奔。
+# server 集群注册时需填同样的 token 才能访问 Worker。
 auth:
-  enabled: false
+  enabled: true
+  tokens:
+    opsguard-server: "f6f44ba6a6a6142d94327754bd930274b00c9aed0578ee48"
 
 commandPolicy:
   mode: blacklist
