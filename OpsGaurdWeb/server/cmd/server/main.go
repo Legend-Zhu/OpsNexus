@@ -61,8 +61,10 @@ func main() {
 	clusterSvc := cluster.New(st)
 	h.SetClusterService(clusterSvc)
 
-	// 告警 ingest 服务（P3：Worker webhook → 事件落库 + 告警聚合）
-	h.SetIngestService(ingest.New(st), cfg.Server.IngestToken)
+	// 告警 ingest 服务（P3：事件落库 + 告警聚合）。事件经 gRPC SubscribeEvents
+	// 流从各 Worker 拉取（ingest.Manager 管理每集群一个订阅 goroutine），
+	// 替代了原 Worker→server webhook 推送（单向网络策略下不可用）。
+	ingestSvc := ingest.New(st)
 
 	// 内嵌 AiNexus 网关（与管理端同进程，无独立服务/端口）。配置可在
 	// 页面「系统设置 → AI 排查网关」在线修改并热重载（无需重启）；首次保存
@@ -102,6 +104,26 @@ func main() {
 	patrolSvc.Start()
 	defer patrolSvc.Stop()
 
+	// 事件订阅管理器（P3：每集群一个 gRPC SubscribeEvents goroutine，拉取
+	// Worker 监控事件 → ingestSvc 落库 + 告警聚合；断线带游标重连）。
+	// builder 适配 cluster.Service.WorkerClient → SubscribeEvents 流。
+	ingestMgr := ingest.NewManager(func(ctx context.Context, clusterName string, afterSeq int64) (ingest.EventSubscriber, func(), error) {
+		cli, err := clusterSvc.WorkerClient(clusterName)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		sub, err := cli.SubscribeEvents(ctx, afterSeq)
+		if err != nil {
+			cli.Close()
+			return nil, func() {}, err
+		}
+		return sub, func() { cli.Close() }, nil
+	}, ingestSvc, st, log)
+	if err := ingestMgr.Start(context.Background()); err != nil {
+		log.Error("ingest manager start failed", "err", err)
+	}
+	defer ingestMgr.Stop()
+
 	// 告警规则服务（P6：管理 Worker monitoring config）
 	h.SetAlertRuleService(alertrule.New(st, clusterSvc))
 
@@ -119,7 +141,7 @@ func main() {
 				log.Info("bootstrapped default admin (admin)")
 			}
 		}
-		public := []string{"/healthz", "/api/v1/ingest/events", "/api/v1/auth/login", "/api/v1/auth/sso", "/api/v1/auth/callback", "/ainexus"}
+		public := []string{"/healthz", "/api/v1/auth/login", "/api/v1/auth/sso", "/api/v1/auth/callback", "/ainexus"}
 		h.SetAuthMiddleware(authSvc.Middleware(public))
 		log.Info("auth enabled", "sso", cfg.Auth.SSO != nil)
 	}

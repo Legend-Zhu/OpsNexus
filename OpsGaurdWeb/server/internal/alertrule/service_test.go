@@ -3,17 +3,84 @@ package alertrule
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"net"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
+	pb "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy/pb"
+
+	"google.golang.org/grpc"
 )
 
-func newTestRule(t *testing.T) (*Service, *httptest.Server) {
+// alertWorkerServer 是 alertrule 测试用的 mock Worker。实现:
+//   - Self: 返回 manager（兼容任何潜在探测）
+//   - GetService: 返回单个 docker 原生 service（nginx:alpine, 2/2 副本）
+//   - Update: 记录被调用次数，返回 healthy 操作
+//
+// 其余 RPC 走 UnimplementedManagementServiceServer。
+type alertWorkerServer struct {
+	pb.UnimplementedManagementServiceServer
+	updated atomic.Int32
+}
+
+func (m *alertWorkerServer) Self(context.Context, *pb.Empty) (*pb.SelfInfo, error) {
+	return &pb.SelfInfo{
+		NodeId: "n1", Hostname: "h1", Role: "manager",
+		Leader: true, State: "ready", SwarmManager: true,
+	}, nil
+}
+
+func (m *alertWorkerServer) GetService(_ context.Context, req *pb.GetServiceRequest) (*pb.ServiceDetail, error) {
+	// 旧 HTTP mock 把 {service, tasks, running, desired, healthy} 作为一个 JSON
+	// 对象返回。gRPC 的 ServiceDetail 拆成 service_json（单个 dockerService，
+	// mapWorkload 解码）+ tasks_json（[]dockerTask）+ running/desired/healthy。
+	svcJSON, _ := json.Marshal(map[string]any{
+		"ID": "s1",
+		"Spec": map[string]any{
+			"Name":         req.GetName(),
+			"TaskTemplate": map[string]any{"ContainerSpec": map[string]any{"Image": "nginx:alpine"}},
+			"Mode":         map[string]any{"Replicated": map[string]any{"Replicas": 2}},
+		},
+		"ServiceStatus": map[string]any{"RunningTasks": 2, "DesiredTasks": 2},
+	})
+	return &pb.ServiceDetail{
+		ServiceJson: svcJSON,
+		TasksJson:   []byte("[]"),
+		Running:     2,
+		Desired:     2,
+		Healthy:     2,
+	}, nil
+}
+
+func (m *alertWorkerServer) Update(_ context.Context, req *pb.UpdateRequest) (*pb.Operation, error) {
+	// 旧 handler 校验收到的 config 含 monitoring 块；这里只记录被调用，
+	// 返回 healthy 操作（Apply 仅在 op.Status=="failed" 时报错）。
+	m.updated.Add(1)
+	return &pb.Operation{
+		Id: "op1", Type: "update", Service: req.GetName(), Status: "healthy",
+	}, nil
+}
+
+// startGRPCWorker 在随机 TCP 端口上启动一个真实 gRPC 服务器，返回其
+// http://127.0.0.1:<port> URL（workerproxy.New 经 grpcTarget 拨号会剥掉 scheme）。
+// cleanup 注册到 t.Cleanup。
+func startGRPCWorker(t *testing.T, srv pb.ManagementServiceServer) string {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	s := grpc.NewServer()
+	pb.RegisterManagementServiceServer(s, srv)
+	go func() { _ = s.Serve(lis) }()
+	t.Cleanup(func() { s.GracefulStop() })
+	return "http://" + lis.Addr().String()
+}
+
+func newTestRule(t *testing.T) (*Service, *alertWorkerServer) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "ogw-test"))
 	if err != nil {
@@ -21,44 +88,14 @@ func newTestRule(t *testing.T) (*Service, *httptest.Server) {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	var updated atomic.Int32
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/self", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"nodeId": "n1", "hostname": "h1", "role": "manager",
-			"leader": true, "state": "ready", "swarmManager": true,
-		})
-	})
-	mux.HandleFunc("GET /api/v1/services/{name}", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"service": map[string]any{
-				"ID": "s1",
-				"Spec": map[string]any{
-					"Name":         r.PathValue("name"),
-					"TaskTemplate": map[string]any{"ContainerSpec": map[string]any{"Image": "nginx:alpine"}},
-					"Mode":         map[string]any{"Replicated": map[string]any{"Replicas": 2}},
-				},
-				"ServiceStatus": map[string]any{"RunningTasks": 2, "DesiredTasks": 2},
-			},
-			"tasks": []any{}, "running": 2, "desired": 2, "healthy": 2,
-		})
-	})
-	mux.HandleFunc("POST /api/v1/services/{name}", func(w http.ResponseWriter, r *http.Request) {
-		// 校验收到的 config 含 monitoring 块
-		_ = r.Body.Close()
-		updated.Add(1)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": "op1", "type": "update", "service": r.PathValue("name"), "status": "healthy",
-		})
-	})
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
+	srv := &alertWorkerServer{}
+	url := startGRPCWorker(t, srv)
 
 	cs := cluster.New(st)
-	if err := st.PutCluster(&store.Cluster{Name: "dev", WorkerURL: ts.URL, Status: store.ClusterOnline}); err != nil {
+	if err := st.PutCluster(&store.Cluster{Name: "dev", WorkerURL: url, Status: store.ClusterOnline}); err != nil {
 		t.Fatalf("put cluster: %v", err)
 	}
-	return New(st, cs), ts
+	return New(st, cs), srv
 }
 
 // TestUpsertValidate 校验：阈值范围/必填字段。

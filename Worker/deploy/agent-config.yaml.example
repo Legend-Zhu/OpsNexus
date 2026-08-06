@@ -6,21 +6,28 @@ worker:
   # auto: derive role from the swarm node (manager -> orchestration+MCP,
   #        worker -> local-only). Pin to manager/node to override.
   role: auto
-  # Listen address of the node's local API (and, on managers, the orchestration API).
+  # Listen address of the node's local API (and, on managers, the HTTP port for
+  # /mcp + /healthz + the management API). Default :8080.
   listen: ":8080"
-  # (node-role only) manager-role worker base URL for reporting.
-  # managerURL: http://10.0.0.1:8080
+  # gRPC listen address for the management API (server↔worker), manager-role
+  # only. The server connects here and opens SubscribeEvents/SubscribeAudit
+  # streams to pull events back (honoring the one-way server→worker network
+  # policy). Default :9080. Override via the -grpc-addr flag.
+  grpcListen: ":9080"
+  # Persistent state directory (event/audit SQLite queues). Default
+  # /var/lib/opsguard. Mount it as a volume so events survive restarts.
+  dataDir: "/var/lib/opsguard"
 
-# Monitoring events are POSTed to these URLs (manager-role worker only).
-# Payload is the event JSON: {id, ts, service, type, level, msg, detail}.
-# Fire-and-forget with exponential backoff retries; dedupe by id on the receiver.
-webhooks:
-  # - "http://opsguard-web:8080/api/v1/events"
+# DEPRECATED: monitoring events are now streamed to the server over the gRPC
+# SubscribeEvents bidirectional stream (server-initiated), not POSTed to webhook
+# URLs. This field is ignored.
+# webhooks:
+#   - "http://opsguard-web:8080/api/v1/events"
 
-# Bearer-token auth for the HTTP API and MCP endpoint.
-# Enable in production — the API can run host commands. Tokens can also be
-# distributed centrally via WORKER_TOKENS="name=secret,..." (env), which
-# enables auth automatically.
+# Bearer-token auth for the HTTP API, MCP endpoint, and the gRPC management
+# service. Enable in production — the API can run host commands. Tokens can
+# also be distributed centrally via WORKER_TOKENS="name=secret,..." (env),
+# which enables auth automatically.
 auth:
   enabled: false
   # tokens map a name -> secret; the name becomes the audit actor:

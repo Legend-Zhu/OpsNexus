@@ -94,6 +94,16 @@ func (o *Operation) snapshot() Operation {
 	return clone
 }
 
+// SnapshotOperation returns a concurrency-safe value copy of op, for
+// serialization by HTTP/gRPC adapters. Exported so callers outside the
+// orchestrator package (the gRPC server) can safely read a live Operation.
+func SnapshotOperation(op *Operation) Operation {
+	if op == nil {
+		return Operation{}
+	}
+	return op.snapshot()
+}
+
 // newOperation constructs a pending operation with a fresh mutex and id. The
 // extra fields (ServiceID/Replicas/Mode) are set by the caller.
 func newOperation(typ OperationType, service string) *Operation {

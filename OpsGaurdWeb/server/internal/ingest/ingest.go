@@ -1,21 +1,13 @@
-// Package ingest receives Worker webhook pushes (monitor events + audit
-// entries), persists them, and aggregates events into alerts.
+// Package ingest persists monitor events drained from the Worker over gRPC
+// (internal/ingest/subscriber.go opens a SubscribeEvents stream per cluster)
+// and aggregates them into alerts. The former HTTP webhook push path is gone.
 //
-// Worker pushes to the configured webhook URLs; the management-plane ingest
-// endpoint is one of them: POST /api/v1/ingest/events?cluster=<name>&token=<t>.
-// Both payload shapes arrive at the same URL; they are distinguished by
-// fields (an audit entry has "actor"/"action", a monitor event has
-// "service"/"type"/"level"). Alerts are deduped/aggregated per
-// (cluster, service, type) while active; a recovery event or a manual
-// recover/ack transitions the alert.
+// Alerts are deduped/aggregated per (cluster, service, type) while active; a
+// recovery event or a manual recover/ack transitions the alert.
 package ingest
 
 import (
-	"crypto/subtle"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
@@ -117,44 +109,4 @@ func (s *Service) recoverByService(cluster, service string) error {
 		}
 	}
 	return nil
-}
-
-// ParseEvent 解析 webhook body 为事件或审计条目。
-// 返回 (event, isAudit, err)；审计条目当前直接丢弃（P3 只处理监控事件）。
-func ParseEvent(body []byte) (*store.IngestEvent, bool, error) {
-	var probe map[string]any
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return nil, false, fmt.Errorf("invalid JSON: %w", err)
-	}
-	if _, isAudit := probe["actor"]; isAudit {
-		return nil, true, nil
-	}
-	var e store.IngestEvent
-	if err := json.Unmarshal(body, &e); err != nil {
-		return nil, false, fmt.Errorf("decode event: %w", err)
-	}
-	return &e, false, nil
-}
-
-// LimitReader 上限读取 body。
-func LimitReader(r io.Reader, n int64) ([]byte, error) {
-	return io.ReadAll(io.LimitReader(r, n))
-}
-
-// ValidateToken 常量时间比较 token（防时序侧信道）。
-func ValidateToken(got, want string) bool {
-	if want == "" {
-		return true // 未配置 token → 内网可信
-	}
-	if len(got) != len(want) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
-}
-
-// httpError 便捷错误响应。
-func httpError(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }

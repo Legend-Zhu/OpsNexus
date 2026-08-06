@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -58,6 +59,13 @@ func (a *API) logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.streamOnce(ctx, w, service, tail, since, emit)
+}
+
+// ServiceLogs opens a Docker service log stream for direct line consumption.
+// Exported so the gRPC StreamLogs handler can reuse the same Docker log plumbing
+// without going through the SSE HTTP layer. The caller must close the reader.
+func (a *API) ServiceLogs(ctx context.Context, service string, opts docker.LogsOptions) (io.ReadCloser, error) {
+	return a.cli.ServiceLogs(ctx, service, opts)
 }
 
 // streamOnce pulls the tail of the log and closes.

@@ -9,8 +9,10 @@ import (
 	"crypto/x509"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"os/signal"
 	"syscall"
 	"time"
@@ -20,17 +22,22 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/authz"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/grpcapi"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/logging"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/mcp"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/monitor"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/nodeagent"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/orchestrator"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/version"
+
+	"google.golang.org/grpc"
 )
 
 func main() {
 	var (
 		addr     string
+		grpcAddr string
+		dataDir  string
 		cfgPath  string
 		agentCfg string
 		logJSON  bool
@@ -41,6 +48,8 @@ func main() {
 		tlsCA    string
 	)
 	flag.StringVar(&addr, "addr", ":8080", "HTTP listen address for the orchestration API")
+	flag.StringVar(&grpcAddr, "grpc-addr", ":9080", "gRPC listen address for the management API (server↔worker)")
+	flag.StringVar(&dataDir, "data-dir", "/var/lib/opsguard", "directory for persistent state (event/audit SQLite queues)")
 	flag.StringVar(&cfgPath, "config", "", "optional worker config (yaml/json) to validate at startup")
 	flag.StringVar(&agentCfg, "agent-config", "", "path to the agent's own config (command policy, role)")
 	flag.BoolVar(&logJSON, "log-json", false, "emit JSON logs instead of text")
@@ -92,6 +101,17 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	// Agent config can override the flag defaults for the gRPC listen address
+	// and data dir (flags, when explicitly set on the command line, still win).
+	// This lets deployments pin these in the mounted config file.
+	setFlags := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	if agCfg.Worker.GrpcListen != "" && !setFlags["grpc-addr"] {
+		grpcAddr = agCfg.Worker.GrpcListen
+	}
+	if agCfg.Worker.DataDir != "" && !setFlags["data-dir"] {
+		dataDir = agCfg.Worker.DataDir
+	}
 	log.Info("agent policy",
 		"mode", agCfg.CommandPolicy.Mode,
 		"allow_host_exec", agCfg.CommandPolicy.AllowHostExec,
@@ -133,41 +153,56 @@ func main() {
 	var (
 		orch       *orchestrator.Orchestrator
 		monMgr     *monitor.Manager
-		api        *orchestrator.API
 		mcpHandler *mcp.Handler
+		evStore    *monitor.EventStore
+		auditStore *audit.Store
 	)
 	if isManager {
 		store := orchestrator.NewOperationStore(1000)
 		orch = orchestrator.New(cli, store, log)
+		// Cross-node proxying targets each worker's HTTP port; all workers
+		// share the same listen port, so reuse this instance's -addr port.
+		if _, p, err := net.SplitHostPort(addr); err == nil && p != "" {
+			orch.SetWorkerPort(p)
+		}
+		// Leader write-forwarding targets the management gRPC port; every
+		// worker shares the same gRPC port.
+		if _, p, err := net.SplitHostPort(grpcAddr); err == nil && p != "" {
+			orch.SetGRPCPort(p)
+		}
 
-		// Audit log: record every lifecycle action + command execution
-		// (queryable via GET /api/v1/audit; webhook forwarding is a future
-		// extension since the audit Entry shape differs from monitor events).
-		auditStore := audit.NewStore(5000)
+		// Persistent state directory (event/audit SQLite queues). The manager
+		// is the only role that runs the control plane, so it owns these.
+		if err := os.MkdirAll(dataDir, 0o755); err != nil {
+			log.Error("data-dir create failed", "path", dataDir, "err", err)
+			os.Exit(1)
+		}
+
+		// Audit log: record every lifecycle action + command execution. The
+		// SQLite store is durable (survives restarts) and streamable over gRPC
+		// (SubscribeAudit), replacing the former webhook push.
+		auditStore, err = audit.NewStore(filepath.Join(dataDir, "audit.db"), log)
+		if err != nil {
+			log.Error("audit store open failed", "err", err)
+			os.Exit(1)
+		}
+		defer auditStore.Close()
 		orch.SetAudit(auditStore)
 
 		// P2 monitoring: wire the manager in; log/resource checks with
 		// action=restart call back into the orchestrator.
-		evStore := monitor.NewEventStore(10000)
+		evStore, err = monitor.NewEventStore(filepath.Join(dataDir, "events.db"), log)
+		if err != nil {
+			log.Error("event store open failed", "err", err)
+			os.Exit(1)
+		}
+		defer evStore.Close()
 		monMgr = monitor.NewManager(cli, evStore, log)
 		monMgr.SetRestartFn(func(ctx context.Context, svc string) error {
 			_, err := orch.Restart(ctx, svc)
 			return err
 		})
 		orch.SetMonitor(monMgr)
-
-		// Webhook event forwarding (agent config `webhooks` list): monitor
-		// events + audit entries share the same pusher.
-		if len(agCfg.Webhooks) > 0 {
-			pusher := monitor.NewWebhookPusher(agCfg.Webhooks, log)
-			evStore.AddSink(pusher.Sink())
-			auditStore.AddSink(func(e audit.Entry) { pusher.SendJSON(e) })
-			log.Info("webhook forwarding enabled", "urls", len(agCfg.Webhooks))
-		}
-
-		api = orchestrator.NewAPI(orch)
-		api.SetEvents(monMgr.Events)
-		api.SetAudit(auditStore)
 
 		// P3 MCP: expose the same capabilities to LLM agents over Streamable HTTP.
 		mcpHandler, err = mcp.NewWithAudit(orch, monMgr, cli, log, auditStore)
@@ -194,10 +229,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	if isManager {
-		for pattern, handler := range api.Routes() {
-			mux.HandleFunc(pattern, handler)
-		}
-		// MCP Streamable HTTP endpoint (manager only).
+		// MCP Streamable HTTP endpoint (manager only). The management API now
+		// lives entirely on gRPC (:9080); HTTP serves only /mcp + /healthz +
+		// the node-level local API.
 		mux.Handle("/mcp", mcpHandler.HTTPHandler())
 	}
 	// Local node endpoints are served by every worker instance.
@@ -220,6 +254,24 @@ func main() {
 	if agCfg.Auth.Enabled {
 		log.Info("auth enabled", "tokens", len(agCfg.Auth.Tokens))
 		mux.Handle("GET /.well-known/oauth-protected-resource", authz.MetadataHandler(authzMW))
+	}
+
+	// Management gRPC server (server↔worker API). Only the manager role serves
+	// it; node-role workers expose only the local HTTP API. The gRPC port runs
+	// alongside HTTP (:8080 for /mcp + /healthz + local node API; :9080 for the
+	// management service). Subscribe* streams let the server pull events back
+	// over a server-initiated connection (honoring the one-way network policy).
+	var (
+		grpcSrv *grpc.Server
+		mgmt    *grpcapi.Server
+	)
+	if isManager {
+		grpcSrv = grpc.NewServer(
+			grpc.ChainUnaryInterceptor(authzMW.GRPCUnaryInterceptor()),
+			grpc.ChainStreamInterceptor(authzMW.GRPCStreamInterceptor()),
+		)
+		mgmt = grpcapi.New(orch, evStore, auditStore, localAPI, log)
+		mgmt.Register(grpcSrv)
 	}
 
 	srv := &http.Server{
@@ -261,6 +313,21 @@ func main() {
 		}
 	}()
 
+	// gRPC listener (manager only). Runs alongside HTTP.
+	if grpcSrv != nil {
+		lis, err := net.Listen("tcp", grpcAddr)
+		if err != nil {
+			log.Error("grpc listen failed", "addr", grpcAddr, "err", err)
+			os.Exit(1)
+		}
+		go func() {
+			log.Info("grpc server listening", "addr", grpcAddr)
+			if err := grpcSrv.Serve(lis); err != nil {
+				log.Error("grpc server error", "err", err)
+			}
+		}()
+	}
+
 	sigc := make(chan os.Signal, 1)
 	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigc
@@ -270,6 +337,12 @@ func main() {
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("http shutdown error", "err", err)
+	}
+	if grpcSrv != nil {
+		grpcSrv.GracefulStop()
+	}
+	if mgmt != nil {
+		_ = mgmt.Close()
 	}
 	log.Info("stopped")
 }

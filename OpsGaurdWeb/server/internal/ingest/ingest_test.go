@@ -104,33 +104,5 @@ func TestRecoverByService(t *testing.T) {
 	}
 }
 
-// TestParseEvent 区分事件/审计 payload。
-func TestParseEvent(t *testing.T) {
-	e, isAudit, err := ParseEvent([]byte(`{"id":"ev-1","service":"web","type":"port_down","level":"error","msg":"x"}`))
-	if err != nil || isAudit || e == nil || e.Service != "web" {
-		t.Fatalf("event parse: e=%v isAudit=%v err=%v", e, isAudit, err)
-	}
-	_, isAudit, err = ParseEvent([]byte(`{"id":"a1","actor":"admin","action":"deploy","service":"web","ok":true}`))
-	if err != nil || !isAudit {
-		t.Fatalf("audit parse: isAudit=%v err=%v", isAudit, err)
-	}
-	if _, _, err = ParseEvent([]byte(`{bad`)); err == nil {
-		t.Fatal("expected parse error")
-	}
-}
-
-// TestValidateToken token 校验。
-func TestValidateToken(t *testing.T) {
-	if !ValidateToken("abc", "abc") {
-		t.Fatal("equal token should pass")
-	}
-	if ValidateToken("abc", "def") {
-		t.Fatal("mismatch should fail")
-	}
-	if !ValidateToken("", "") {
-		t.Fatal("empty want → allow")
-	}
-	if ValidateToken("", "secret") {
-		t.Fatal("empty got with want set should fail")
-	}
-}
+// (TestParseEvent / TestValidateToken removed — the webhook HTTP entry they
+// tested is gone, replaced by the gRPC SubscribeEvents subscriber.)

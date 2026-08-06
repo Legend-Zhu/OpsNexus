@@ -1,20 +1,20 @@
-// Node listing for the management plane: GET /api/v1/nodes and
-// GET /api/v1/nodes/{id}/processes. The node list combines the swarm node
-// table (docker node ls) with per-node container stats — the local node's
+// Node aggregation for the management plane. The node list combines the swarm
+// node table (docker node ls) with per-node container stats — the local node's
 // stats come from this daemon directly, remote nodes via their node-role
-// worker's /api/v1/local/stats. Process listing is proxied per node.
+// worker's local API. These functions are the shared logic behind the gRPC
+// ListNodes / NodeProcesses / Check* RPCs (the former HTTP handlers were
+// removed when the management API moved to gRPC).
 package orchestrator
 
 import (
 	"context"
-	"net/http"
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
 )
 
-// nodeView 一个集群节点的管理面视图。
-type nodeView struct {
+// NodeView 一个集群节点的管理面视图（供 HTTP/gRPC 适配层共享）。
+type NodeView struct {
 	ID             string  `json:"id"`
 	Hostname       string  `json:"hostname"`
 	Role           string  `json:"role"`         // manager | worker
@@ -31,23 +31,24 @@ type nodeView struct {
 	ContainerCount int     `json:"containerCount"`
 }
 
-// nodes handles GET /api/v1/nodes.
-func (a *API) nodes(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	nodes, err := a.orch.cli.ListNodes(ctx, nil)
+// ListNodesView aggregates the swarm node table with per-node container stats.
+// The local node's stats come from this daemon directly; remote nodes via their
+// node-role worker's /api/v1/local/stats. Failures of individual remote stats
+// are non-fatal (the node is marked unreachable).
+func (o *Orchestrator) ListNodesView(ctx context.Context) ([]NodeView, error) {
+	nodes, err := o.cli.ListNodes(ctx, nil)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
-		return
+		return nil, err
 	}
-	addrs, err := a.orch.NodeAddrs(ctx)
+	addrs, err := o.NodeAddrs(ctx)
 	if err != nil {
 		addrs = map[string]string{}
 	}
-	selfID, _ := a.orch.SelfNodeID(ctx)
+	selfID, _ := o.SelfNodeID(ctx)
 
-	out := make([]nodeView, 0, len(nodes))
+	out := make([]NodeView, 0, len(nodes))
 	for _, n := range nodes {
-		v := nodeView{
+		v := NodeView{
 			ID:           n.ID,
 			Hostname:     n.Description.Hostname,
 			Role:         n.Spec.Role,
@@ -63,9 +64,9 @@ func (a *API) nodes(w http.ResponseWriter, r *http.Request) {
 		}
 		if n.ID == selfID {
 			v.Reachable = true // 本 daemon 直读
-			v.CPUPercent, v.MemPercent, v.ContainerCount = a.orch.localNodeAggregate(ctx, v.CPUCores, v.MemBytes)
+			v.CPUPercent, v.MemPercent, v.ContainerCount = o.localNodeAggregate(ctx, v.CPUCores, v.MemBytes)
 		} else if addr, ok := addrs[n.ID]; ok {
-			stats, err := a.orch.NodeClientByAddr(addr).Stats(ctx)
+			stats, err := o.NodeClientByAddr(addr).Stats(ctx)
 			if err == nil {
 				v.Reachable = true
 				v.CPUPercent, v.MemPercent, v.ContainerCount = aggregateStats(stats.Containers, v.CPUCores, v.MemBytes)
@@ -73,93 +74,13 @@ func (a *API) nodes(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
-	writeJSON(w, http.StatusOK, out)
+	return out, nil
 }
 
-// nodeProcesses handles GET /api/v1/nodes/{id}/processes — proxies to the
-// node's local worker (the node-role worker must run /api/v1/local/processes).
-// id 可以是 node ID 或 hostname；top/limit/filter 原样转发。
-func (a *API) nodeProcesses(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	addr, err := a.nodeAddr(ctx, r.PathValue("id"))
-	if err != nil {
-		writeNodeErr(w, err)
-		return
-	}
-	q := r.URL.Query()
-	procs, err := a.orch.NodeClientByAddr(addr).Processes(ctx, q.Get("top"), q.Get("limit"), q.Get("filter"))
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, procs)
-}
-
-// nodeCheckPort handles GET /api/v1/nodes/{id}/check/port — ad-hoc TCP probe
-// executed from that node's worker（host/port/timeout 原样转发）。
-func (a *API) nodeCheckPort(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	addr, err := a.nodeAddr(ctx, r.PathValue("id"))
-	if err != nil {
-		writeNodeErr(w, err)
-		return
-	}
-	q := r.URL.Query()
-	res, err := a.orch.NodeClientByAddr(addr).CheckPort(ctx, q.Get("host"), q.Get("port"), q.Get("timeout"))
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
-}
-
-// nodeCheckHTTP handles POST /api/v1/nodes/{id}/check/http — ad-hoc HTTP probe
-// executed from that node's worker（JSON body 原样转发）。
-func (a *API) nodeCheckHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	var req HTTPCheckRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	addr, err := a.nodeAddr(ctx, r.PathValue("id"))
-	if err != nil {
-		writeNodeErr(w, err)
-		return
-	}
-	res, err := a.orch.NodeClientByAddr(addr).CheckHTTP(ctx, req)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
-}
-
-// nodeCheckFlow handles POST /api/v1/nodes/{id}/check/flow — 多步 HTTP 事务探测代理。
-func (a *API) nodeCheckFlow(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	var req FlowCheckRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
-	}
-	addr, err := a.nodeAddr(ctx, r.PathValue("id"))
-	if err != nil {
-		writeNodeErr(w, err)
-		return
-	}
-	res, err := a.orch.NodeClientByAddr(addr).CheckFlow(ctx, req)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
-}
-
-// nodeAddr 把 id（node ID 或 hostname）解析为 ready 节点的 worker 地址。
+// ResolveNodeAddr 把 id（node ID 或 hostname）解析为 ready 节点的 worker 地址。
 // 节点不存在/未 ready 返回 errNotFound；docker 失败返回原始错误。
-func (a *API) nodeAddr(ctx context.Context, id string) (string, error) {
-	nodes, err := a.orch.cli.ListNodes(ctx, nil)
+func (o *Orchestrator) ResolveNodeAddr(ctx context.Context, id string) (string, error) {
+	nodes, err := o.cli.ListNodes(ctx, nil)
 	if err != nil {
 		return "", err
 	}
@@ -175,13 +96,10 @@ func (a *API) nodeAddr(ctx context.Context, id string) (string, error) {
 	return "", errNotFound("node", id)
 }
 
-// writeNodeErr 按 nodeAddr 的错误类型写响应：not found → 404，其余 → 502。
-func writeNodeErr(w http.ResponseWriter, err error) {
-	if _, nf := err.(simpleErr); nf {
-		writeErr(w, http.StatusNotFound, err)
-		return
-	}
-	writeErr(w, http.StatusBadGateway, err)
+// NodeNotFound reports whether err is a node-not-found error from ResolveNodeAddr.
+func NodeNotFound(err error) bool {
+	_, ok := err.(simpleErr)
+	return ok
 }
 
 // localNodeAggregate reads this daemon's running swarm-service containers and
@@ -278,3 +196,12 @@ func cpuDeltaPercent(prev, cur docker.Stats) float64 {
 func round2(f float64) float64 {
 	return float64(int64(f*100+0.5)) / 100
 }
+
+// simpleErr is a lightweight sentinel error used by ResolveNodeAddr for
+// not-found cases (NodeNotFound distinguishes them from docker failures).
+type simpleErr struct{ msg string }
+
+func (e simpleErr) Error() string { return e.msg }
+
+// errNotFound builds a not-found sentinel (what + id).
+func errNotFound(what, id string) error { return simpleErr{what + " " + id + " not found"} }

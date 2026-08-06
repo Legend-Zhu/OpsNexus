@@ -30,8 +30,11 @@ const (
 type Config struct {
 	Worker        WorkerConfig  `yaml:"worker" json:"worker"`
 	CommandPolicy CommandPolicy `yaml:"commandPolicy" json:"commandPolicy"`
-	Webhooks      []string      `yaml:"webhooks" json:"webhooks,omitempty"`
-	Auth          AuthConfig    `yaml:"auth" json:"auth"`
+	// Webhooks is DEPRECATED. Monitoring events are now streamed to the server
+	// over the gRPC SubscribeEvents bidirectional stream. The field is kept for
+	// backward compatibility with old config files and is ignored.
+	Webhooks []string `yaml:"webhooks" json:"webhooks,omitempty"`
+	Auth     AuthConfig `yaml:"auth" json:"auth"`
 }
 
 // AuthConfig controls access to the HTTP API and MCP endpoint.
@@ -45,8 +48,16 @@ type AuthConfig struct {
 // WorkerConfig identifies this instance's role and connectivity.
 type WorkerConfig struct {
 	Role string `yaml:"role" json:"role"` // auto | manager | node
-	// Listen is the HTTP listen address of the local node API.
+	// Listen is the HTTP listen address of the local node API (and, on
+	// managers, the /mcp + /healthz endpoints). Default :8080.
 	Listen string `yaml:"listen" json:"listen"` // default :8080
+	// GrpcListen is the gRPC listen address for the management API
+	// (server↔worker), manager-role only. Default :9080. Overridable by the
+	// -grpc-addr flag.
+	GrpcListen string `yaml:"grpcListen" json:"grpcListen,omitempty"`
+	// DataDir is the directory for persistent state (event/audit SQLite
+	// queues). Default /var/lib/opsguard. Overridable by the -data-dir flag.
+	DataDir string `yaml:"dataDir" json:"dataDir,omitempty"`
 	// ManagerURL is the manager-role worker base URL; node-role workers use it
 	// to know where to report/proxy. Optional in v1 (manager pulls node data).
 	ManagerURL string `yaml:"managerURL" json:"managerURL,omitempty"`
