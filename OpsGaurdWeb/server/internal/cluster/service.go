@@ -202,7 +202,25 @@ func (e ErrProjectNotFound) Error() string { return fmt.Sprintf("project %q not 
 
 // ListProjects 列出全部项目，附成员集群数（不探测集群状态）。
 func (s *Service) ListProjects() ([]*store.Project, error) {
-	return s.store.ListProjects()
+	projects, err := s.store.ListProjects()
+	if err != nil {
+		return nil, err
+	}
+	// 统计每个项目的成员集群数。
+	clusters, err := s.store.ListClusters()
+	if err != nil {
+		return projects, nil // 统计失败不阻断列表
+	}
+	counts := map[string]int{}
+	for _, c := range clusters {
+		if c.ProjectID != "" {
+			counts[c.ProjectID]++
+		}
+	}
+	for _, p := range projects {
+		p.ClusterCount = counts[p.ID]
+	}
+	return projects, nil
 }
 
 // GetProject 按 ID 读取项目。

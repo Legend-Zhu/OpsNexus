@@ -18,6 +18,9 @@ type Project struct {
 	Name      string    `json:"name"`
 	Desc      string    `json:"desc,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	// ClusterCount 是归属此项目的集群数（运行时由 cluster.Service 统计填充，
+	// 不持久化）。
+	ClusterCount int `json:"cluster_count,omitempty"`
 }
 
 // projectKey 返回项目 key。
