@@ -28,6 +28,7 @@ import type {
   RegistryInfo,
   RegistryRepo,
   SSOStatus,
+  Secret,
   User,
   Workload,
   WorkloadDetail,
@@ -173,6 +174,13 @@ export const settingsApi = {
   // 巡检报告投递（系统设置 → 巡检报告）
   patrolReport: () => get<PatrolReportSetting>('/v1/settings/patrol-report'),
   updatePatrolReport: (body: PatrolReportSetting) => put<PatrolReportSetting>('/v1/settings/patrol-report', body),
+}
+
+// ---- 密钥（巡检 flow 拨测账号；列表不返回值） ----
+export const secretApi = {
+  list: () => get<{ items: Secret[] }>('/v1/secrets'),
+  save: (name: string, value: string) => put<{ name: string }>(`/v1/secrets/${name}`, { value }),
+  remove: (name: string) => del<{ deleted: string }>(`/v1/secrets/${name}`),
 }
 
 // ---- 内嵌镜像仓库 + 页面传包构建 ----

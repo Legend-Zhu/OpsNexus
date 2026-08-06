@@ -303,6 +303,23 @@ func (s *Service) Investigations(alertID string, limit int) ([]*store.Investigat
 	return s.store.ListInvestigations(alertID, limit)
 }
 
+// --- 密钥（巡检 flow 拨测账号等；列表绝不返回值） ---
+
+// SaveSecret 写入（新增或覆盖）密钥。
+func (s *Service) SaveSecret(name, value string) error {
+	return s.store.PutSecret(&store.Secret{Name: name, Value: value})
+}
+
+// Secrets 列出密钥名（不含值）。
+func (s *Service) Secrets() ([]*store.Secret, error) {
+	return s.store.ListSecrets()
+}
+
+// DeleteSecret 删除密钥。
+func (s *Service) DeleteSecret(name string) error {
+	return s.store.DeleteSecret(name)
+}
+
 // MCPEndpoint 返回集群的 MCP 端点与 token（P4 按需连接 Worker /mcp）。
 func (s *Service) MCPEndpoint(name string) (url, token string, err error) {
 	c, err := s.store.GetCluster(name)

@@ -202,6 +202,45 @@ type HTTPCheckResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// FlowStep 多步 HTTP 事务探测的一个步骤。
+type FlowStep struct {
+	Name         string            `json:"name"`
+	URL          string            `json:"url"`
+	Method       string            `json:"method,omitempty"`
+	Headers      map[string]string `json:"headers,omitempty"`
+	Body         string            `json:"body,omitempty"`
+	ExpectStatus []int             `json:"expectStatus,omitempty"`
+	ExpectBody   string            `json:"expectBody,omitempty"`
+	Extract      map[string]string `json:"extract,omitempty"` // var -> "$.json.path" 或 "re:正则"
+}
+
+// FlowCheckRequest 对应 Worker POST /api/v1/nodes/{id}/check/flow 的请求体。
+type FlowCheckRequest struct {
+	Steps   []FlowStep        `json:"steps"`
+	Vars    map[string]string `json:"vars,omitempty"`
+	Timeout string            `json:"timeout,omitempty"`
+}
+
+// FlowStepResult 单步结果（提取值不回显，只有变量名）。
+type FlowStepResult struct {
+	Name      string   `json:"name"`
+	OK        bool     `json:"ok"`
+	Status    int      `json:"status"`
+	LatencyMS int64    `json:"latencyMs"`
+	Extracted []string `json:"extracted,omitempty"`
+	Error     string   `json:"error,omitempty"`
+}
+
+// FlowCheckResult 多步事务探测结果。
+type FlowCheckResult struct {
+	Node       string           `json:"node"`
+	OK         bool             `json:"ok"`
+	Steps      []FlowStepResult `json:"steps"`
+	FailedStep string           `json:"failedStep,omitempty"`
+	LatencyMS  int64            `json:"latencyMs"`
+	Error      string           `json:"error,omitempty"`
+}
+
 // --- 方法 ---
 
 // Ping 探测 Worker 存活（GET /healthz）。
@@ -266,6 +305,17 @@ func (c *Client) CheckHTTP(ctx context.Context, nodeID string, req HTTPCheckRequ
 		return out, err
 	}
 	err = c.do(ctx, http.MethodPost, "/api/v1/nodes/"+nodeID+"/check/http", nil, body, &out)
+	return out, err
+}
+
+// CheckFlow 从指定节点发起多步 HTTP 事务探测（POST /api/v1/nodes/{id}/check/flow）。
+func (c *Client) CheckFlow(ctx context.Context, nodeID string, req FlowCheckRequest) (FlowCheckResult, error) {
+	var out FlowCheckResult
+	body, err := json.Marshal(req)
+	if err != nil {
+		return out, err
+	}
+	err = c.do(ctx, http.MethodPost, "/api/v1/nodes/"+nodeID+"/check/flow", nil, body, &out)
 	return out, err
 }
 

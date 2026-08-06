@@ -105,6 +105,11 @@
       <el-tab-pane label="巡检报告" name="patrol-report">
         <PatrolReport />
       </el-tab-pane>
+
+      <!-- 密钥（巡检 flow 拨测账号等 ${secret:} 引用） -->
+      <el-tab-pane label="密钥" name="secrets">
+        <Secrets />
+      </el-tab-pane>
     </el-tabs>
 
     <!-- 规则对话框 -->
@@ -172,6 +177,7 @@ import type { AlertRule, ClusterSummary, SSOStatus, User } from '@/types'
 import AINexusGateway from './AINexusGateway.vue'
 import ModelConfig from './ModelConfig.vue'
 import PatrolReport from './PatrolReport.vue'
+import Secrets from './Secrets.vue'
 
 const tab = ref('rules')
 const rules = ref<AlertRule[]>([])

@@ -128,6 +128,11 @@ func New(h *api.Handlers) *gin.Engine {
 		v1.GET("/settings/patrol-report", h.GetPatrolReportSetting)
 		v1.PUT("/settings/patrol-report", h.PutPatrolReportSetting)
 
+		// 密钥（巡检 flow 拨测账号；列表不返回值）
+		v1.GET("/secrets", h.ListSecrets)
+		v1.PUT("/secrets/:name", h.PutSecret)
+		v1.DELETE("/secrets/:name", h.DeleteSecret)
+
 		// 内嵌镜像仓库（管理 API：构建提交/轮询、镜像列表、删除 tag）
 		registry := v1.Group("/registry")
 		{

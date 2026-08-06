@@ -197,6 +197,14 @@ export interface PatrolReportSetting {
   channel_ids: string[]
 }
 
+/** 密钥（巡检 flow 拨测账号等；列表不返回 value） */
+export interface Secret {
+  name: string
+  value?: string // 仅写入时提交，读取/列表不返回
+  created_at: string
+  updated_at: string
+}
+
 /** 镜像仓库服务信息 */
 export interface RegistryInfo {
   enabled: boolean

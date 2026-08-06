@@ -114,6 +114,31 @@ func mockWorker(t *testing.T) *httptest.Server {
 			"node": r.PathValue("id"), "total": len(procs), "processes": procs,
 		})
 	})
+	// flow mock:校验 secret 替换后的密码确实到达;n2 卡在 login 步
+	mux.HandleFunc("POST /api/v1/nodes/{id}/check/flow", func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		vars, _ := req["vars"].(map[string]any)
+		out := map[string]any{"node": r.PathValue("id"), "latencyMs": 3}
+		switch {
+		case r.PathValue("id") != "n1":
+			out["ok"] = false
+			out["failedStep"] = "login"
+			out["steps"] = []map[string]any{{"name": "login", "ok": false, "error": "status 401 not 2xx"}}
+		case vars["pass"] != "s3cret-from-store":
+			// secret 未被替换/替换错 → 视为探测失败
+			out["ok"] = false
+			out["failedStep"] = "login"
+			out["steps"] = []map[string]any{{"name": "login", "ok": false, "error": "bad credentials"}}
+		default:
+			out["ok"] = true
+			out["steps"] = []map[string]any{
+				{"name": "login", "ok": true, "status": 200, "extracted": []string{"token"}},
+				{"name": "verify", "ok": true, "status": 200},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts
@@ -398,6 +423,72 @@ checks:
 		if _, ok := m["content"]; ok {
 			t.Fatal("run3 (all ok) should not deliver report in anomaly mode")
 		}
+	}
+}
+
+// TestFlowCheckWithSecret flow 检查:多步事务 + ${secret:} 引用替换(mock 校验
+// 替换后的密码确实到达 Worker);n1 通过,n2 卡 login 步产出异常。
+func TestFlowCheckWithSecret(t *testing.T) {
+	svc, _ := newTestPatrol(t)
+	if err := svc.st.PutSecret(&store.Secret{Name: "patrol-login", Value: "s3cret-from-store"}); err != nil {
+		t.Fatalf("put secret: %v", err)
+	}
+
+	p, err := svc.Create("flow-check", "", "0 2 * * *", `
+name: flow-check
+checks:
+  - type: flow
+    cluster: dev
+    name: 登录可用性
+    vars:
+      user: monitor-bot
+      pass: "${secret:patrol-login}"
+    steps:
+      - name: login
+        method: POST
+        url: http://10.0.0.1/api/login
+        body: '{"username":"{{user}}","password":"{{pass}}"}'
+        extract: { token: "$.data.token" }
+      - name: verify
+        url: http://10.0.0.1/api/me
+        headers: { Authorization: "Bearer {{token}}" }
+`, true)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	run, err := svc.Run(context.Background(), p.ID)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// n2 失败一条,消息含失败步骤;n1 通过(secret 已正确替换并到达)
+	if len(run.Anomalies) != 1 {
+		t.Fatalf("anomalies=%+v, want 1", run.Anomalies)
+	}
+	a := run.Anomalies[0]
+	if a.OK || !contains(a.Message, "h2") || !contains(a.Message, "login") {
+		t.Fatalf("unexpected anomaly: %+v", a)
+	}
+	if a.Node != "h2" {
+		t.Fatalf("anomaly.Node=%q", a.Node)
+	}
+
+	// secret 不存在 → 检查失败并明确提示
+	p2, _ := svc.Create("flow-bad-secret", "", "0 2 * * *", `
+name: x
+checks:
+  - type: flow
+    cluster: dev
+    name: t
+    vars: { pass: "${secret:no-such}" }
+    steps:
+      - { name: s1, url: "http://x/" }
+`, true)
+	run2, err := svc.Run(context.Background(), p2.ID)
+	if err != nil {
+		t.Fatalf("run2: %v", err)
+	}
+	if run2.Anomalies[0].OK || !contains(run2.Anomalies[0].Message, "no-such") {
+		t.Fatalf("missing secret should fail clearly: %+v", run2.Anomalies[0])
 	}
 }
 

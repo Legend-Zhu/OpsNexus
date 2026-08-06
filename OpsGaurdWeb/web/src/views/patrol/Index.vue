@@ -84,6 +84,13 @@ checks:
   - type: process       # 宿主机进程（filter 匹配名称/命令行，少于 min_count=1 即异常）
     cluster: dev
     filter: java
+  - type: flow          # 多步 HTTP 事务（如 登录→验证会话；extract 提取变量供后续 {{var}} 引用）
+    cluster: dev
+    name: 登录可用性
+    vars: { user: bot, pass: '${secret:patrol-login}' }   # 密钥在 系统设置→密钥 维护
+    steps:
+      - { name: login, method: POST, url: 'http://10.0.0.11/api/login', body: '{&quot;username&quot;:&quot;{{user}}&quot;,&quot;password&quot;:&quot;{{pass}}&quot;}', extract: { token: '$.data.token' } }
+      - { name: verify, url: 'http://10.0.0.11/api/me', headers: { Authorization: 'Bearer {{token}}' } }
 # report.model 由上方「报告模型」下拉自动写入（也可手写覆盖）" />
           <div class="yaml-actions">
             <el-button link type="primary" size="small" :icon="Download" @click="downloadTemplate">下载完整模板</el-button>
@@ -223,6 +230,25 @@ checks:
     # node: node1
     filter: java                 # 名称/命令行子串（大小写不敏感）
     min_count: 1                 # 每节点最少匹配数，少于即异常（默认 1）
+
+  - type: flow                   # 多步 HTTP 事务（端口通但业务不可用的探测，如登录链路）
+    cluster: dev
+    name: 登录可用性              # 事务名（告警标识）
+    vars:                        # 初始变量；\${secret:名称} 引用 系统设置→密钥 的值（不落明文）
+      user: monitor-bot
+      pass: "\${secret:patrol-login}"
+    steps:                       # 有序执行，失败即终止并定位步骤
+      - name: login
+        method: POST
+        url: http://10.0.0.11:8080/api/login
+        body: '{"username":"{{user}}","password":"{{pass}}"}'   # {{var}} 引用变量
+        expect_status: [200]     # 可选，空 = 任意 2xx
+        extract:                 # 从响应提取变量供后续步骤；$.json.path 或 re:正则
+          token: "$.data.token"
+      - name: verify
+        url: http://10.0.0.11:8080/api/me
+        headers: { Authorization: "Bearer {{token}}" }
+        expect_body: '"enabled":true'   # 可选，body 正则
 
 report:
   # model: qwen-plus           # 报告模型；不填用「AI 排查网关」默认模型

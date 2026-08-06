@@ -7,6 +7,7 @@ package patrol
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -33,7 +34,7 @@ type Flow struct {
 
 // Check 单个检查项。
 type Check struct {
-	Type    string `yaml:"type"` // resource | health | port | http | process
+	Type    string `yaml:"type"` // resource | health | port | http | process | flow
 	Cluster string `yaml:"cluster"`
 	Service string `yaml:"service"` // resource/health 必填
 	// resource 阈值
@@ -41,7 +42,7 @@ type Check struct {
 	MemThreshold float64 `yaml:"mem_threshold,omitempty"`
 	// health 期望副本（0=全部）
 	MinReplicas int `yaml:"min_replicas,omitempty"`
-	// port/http/process 目标节点（node ID/hostname，空 = 全部 ready 节点）
+	// port/http/process/flow 目标节点（node ID/hostname，空 = 全部 ready 节点）
 	Node string `yaml:"node,omitempty"`
 	// port 检查（宿主机中间件端口，如 MySQL 3306）
 	Host string `yaml:"host,omitempty"` // 目标主机/IP（探宿主机服务用节点 IP，勿用 127.0.0.1）
@@ -54,8 +55,24 @@ type Check struct {
 	// process 检查（宿主机进程发现，如 java / redis-server）
 	Filter   string `yaml:"filter,omitempty"`    // 名称/cmdline 子串（大小写不敏感）
 	MinCount int    `yaml:"min_count,omitempty"` // 每节点最少匹配数（默认 1，少于即异常）
-	// port/http 探测超时（如 3s，默认 3s）
+	// port/http/flow 探测超时（如 3s，默认 3s）
 	Timeout string `yaml:"timeout,omitempty"`
+	// flow 检查（多步 HTTP 事务，如 登录→验证会话）
+	Name  string            `yaml:"name,omitempty"`  // 事务名（告警标识用）
+	Vars  map[string]string `yaml:"vars,omitempty"`  // 初始变量；值支持 ${secret:name} 引用管理端密钥
+	Steps []FlowStepDef     `yaml:"steps,omitempty"` // 有序步骤，失败即终止
+}
+
+// FlowStepDef 多步事务探测的一个步骤（YAML 定义）。
+type FlowStepDef struct {
+	Name         string            `yaml:"name"`
+	URL          string            `yaml:"url"`                     // 可引用 {{var}}
+	Method       string            `yaml:"method,omitempty"`        // 默认 GET
+	Headers      map[string]string `yaml:"headers,omitempty"`       // 值可引用 {{var}}
+	Body         string            `yaml:"body,omitempty"`          // 可引用 {{var}}
+	ExpectStatus []int             `yaml:"expect_status,omitempty"` // 空 = 任意 2xx
+	ExpectBody   string            `yaml:"expect_body,omitempty"`   // body 正则
+	Extract      map[string]string `yaml:"extract,omitempty"`       // var -> "$.json.path" 或 "re:正则"
 }
 
 // ErrInvalidFlow 流程定义校验失败。
@@ -101,8 +118,20 @@ func ParseFlow(yamlText string) (*Flow, error) {
 			if c.Filter == "" {
 				return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d]: process check requires filter", i)}
 			}
+		case "flow":
+			if c.Name == "" {
+				return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d]: flow check requires name", i)}
+			}
+			if len(c.Steps) == 0 {
+				return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d]: flow check requires steps", i)}
+			}
+			for j, st := range c.Steps {
+				if st.Name == "" || st.URL == "" {
+					return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d].steps[%d]: name 和 url 必填", i, j)}
+				}
+			}
 		default:
-			return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d].type must be resource|health|port|http|process, got %q", i, c.Type)}
+			return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d].type must be resource|health|port|http|process|flow, got %q", i, c.Type)}
 		}
 		if c.Cluster == "" {
 			return nil, ErrInvalidFlow{fmt.Sprintf("checks[%d].cluster is required", i)}
@@ -382,6 +411,8 @@ func (s *Service) runCheck(ctx context.Context, c Check) []store.Anomaly {
 		return s.checkHTTP(ctx, cli, c)
 	case "process":
 		return s.checkProcess(ctx, cli, c)
+	case "flow":
+		return s.checkFlow(ctx, cli, c)
 	default:
 		base.OK = false
 		base.Message = "未知检查类型 " + c.Type
@@ -560,6 +591,80 @@ func (s *Service) checkProcess(ctx context.Context, cli *workerproxy.Client, c C
 	base.OK = true
 	base.Message = fmt.Sprintf("%d 个节点均存在匹配 %q 的进程（≥%d 个）", len(targets), c.Filter, minCount)
 	return []store.Anomaly{base}
+}
+
+// checkFlow 多步 HTTP 事务探测（典型：登录拿 token → 带 token 验证业务接口）。
+// vars 中的 ${secret:name} 在执行时替换为管理端密钥值（凭据不落 YAML）。
+func (s *Service) checkFlow(ctx context.Context, cli *workerproxy.Client, c Check) []store.Anomaly {
+	base := store.Anomaly{Check: "flow/" + c.Name, Cluster: c.Cluster}
+	vars, err := s.resolveSecretVars(c.Vars)
+	if err != nil {
+		base.Message = "解析密钥引用失败: " + err.Error()
+		return []store.Anomaly{base}
+	}
+	targets, err := patrolTargetNodes(ctx, cli, c.Node)
+	if err != nil {
+		base.Message = err.Error()
+		return []store.Anomaly{base}
+	}
+	steps := make([]workerproxy.FlowStep, 0, len(c.Steps))
+	for _, sd := range c.Steps {
+		steps = append(steps, workerproxy.FlowStep{
+			Name: sd.Name, URL: sd.URL, Method: sd.Method, Headers: sd.Headers,
+			Body: sd.Body, ExpectStatus: sd.ExpectStatus, ExpectBody: sd.ExpectBody, Extract: sd.Extract,
+		})
+	}
+	req := workerproxy.FlowCheckRequest{Steps: steps, Vars: vars, Timeout: c.Timeout}
+	var fails []store.Anomaly
+	for _, n := range targets {
+		res, err := cli.CheckFlow(ctx, n.ID, req)
+		if err != nil {
+			res.Error = err.Error()
+		}
+		if !res.OK {
+			a := base
+			a.Node = n.Hostname
+			detail := res.Error
+			for _, sr := range res.Steps {
+				if !sr.OK {
+					detail = fmt.Sprintf("步骤 %q 失败: %s", sr.Name, sr.Error)
+					break
+				}
+			}
+			a.Message = fmt.Sprintf("节点 %s 事务探测「%s」失败: %s", n.Hostname, c.Name, detail)
+			a.Data = fmt.Sprintf("node=%s failed_step=%s", n.ID, res.FailedStep)
+			fails = append(fails, a)
+		}
+	}
+	if len(fails) > 0 {
+		return fails
+	}
+	base.OK = true
+	base.Message = fmt.Sprintf("%d 个节点事务探测「%s」均通过", len(targets), c.Name)
+	return []store.Anomaly{base}
+}
+
+// secretRefRe 匹配 ${secret:name} 密钥引用。
+var secretRefRe = regexp.MustCompile(`\$\{secret:([a-zA-Z0-9_.-]+)\}`)
+
+// resolveSecretVars 把 vars 里的 ${secret:name} 替换为密钥值；引用不存在 → 报错
+// （宁可探测失败，也不带空凭据发起请求）。
+func (s *Service) resolveSecretVars(vars map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(vars))
+	for k, v := range vars {
+		for _, m := range secretRefRe.FindAllStringSubmatch(v, -1) {
+			sec, err := s.st.GetSecret(m[1])
+			if err != nil {
+				return nil, err
+			}
+			if sec == nil {
+				return nil, fmt.Errorf("secret %q 不存在（系统设置 → 密钥 维护）", m[1])
+			}
+			v = strings.ReplaceAll(v, m[0], sec.Value)
+		}
+		out[k] = v
+	}
+	return out, nil
 }
 
 // patrolTargetNodes 解析检查目标节点：node 空 = 全部 ready 节点，否则按 ID/hostname 匹配单个。

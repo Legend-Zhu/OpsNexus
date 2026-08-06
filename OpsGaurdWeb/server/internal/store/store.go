@@ -31,6 +31,7 @@ const (
 	BucketSeq           = "seq"
 	BucketSettings      = "settings"      // 全局设置（如巡检报告投递策略）
 	BucketInvestigation = "investigation" // 排查会话落库（对话式 troubleshoot）
+	BucketSecret        = "secret"        // 密钥引用（巡检 flow 拨测账号等）
 )
 
 // schemaVersion 当前数据版本；每次不兼容变更 +1 并追加 migrate 函数。
