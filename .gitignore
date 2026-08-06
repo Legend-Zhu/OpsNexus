@@ -19,5 +19,10 @@ config.local.yaml
 OpsGaurdWeb/server/configs/config.local.yaml
 OpsGaurdWeb/server/data/
 
+# 离线部署的二进制制品（docker/image tar 包）——不进 git，走 release 附件分发
+deploy/offline/bundle/
+*.tar
+*.tgz
+
 # ZCode 会话计划（本地工具产物）
 .zcode/

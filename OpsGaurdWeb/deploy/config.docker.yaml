@@ -1,0 +1,56 @@
+# OpsGaurdWeb 管理端生产配置（离线单机部署，10.60.189.6）
+# 页面/API 监听 8080；Worker 在同机 8090，避免端口冲突。
+
+server:
+  addr: ":8080"
+  api_key: ""                # 网关鉴权 key，空则不启用
+  ingest_token: ""           # Worker webhook 推送校验 token（内网暂空）
+
+# 认证：已启用本地账号登录（admin / opsguard-admin，首登后请立即修改）
+auth:
+  token_secret: "d46ab1ef0b62f3f33577b67c641da4f4af1a117d11201516"
+  token_ttl: "24h"
+
+# 持久化：LevelDB 数据目录（容器内 /app/data，挂载宿主 /opt/opsguard/server/data）
+store:
+  path: "./data"
+
+# 内嵌镜像仓库（OCI /v2）+ 页面传包构建（docker CLI 走挂载的宿主 docker.sock）
+registry:
+  enabled: true
+  hostname: "10.60.189.6"    # 单节点直接用管理机 IP；宿主 daemon.json 已配 insecure-registries
+  storage: ""                # 默认 <store.path>/registry（随数据卷持久化）
+  retention_per_repo: 10
+  max_upload_mb: 500
+  # users:                   # /v2 basic auth（内网暂空；开外网访问前务必配置）
+  #   ops: "{PLAIN}change-me"
+
+# AiNexus 异常排查网关：先在「系统设置 → AI 排查网关」页面配模型 API key 后启用
+ainexus:
+  enabled: false
+  providers:
+    - name: "deepseek"
+      type: "openai_compatible"
+      base_url: "https://api.deepseek.com/v1"
+      api_key: ""
+      models:
+        - { name: "deepseek-chat", display_name: "DeepSeek Chat" }
+        - { name: "deepseek-reasoner", display_name: "DeepSeek Reasoner" }
+  tools:
+    command:
+      enabled: false
+      allowed_commands: []
+      timeout: 30s
+      work_dir: "/tmp"
+    http_request:
+      enabled: true
+      timeout: 15s
+    file_read:
+      enabled: true
+      max_size: 1048576
+  agent:
+    max_tool_rounds: 200
+    parallel_tool_calls: true
+    max_context_tokens: 800000
+    keep_tool_rounds: 5
+  mcp_servers: []

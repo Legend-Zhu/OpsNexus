@@ -1,0 +1,6 @@
+# 构建上下文忽略项（OpsGaurdWeb/）
+server/data
+web/node_modules
+web/dist/*.map
+Prototype
+**/.idea
