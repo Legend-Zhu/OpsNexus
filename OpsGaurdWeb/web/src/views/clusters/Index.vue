@@ -32,9 +32,10 @@
       <el-table-column label="最近探测" width="170">
         <template #default="{ row }">{{ formatTime(row.last_seen) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="120" fixed="right">
+      <el-table-column label="操作" width="160" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="$router.push(`/clusters/${row.name}`)">详情</el-button>
+          <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button link type="danger" :disabled="row.status !== 'offline'" @click="removeCluster(row)">
             移除
           </el-button>
@@ -42,11 +43,11 @@
       </el-table-column>
     </el-table>
 
-    <!-- 接入对话框 -->
-    <el-dialog v-model="dialogVisible" title="接入集群" width="540px">
+    <!-- 接入/编辑对话框 -->
+    <el-dialog v-model="dialogVisible" :title="editing ? '编辑集群' : '接入集群'" width="540px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-form-item label="集群名称" prop="name">
-          <el-input v-model="form.name" placeholder="如 dev-cluster" />
+          <el-input v-model="form.name" placeholder="如 dev-cluster" :disabled="editing" />
         </el-form-item>
         <el-form-item label="所属项目">
           <el-select v-model="form.project_id" clearable placeholder="可选" style="width: 100%">
@@ -54,8 +55,8 @@
           </el-select>
         </el-form-item>
         <el-form-item label="Manager 地址" prop="worker_url">
-          <el-input v-model="form.worker_url" placeholder="请输入管理节点地址，如 http://&lt;管理节点IP&gt;:8080" />
-          <div class="form-tip">仅填 swarm 管理节点（manager）的 Worker 地址，节点地址无需填写；MCP 端点自动取 {地址}/mcp</div>
+          <el-input v-model="form.worker_url" placeholder="http://&lt;管理节点IP&gt;:9080" />
+          <div class="form-tip">Worker 的 gRPC 管理端口（默认 9080）；MCP 端点自动取 HTTP 端口 /mcp</div>
         </el-form-item>
         <el-form-item label="Token">
           <el-input v-model="form.token" type="password" show-password placeholder="Worker Bearer token（可选）" />
@@ -66,7 +67,7 @@
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="adding" @click="addCluster">接入</el-button>
+        <el-button type="primary" :loading="adding" @click="submitCluster">{{ editing ? '保存' : '接入' }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -85,6 +86,7 @@ const clusters = ref<ClusterSummary[]>([])
 const projects = ref<Project[]>([])
 
 const dialogVisible = ref(false)
+const editing = ref(false)
 const formRef = ref<FormInstance>()
 const form = reactive<AddClusterPayload>({ name: '', project_id: '', worker_url: '', token: '', desc: '' })
 
@@ -127,15 +129,34 @@ async function fetchProjects() {
 }
 
 function openDialog() {
+  editing.value = false
+  Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '' })
   dialogVisible.value = true
 }
 
-async function addCluster() {
+function openEdit(row: ClusterSummary) {
+  editing.value = true
+  Object.assign(form, {
+    name: row.name,
+    project_id: row.project_id ?? '',
+    worker_url: row.worker_url,
+    token: '',
+    desc: row.desc ?? '',
+  })
+  dialogVisible.value = true
+}
+
+async function submitCluster() {
   await formRef.value?.validate()
   adding.value = true
   try {
-    await clusterApi.add(form)
-    ElMessage.success('集群接入成功')
+    if (editing.value) {
+      await clusterApi.update(form.name, form)
+      ElMessage.success('集群已更新')
+    } else {
+      await clusterApi.add(form)
+      ElMessage.success('集群接入成功')
+    }
     dialogVisible.value = false
     Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '' })
     await fetchClusters()

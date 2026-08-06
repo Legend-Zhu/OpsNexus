@@ -96,6 +96,38 @@ func (h *Handlers) AddCluster(c *gin.Context) {
 	ok(c, http.StatusCreated, item.Public())
 }
 
+// UpdateCluster godoc: PUT /api/v1/clusters/:name
+// 编辑集群（端点/token/描述/项目），不做重探测。
+func (h *Handlers) UpdateCluster(c *gin.Context) {
+	if h.clusters == nil {
+		fail(c, http.StatusServiceUnavailable, "cluster service not initialized")
+		return
+	}
+	var req addClusterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
+		return
+	}
+	item, err := h.clusters.Update(c.Request.Context(), &store.Cluster{
+		Name:      c.Param("name"),
+		ProjectID: req.ProjectID,
+		WorkerURL: req.WorkerURL,
+		MCPURL:    req.MCPURL,
+		Token:     req.Token,
+		Desc:      req.Desc,
+	})
+	if err != nil {
+		var nf cluster.ErrNotFound
+		if errors.As(err, &nf) {
+			fail(c, http.StatusNotFound, nf.Error())
+			return
+		}
+		fail(c, http.StatusBadRequest, "update cluster: "+err.Error())
+		return
+	}
+	ok(c, http.StatusOK, item.Public())
+}
+
 // RemoveCluster godoc: DELETE /api/v1/clusters/:name
 func (h *Handlers) RemoveCluster(c *gin.Context) {
 	if h.clusters == nil {

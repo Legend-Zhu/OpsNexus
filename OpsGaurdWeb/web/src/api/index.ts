@@ -49,6 +49,7 @@ export const clusterApi = {
   list: () => get<{ items: ClusterSummary[] }>('/v1/clusters'),
   get: (name: string) => get<Cluster>(`/v1/clusters/${name}`),
   add: (body: AddClusterPayload) => post<Cluster>('/v1/clusters', body),
+  update: (name: string, body: AddClusterPayload) => put<Cluster>(`/v1/clusters/${name}`, body),
   remove: (name: string) => del<{ removed: string }>(`/v1/clusters/${name}`),
 }
 

@@ -84,6 +84,7 @@ func New(h *api.Handlers) *gin.Engine {
 			clusters.GET("", h.ListClusters)
 			clusters.POST("", h.AddCluster)
 			clusters.GET("/:name", h.GetCluster)
+			clusters.PUT("/:name", h.UpdateCluster)
 			clusters.DELETE("/:name", h.RemoveCluster)
 		}
 

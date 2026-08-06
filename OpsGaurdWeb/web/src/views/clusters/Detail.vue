@@ -163,34 +163,43 @@
         </el-table>
       </el-tab-pane>
 
-      <!-- 监控：节点容器资源 -->
+      <!-- 监控：集群全节点资源 -->
       <el-tab-pane label="监控" name="monitor">
-        <div v-loading="mLoading">
-          <h4 class="og-dim">节点 {{ stats?.node ?? '—' }} · 运行容器</h4>
-          <el-table :data="stats?.containers ?? []" empty-text="该节点无运行容器">
-            <el-table-column label="容器 ID" prop="containerId" min-width="150" show-overflow-tooltip class-name="mono" />
-            <el-table-column label="服务" prop="service" min-width="120">
-              <template #default="{ row }">{{ row.service || '—' }}</template>
-            </el-table-column>
-            <el-table-column label="CPU %" width="130">
-              <template #default="{ row }">
-                <el-progress :percentage="Math.min(100, row.cpuPercent)" :stroke-width="8" />
-              </template>
-            </el-table-column>
-            <el-table-column label="内存 %" width="130">
-              <template #default="{ row }">
-                <el-progress
-                  :percentage="Math.min(100, row.memPercent)"
-                  :stroke-width="8"
-                  :status="row.memPercent > 85 ? 'exception' : undefined"
-                />
-              </template>
-            </el-table-column>
-            <el-table-column label="内存使用" width="140">
-              <template #default="{ row }">{{ fmtBytes(row.memUsageBytes) }} / {{ fmtBytes(row.memLimitBytes) }}</template>
-            </el-table-column>
-          </el-table>
+        <div class="tab-toolbar">
+          <el-button size="small" :icon="Refresh" @click="loadNodes">刷新</el-button>
         </div>
+        <el-table :data="nodes" v-loading="nodesLoading" size="small" empty-text="暂无节点数据">
+          <el-table-column label="节点" prop="hostname" min-width="140" />
+          <el-table-column label="角色" prop="role" width="90">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.role === 'manager' ? 'warning' : 'info'">{{ row.role }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="80">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.reachable ? 'success' : 'danger'">{{ row.reachable ? '可达' : '离线' }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="CPU 核心" prop="cpuCores" width="90" />
+          <el-table-column label="CPU 占用" width="130">
+            <template #default="{ row }">
+              <el-progress :percentage="Math.min(100, row.cpuPercent)" :stroke-width="8" />
+            </template>
+          </el-table-column>
+          <el-table-column label="内存占用" width="130">
+            <template #default="{ row }">
+              <el-progress
+                :percentage="Math.min(100, row.memPercent)"
+                :stroke-width="8"
+                :status="row.memPercent > 85 ? 'exception' : undefined"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="内存" width="120">
+            <template #default="{ row }">{{ fmtBytes(row.memBytes) }}</template>
+          </el-table-column>
+          <el-table-column label="容器数" prop="containerCount" width="80" />
+        </el-table>
       </el-tab-pane>
 
       <!-- 事件 -->
@@ -351,8 +360,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Back, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import { clusterApi, eventApi, monitorApi, nodeApi, workloadApi } from '@/api'
-import type { ClusterNode, ClusterSummary, EventItem, LogLine, NodeStats, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
+import { clusterApi, eventApi, nodeApi, workloadApi } from '@/api'
+import type { ClusterNode, ClusterSummary, EventItem, LogLine, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
 
 const route = useRoute()
 const clusterName = computed(() => route.params.name as string)
@@ -408,10 +417,6 @@ const procsLoading = ref(false)
 const wLoading = ref(false)
 const workloads = ref<Workload[]>([])
 const middlewares = computed(() => workloads.value.filter((w) => categoryOf(w) === 'middleware'))
-
-// 监控
-const mLoading = ref(false)
-const stats = ref<NodeStats | null>(null)
 
 // 事件
 const events = ref<EventItem[]>([])
@@ -535,18 +540,6 @@ async function loadWorkloads() {
     workloads.value = []
   } finally {
     wLoading.value = false
-  }
-}
-
-// ---- 监控 ----
-async function loadMetrics() {
-  mLoading.value = true
-  try {
-    stats.value = await monitorApi.metrics(clusterName.value)
-  } catch {
-    stats.value = null
-  } finally {
-    mLoading.value = false
   }
 }
 
@@ -727,7 +720,6 @@ function authHeaders(): Record<string, string> {
 watch(tab, (t) => {
   if (t === 'workloads' && !workloads.value.length) void loadWorkloads()
   if (t === 'middleware' && !workloads.value.length) void loadWorkloads()
-  if (t === 'monitor' && !stats.value) void loadMetrics()
   if (t === 'events' && !events.value.length) void loadEvents()
 })
 
