@@ -310,20 +310,20 @@ monitoring:
         </el-descriptions>
 
         <h4>任务</h4>
-        <el-table :data="detail.tasks" size="small">
-          <el-table-column prop="id" label="任务 ID" width="110" show-overflow-tooltip>
+        <el-table :data="activeTasks" size="small" style="width: 100%">
+          <el-table-column prop="id" label="任务 ID" min-width="110" show-overflow-tooltip>
             <template #default="{ row }"><span class="mono" :title="row.id">{{ shortId(row.id) }}</span></template>
           </el-table-column>
           <el-table-column prop="slot" label="Slot" width="60" />
-          <el-table-column prop="nodeId" label="节点" width="140" show-overflow-tooltip>
+          <el-table-column prop="nodeId" label="节点" min-width="140" show-overflow-tooltip>
             <template #default="{ row }">{{ nodeNameOf(row.nodeId) }}</template>
           </el-table-column>
           <el-table-column prop="state" label="状态" width="100">
             <template #default="{ row }">
-              <el-tag size="small" :type="row.state === 'running' ? 'success' : 'info'">{{ row.state }}</el-tag>
+              <el-tag size="small" :type="row.state === 'running' ? 'success' : row.state === 'failed' ? 'danger' : 'info'">{{ row.state }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="containerId" label="容器" width="120" show-overflow-tooltip>
+          <el-table-column prop="containerId" label="容器" min-width="120" show-overflow-tooltip>
             <template #default="{ row }"><span class="mono" :title="row.containerId">{{ shortId(row.containerId) }}</span></template>
           </el-table-column>
         </el-table>
@@ -361,7 +361,41 @@ const tab = ref('nodes')
 const loading = ref(false)
 const cluster = ref<ClusterSummary | null>(null)
 
-// 节点
+// ---- 本地缓存（按集群名，sessionStorage 会话级） ----
+// 先渲染缓存避免白屏，后台异步刷新并回写缓存。
+const CACHE_TTL = 10 * 1000 // 10s（短于 server 端 30s，避免前端显示过旧数据）
+
+interface CacheEntry<T> {
+  ts: number
+  data: T
+}
+
+function cacheKey(kind: string) {
+  return `opsguard:${kind}:${clusterName.value}`
+}
+
+function readCache<T>(kind: string): T | null {
+  try {
+    const raw = sessionStorage.getItem(cacheKey(kind))
+    if (!raw) return null
+    const entry: CacheEntry<T> = JSON.parse(raw)
+    if (Date.now() - entry.ts > CACHE_TTL) return null
+    return entry.data
+  } catch {
+    return null
+  }
+}
+
+function writeCache<T>(kind: string, data: T) {
+  try {
+    const entry: CacheEntry<T> = { ts: Date.now(), data }
+    sessionStorage.setItem(cacheKey(kind), JSON.stringify(entry))
+  } catch {
+    // 忽略存储失败（隐私模式等）
+  }
+}
+
+// ---- 节点 ----
 const nodesLoading = ref(false)
 const nodes = ref<ClusterNode[]>([])
 const nodeVisible = ref(false)
@@ -393,6 +427,13 @@ const scaling = ref(false)
 const detailVisible = ref(false)
 const detail = ref<WorkloadDetail | null>(null)
 const current = ref<Workload | null>(null)
+
+// 活跃任务：过滤 failed/shutdown 等历史任务，只保留当前在跑/待跑的。
+// Docker 服务每次重启/更新都会产生历史任务记录，全量展示会刷屏。
+const activeTasks = computed(() => {
+  const tasks = detail.value?.tasks ?? []
+  return tasks.filter((t) => t.state !== 'failed' && t.state !== 'shutdown' && t.state !== 'complete' && t.state !== 'orphaned')
+})
 
 const logLines = ref<LogLine[]>([])
 const logFollow = ref(false)
@@ -443,12 +484,17 @@ async function fetchCluster() {
 
 // ---- 节点 ----
 async function loadNodes() {
-  nodesLoading.value = true
+  // 先用缓存渲染（避免白屏），再异步刷新。
+  const cached = readCache<ClusterNode[]>('nodes')
+  if (cached) nodes.value = cached
+
+  nodesLoading.value = !cached // 有缓存时不显示 loading 遮罩
   try {
     const resp = await nodeApi.list(clusterName.value)
     nodes.value = resp.items ?? []
+    writeCache('nodes', nodes.value)
   } catch {
-    nodes.value = []
+    if (!cached) nodes.value = []
   } finally {
     nodesLoading.value = false
   }

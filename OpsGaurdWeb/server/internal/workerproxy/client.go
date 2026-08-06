@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 	pb "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy/pb"
 
 	"google.golang.org/grpc"
@@ -49,6 +50,23 @@ type Client struct {
 	token  string // bearer token（可空）
 	conn   *grpc.ClientConn
 	stub   pb.ManagementServiceClient
+
+	// cache 集群数据缓存（LevelDB），读接口先查缓存、未命中回源并更新。
+	// clusterName 用于缓存 key 命名。nil 表示不启用缓存。
+	cache       cacheStore
+	clusterName string
+}
+
+// cacheStore 是缓存读写接口（store.Store 实现）。在 cluster.Service 注入。
+type cacheStore interface {
+	GetClusterCache(cluster, resource string) *store.ClusterCache
+	PutClusterCache(cluster, resource string, payload []byte) error
+}
+
+// SetCache 启用集群数据缓存（由 cluster.Service.WorkerClient 调用）。
+func (c *Client) SetCache(st *store.Store, clusterName string) {
+	c.cache = st
+	c.clusterName = clusterName
 }
 
 // New 创建 Worker gRPC 客户端。baseURL 是 Worker 的 gRPC 端点
@@ -272,14 +290,24 @@ func (c *Client) Self(ctx context.Context) (SelfInfo, error) {
 }
 
 // Services 列出集群服务（Docker 原生 JSON，P1 原样透传）。
+// Services 列出集群服务（Docker 原生 JSON）。启用缓存时先返回缓存快照。
 func (c *Client) Services(ctx context.Context, label string) (json.RawMessage, error) {
+	if c.cache != nil {
+		if cached := c.cache.GetClusterCache(c.clusterName, "services"); cached != nil {
+			return json.RawMessage(cached.Payload), nil
+		}
+	}
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.stub.ListServices(cctx, &pb.ListServicesRequest{Label: label})
 	if err != nil {
 		return nil, c.wrapErr(err)
 	}
-	return json.RawMessage(resp.GetServicesJson()), nil
+	raw := json.RawMessage(resp.GetServicesJson())
+	if c.cache != nil {
+		_ = c.cache.PutClusterCache(c.clusterName, "services", raw)
+	}
+	return raw, nil
 }
 
 // NodeStats 获取本节点资源统计。
@@ -302,7 +330,17 @@ func (c *Client) NodeStats(ctx context.Context) (NodeStats, error) {
 }
 
 // ListNodes 获取集群节点列表。
+// ListNodes 获取集群节点列表。启用缓存时先返回缓存快照（避免页面白屏），
+// 后台刷新并更新缓存。
 func (c *Client) ListNodes(ctx context.Context) ([]Node, error) {
+	if c.cache != nil {
+		if cached := c.cache.GetClusterCache(c.clusterName, "nodes"); cached != nil {
+			var out []Node
+			if err := json.Unmarshal(cached.Payload, &out); err == nil {
+				return out, nil
+			}
+		}
+	}
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.stub.ListNodes(cctx, &pb.Empty{})
@@ -319,6 +357,11 @@ func (c *Client) ListNodes(ctx context.Context) ([]Node, error) {
 			CPUPercent: n.GetCpuPercent(), MemPercent: n.GetMemPercent(),
 			ContainerCount: int(n.GetContainerCount()),
 		})
+	}
+	if c.cache != nil {
+		if raw, err := json.Marshal(out); err == nil {
+			_ = c.cache.PutClusterCache(c.clusterName, "nodes", raw)
+		}
 	}
 	return out, nil
 }

@@ -278,6 +278,7 @@ func (s *Service) WorkerClient(name string) (*workerproxy.Client, error) {
 	}
 	cli := workerproxy.New(c.WorkerURL, c.Token)
 	cli.SetTimeout(30 * time.Second)
+	cli.SetCache(s.store, name)
 	return cli, nil
 }
 
