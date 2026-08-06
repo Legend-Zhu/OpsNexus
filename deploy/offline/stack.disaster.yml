@@ -16,7 +16,7 @@ version: "3.8"
 
 services:
   worker:
-    image: opsguard-worker:1.0.1
+    image: opsguard-worker:1.0.2
     hostname: "{{.Node.Hostname}}"
     # swarm 忽略以下两项（保留作普通容器形态的权限说明）
     privileged: true
