@@ -46,28 +46,41 @@ docker push {{ registryAddr }}/myapp:v1</pre>
 
       <!-- 上传构建 -->
       <el-card shadow="never" class="sub-card">
-        <template #header><span>上传构建（zip 内含 Dockerfile 与编译产物）</span></template>
-        <el-form inline>
+        <template #header>
+          <span>上传构建（zip 内含 Dockerfile 与编译产物；Dockerfile 自动定位，无需指定）</span>
+        </template>
+        <el-form inline class="build-form">
           <el-form-item label="构建包">
-            <el-upload :auto-upload="false" :limit="1" accept=".zip" :on-change="onPick" :on-remove="() => (zipFile = null)">
-              <el-button size="small" :icon="FolderOpened">选择 zip</el-button>
+            <el-upload :auto-upload="false" accept=".zip" :show-file-list="false" :on-change="onPick">
+              <el-button :icon="FolderOpened">选择 zip</el-button>
             </el-upload>
+            <template v-if="zipFile">
+              <span class="file-name mono">{{ zipFile.name }}（{{ fmtSize(zipFile.size) }}）</span>
+              <el-button link type="danger" size="small" @click="zipFile = null">清除</el-button>
+            </template>
+          </el-form-item>
+          <el-form-item label="项目名">
+            <el-select v-model="buildForm.project" filterable allow-create default-first-option
+              placeholder="选择已有项目或输入新名" style="width: 180px">
+              <el-option v-for="p in projects" :key="p.project.id" :label="p.project.name" :value="p.project.name" />
+            </el-select>
           </el-form-item>
           <el-form-item label="镜像名">
-            <el-input v-model="buildForm.name" placeholder="如 ops/myapp" style="width: 180px" />
+            <el-input v-model="buildForm.name" placeholder="如 myapp（不含项目前缀）" style="width: 170px" />
           </el-form-item>
           <el-form-item label="Tag">
-            <el-input v-model="buildForm.tag" placeholder="如 v1.0.0" style="width: 130px" />
-          </el-form-item>
-          <el-form-item label="Dockerfile">
-            <el-input v-model="buildForm.dockerfile" placeholder="默认 Dockerfile" style="width: 150px" />
+            <el-input v-model="buildForm.tag" placeholder="如 v1.0.0" style="width: 120px" />
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" :loading="building" :disabled="!info.docker_available || !zipFile || !buildForm.name || !buildForm.tag" @click="submitBuild">
+            <el-button type="primary" :loading="building" :disabled="!canBuild" @click="submitBuild">
               开始构建
             </el-button>
           </el-form-item>
         </el-form>
+        <div v-if="fullImageRef" class="ref-preview">
+          目标镜像：<span class="mono">{{ fullImageRef }}</span>
+          <span class="muted">（项目名/镜像名仅允许小写字母、数字、_ . -）</span>
+        </div>
 
         <!-- 当前构建进度 -->
         <template v-if="currentTask">
@@ -155,22 +168,35 @@ docker push {{ registryAddr }}/myapp:v1</pre>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { FolderOpened, Refresh } from '@element-plus/icons-vue'
-import { registryApi } from '@/api'
-import type { BuildTask, RegistryInfo, RegistryRepo } from '@/types'
+import { registryApi, projectApi } from '@/api'
+import type { BuildTask, ProjectView, RegistryInfo, RegistryRepo } from '@/types'
 
 const loading = ref(true)
 const info = ref<RegistryInfo | null>(null)
 const enabled = computed(() => !!info.value)
 const registryAddr = computed(() => (info.value ? `${info.value.hostname}:${info.value.port}` : ''))
 
+const projects = ref<ProjectView[]>([])
 const zipFile = ref<File | null>(null)
-const buildForm = reactive({ name: '', tag: '', dockerfile: '' })
+const buildForm = reactive({ project: '', name: '', tag: '' })
 const building = ref(false)
 const currentTask = ref<BuildTask | null>(null)
 const builds = ref<BuildTask[]>([])
 const images = ref<RegistryRepo[]>([])
 const imagesLoading = ref(false)
 const logBoxRef = ref<HTMLElement>()
+
+// 镜像路径段：小写字母/数字/_.-(registry 仓库名约束;后端同规则校验)
+const nameSegOk = (s: string) => /^[a-z0-9_.\-]+$/.test(s)
+const nameValid = computed(() => nameSegOk(buildForm.project.trim()) && nameSegOk(buildForm.name.trim()))
+const fullImageRef = computed(() => {
+  if (!buildForm.project.trim() || !buildForm.name.trim()) return ''
+  const tag = buildForm.tag.trim() || 'latest'
+  return `${registryAddr.value}/${buildForm.project.trim()}/${buildForm.name.trim()}:${tag}`
+})
+const canBuild = computed(
+  () => !!info.value?.docker_available && !!zipFile.value && nameValid.value && !!buildForm.tag.trim() && !building.value,
+)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -212,11 +238,14 @@ async function loadImages() {
 
 async function submitBuild() {
   if (!zipFile.value) return
+  if (!nameValid.value) {
+    ElMessage.warning('项目名/镜像名仅允许小写字母、数字、_ . -（如 ops、myapp）')
+    return
+  }
   const form = new FormData()
   form.append('file', zipFile.value)
-  form.append('name', buildForm.name.trim())
+  form.append('name', `${buildForm.project.trim()}/${buildForm.name.trim()}`)
   form.append('tag', buildForm.tag.trim())
-  if (buildForm.dockerfile.trim()) form.append('dockerfile', buildForm.dockerfile.trim())
   building.value = true
   try {
     const task = await registryApi.submitBuild(form)
@@ -297,6 +326,12 @@ onMounted(async () => {
     void loadImages()
     void loadBuilds()
   }
+  try {
+    const resp = await projectApi.list()
+    projects.value = resp.items ?? []
+  } catch {
+    projects.value = []
+  }
 })
 onBeforeUnmount(stopPoll)
 </script>
@@ -329,6 +364,24 @@ onBeforeUnmount(stopPoll)
   font-size: 12px;
   line-height: 1.7;
   white-space: pre-wrap;
+}
+.build-form :deep(.el-form-item__content) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.file-name {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.ref-preview {
+  margin: 2px 0 6px;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+}
+.muted {
+  color: var(--el-text-color-placeholder);
+  font-size: 12px;
 }
 .build-status {
   display: flex;
