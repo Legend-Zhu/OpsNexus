@@ -246,8 +246,8 @@ func (s *Service) DeleteProject(id string) error {
 	return s.store.DeleteProject(id)
 }
 
-// WorkerClient 按集群名构造 Worker HTTP 客户端（带注册的 token）。
-// 放宽超时到 30s：节点/指标等聚合接口随节点与容器数量增长（实测 5 节点集群 ~16s）。
+// WorkerClient 按集群名构造 Worker gRPC 客户端（带注册的 token）。
+// 超时由 gRPC 客户端侧 SetTimeout 控制（当前为 no-op 占位，实际走 per-call ctx 超时）。
 func (s *Service) WorkerClient(name string) (*workerproxy.Client, error) {
 	c, err := s.store.GetCluster(name)
 	if err != nil {

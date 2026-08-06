@@ -1,0 +1,32 @@
+# OpsGaurd Worker 生产配置（单节点 10.60.189.6，与管理端同机）
+# 安装位置：/etc/opsguard/agent-config.yaml（stack.yml 挂载进容器）
+
+worker:
+  # auto: 依 swarm 节点角色推导（本机为单节点 manager → 编排+MCP+本地 API）
+  role: auto
+  # HTTP 端口（/mcp + /healthz + local API）。与管理端页面 8080 避让用 8090。
+  # 实际监听由 -addr 旗标设定，这里仅作记录。
+  listen: ":8090"
+  # gRPC 管理端口（server↔worker）：server 连此拉事件流。避让用 9090。
+  grpcListen: ":9090"
+  # 持久化状态目录（事件/审计 SQLite 队列），stack.yml 已挂 /var/lib/opsguard。
+  dataDir: "/var/lib/opsguard"
+
+# 已废弃：事件现经 gRPC SubscribeEvents 流回推管理端（server 主动连），
+# 不再 POST 到 webhook URL。保留此字段仅为兼容旧配置，实际忽略。
+# webhooks:
+#   - "http://10.60.189.6:8080/api/v1/ingest/events"
+
+# Bearer-token 鉴权：内网暂关（开启后管理端集群配置需带 token）
+auth:
+  enabled: false
+
+commandPolicy:
+  mode: blacklist
+  # 宿主机命令执行（nsenter）默认关闭，需要时再开
+  allowHostExec: false
+  allowContainerExec: true
+  timeout: 30s
+  blacklist:
+    - "curl http://|sh"
+    - "wget http://|sh"

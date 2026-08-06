@@ -1,0 +1,8 @@
+{
+  "insecure-registries": ["10.60.189.6:8080"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}

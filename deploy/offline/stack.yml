@@ -1,0 +1,52 @@
+# OpsGaurd Worker —— 单节点（10.60.189.6）swarm global 部署。
+# 与仓库内 Worker/deploy/stack.yml 的差异：HTTP 端口 8080→8090、gRPC 端口
+# 9080→9090（避让管理端页面 8080 / 其同机服务），显式 -addr/-grpc-addr。
+#
+# 双端口职责（gRPC 重构后）：
+#   :8090 HTTP — /mcp（MCP Streamable HTTP）+ /healthz + 节点级 local API
+#   :9090 gRPC — 管理 API（server↔worker），server 在此连接并开 SubscribeEvents/
+#                SubscribeAudit 流拉事件（满足 server→worker 单向网络策略）
+#
+# 限制：swarm 会静默忽略 privileged/pid: host（见 README「限制」一节）——
+# 本形态下节点进程页只能看到 worker 容器内进程；需要宿主机全量进程时
+# 改用 docker run --privileged --pid host --network host 的普通容器。
+#
+# 前置：docker swarm init 已执行；/etc/opsguard/agent-config.yaml 已就位。
+# 部署：docker stack deploy -c stack.yml opsguard
+
+version: "3.8"
+
+services:
+  worker:
+    image: opsguard-worker:1.0.1
+    hostname: "{{.Node.Hostname}}"
+    privileged: true
+    pid: host
+    deploy:
+      mode: global
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          memory: 256M
+    environment:
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/opsguard/agent-config.yaml:/etc/opsguard/agent-config.yaml:ro
+      # 持久化状态（事件/审计 SQLite 队列）。manager 角色写；重启不丢事件，
+      # gRPC Subscribe* 流断线重连带游标续拉。
+      - /var/lib/opsguard:/var/lib/opsguard
+    command: ["-agent-config", "/etc/opsguard/agent-config.yaml", "-addr", ":8090", "-grpc-addr", ":9090"]
+    ports:
+      # HTTP: /mcp + /healthz + local API
+      - "8090:8090"
+      # gRPC: 管理 API（server 连这里拉事件）
+      - "9090:9090"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
