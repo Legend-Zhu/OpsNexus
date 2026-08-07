@@ -12,6 +12,8 @@ export interface ClusterSummary {
   status: 'online' | 'offline' | 'unknown'
   last_seen: string
   has_token?: boolean
+  /** 纳管清单（外部对象声明） */
+  inventory?: InventoryConfig
 }
 
 /** 集群详情 */
@@ -28,6 +30,8 @@ export interface AddClusterPayload {
   mcp_url?: string
   token?: string
   desc?: string
+  /** 纳管清单（接入时可选配置） */
+  inventory?: InventoryConfig
 }
 
 /** 项目（管理层级第一层：项目 → 集群） */
@@ -337,18 +341,82 @@ export interface NotifyRecord {
   error?: string
 }
 
+/** 监控配置（对应 store.Monitoring / config.Monitoring，AlertRule 与 InventoryItem 共用） */
+export interface Monitoring {
+  enabled?: boolean
+  portChecks?: PortCheck[]
+  httpChecks?: HTTPCheck[]
+  logChecks?: LogCheck[]
+  resourceThresholds?: ResourceThreshold[]
+}
+
+export interface PortCheck {
+  port: string
+  protocol?: string
+  interval?: string
+  timeout?: string
+  retries?: number
+}
+
+export interface HTTPCheck {
+  url: string
+  method?: string
+  headers?: Record<string, string>
+  expectedStatus?: number[]
+  expectedBody?: string
+  interval?: string
+  timeout?: string
+}
+
+export interface LogCheck {
+  pattern: string
+  level?: string
+  ignore?: string[]
+  action?: string
+}
+
+export interface ResourceThreshold {
+  metric: 'cpu' | 'memory'
+  threshold: number
+  action?: string
+}
+
 /** 告警规则（P6：管理 Worker monitoring config） */
 export interface AlertRule {
   cluster: string
+  /** 纳管对象 name（swarm service name 或 inventory item name） */
   service: string
-  monitoring: {
-    enabled?: boolean
-    portChecks?: { port: string; protocol?: string; interval?: string; timeout?: string; retries?: number }[]
-    httpChecks?: { url: string; method?: string; expectedStatus?: number[]; expectedBody?: string; interval?: string; timeout?: string }[]
-    logChecks?: { pattern: string; level?: string; ignore?: string[]; action?: string }[]
-    resourceThresholds?: { metric: 'cpu' | 'memory'; threshold: number; action?: string }[]
-  }
+  monitoring: Monitoring
   updated_at: string
+}
+
+/** 纳管对象声明（对应 store.InventoryItem） */
+export interface InventoryItem {
+  name: string
+  type: 'standalone-container' | 'host-service'
+  ref: string
+  node?: string
+  category: string
+  desc?: string
+  monitoring?: Monitoring
+}
+
+/** 纳管清单配置（对应 store.InventoryConfig） */
+export interface InventoryConfig {
+  items: InventoryItem[]
+}
+
+/** 纳管对象视图（GET /inventory 返回，含实时状态） */
+export interface InventoryView {
+  name: string
+  type: 'swarm-service' | 'standalone-container' | 'host-service'
+  category?: string
+  source: 'swarm' | 'inventory'
+  node?: string
+  status: string
+  image?: string
+  ports?: string
+  desc?: string
 }
 
 /** 用户（P6） */

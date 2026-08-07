@@ -69,6 +69,12 @@ func Translate(cfg *config.Config) (docker.ServiceSpec, error) {
 			File:       &docker.ConfigReferenceFileTarget{Name: name, Mode: 0o444},
 		})
 	}
+	// ---- SecurityOpt / PidMode ----
+	if len(s.SecurityOpt) > 0 {
+		cs.Privileges = &docker.Privileges{SecurityOpt: s.SecurityOpt}
+	}
+	cs.PidMode = s.PidMode
+
 	spec.TaskTemplate.ContainerSpec = cs
 
 	// ---- Resources ----

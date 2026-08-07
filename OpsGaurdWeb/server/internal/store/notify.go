@@ -74,10 +74,12 @@ type NotifyRecord struct {
 
 // --- 告警规则（Worker monitoring config 管理，决策⑦） ---
 
-// AlertRule 某集群某服务的监控配置（管理端持久化副本 + 下发源）。
+// AlertRule 某集群某纳管对象的监控配置（管理端持久化副本 + 下发源）。
+// Service 字段语义为"纳管对象 name"——可以是 swarm service name，
+// 也可以是 inventory item name（standalone-container / host-service）。
 type AlertRule struct {
 	Cluster    string     `json:"cluster"`
-	Service    string     `json:"service"`
+	Service    string     `json:"service"` // 纳管对象 name（swarm service 或 inventory item）
 	Monitoring Monitoring `json:"monitoring"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 }

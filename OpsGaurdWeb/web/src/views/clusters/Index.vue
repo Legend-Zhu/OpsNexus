@@ -44,7 +44,7 @@
     </el-table>
 
     <!-- 接入/编辑对话框 -->
-    <el-dialog v-model="dialogVisible" :title="editing ? '编辑集群' : '接入集群'" width="540px">
+    <el-dialog v-model="dialogVisible" :title="editing ? '编辑集群' : '接入集群'" width="640px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-form-item label="集群名称" prop="name">
           <el-input v-model="form.name" placeholder="如 dev-cluster" :disabled="editing" />
@@ -69,6 +69,19 @@
         <el-form-item label="描述">
           <el-input v-model="form.desc" placeholder="可选" />
         </el-form-item>
+        <!-- 纳管范围（可选，仅接入时；接入后在集群详情「纳管配置」编辑） -->
+        <el-form-item v-if="!editing" label="纳管范围">
+          <el-input
+            v-model="invYaml"
+            type="textarea"
+            :rows="8"
+            placeholder="留空跳过；接入后在集群详情「纳管配置」编辑"
+            class="mono"
+          />
+          <div class="form-tip">声明集群纳管的外部对象（非 OpsGaurd 部署的 swarm service）<br>
+            standalone-container: ref=容器名, node=所在节点 hostname<br>
+            host-service: ref=host:port</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -82,8 +95,9 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
+import { load as yamlLoad } from 'js-yaml'
 import { clusterApi, projectApi } from '@/api'
-import type { AddClusterPayload, ClusterSummary, Project } from '@/types'
+import type { AddClusterPayload, ClusterSummary, InventoryConfig, Project } from '@/types'
 
 const loading = ref(false)
 const adding = ref(false)
@@ -95,6 +109,8 @@ const editing = ref(false)
 const editingHasToken = ref(false)
 const formRef = ref<FormInstance>()
 const form = reactive<AddClusterPayload>({ name: '', project_id: '', worker_url: '', token: '', desc: '' })
+// 纳管范围（接入向导可选步骤，YAML 编辑）
+const invYaml = ref('')
 
 const rules: FormRules = {
   name: [{ required: true, message: '请输入集群名称', trigger: 'blur' }],
@@ -136,7 +152,8 @@ async function fetchProjects() {
 
 function openDialog() {
   editing.value = false
-  Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '' })
+  Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '', inventory: undefined })
+  invYaml.value = ''
   dialogVisible.value = true
 }
 
@@ -157,6 +174,16 @@ async function submitCluster() {
   await formRef.value?.validate()
   adding.value = true
   try {
+    if (!editing.value && invYaml.value.trim()) {
+      try {
+        form.inventory = yamlLoad(invYaml.value) as InventoryConfig
+      } catch (e: any) {
+        ElMessage.error('纳管范围 YAML 解析失败: ' + (e?.message ?? e))
+        return
+      }
+    } else {
+      form.inventory = undefined
+    }
     if (editing.value) {
       await clusterApi.update(form.name, form)
       ElMessage.success('集群已更新')
@@ -165,7 +192,8 @@ async function submitCluster() {
       ElMessage.success('集群接入成功')
     }
     dialogVisible.value = false
-    Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '' })
+    Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '', inventory: undefined })
+    invYaml.value = ''
     await fetchClusters()
   } catch {
     // 错误提示已由 http.ts 统一处理（探测失败 502 等）

@@ -119,6 +119,10 @@ func New(h *api.Handlers) *gin.Engine {
 		clusters.GET("/:name/nodes/:id/processes", h.NodeProcesses)
 		clusters.GET("/:name/nodes/:id/containers", h.NodeContainers)
 
+		// 纳管清单（集群纳管的外部对象：standalone 容器 / 宿主机服务）
+		clusters.GET("/:name/inventory", h.GetInventory)
+		clusters.PUT("/:name/inventory", h.UpsertInventory)
+
 		// 告警中心
 		alerts := v1.Group("/alerts")
 		{

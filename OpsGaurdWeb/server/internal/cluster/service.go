@@ -86,6 +86,41 @@ func (s *Service) Get(ctx context.Context, name string) (*store.Cluster, error) 
 	return c, nil
 }
 
+// GetStatic 返回集群记录（不探测状态，用于内部模块读取 inventory 配置
+// 等已有 worker client、无需重复探测的场景）。
+func (s *Service) GetStatic(name string) (*store.Cluster, error) {
+	c, err := s.store.GetCluster(name)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, ErrNotFound{Name: name}
+	}
+	return c, nil
+}
+
+// UpdateInventory 更新集群纳管清单（仅更新 Inventory 字段，不动其他字段）。
+// inv 为 nil 时清空清单。
+func (s *Service) UpdateInventory(ctx context.Context, name string, inv *store.InventoryConfig) (*store.Cluster, error) {
+	existing, err := s.store.GetCluster(name)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, ErrNotFound{Name: name}
+	}
+	if inv != nil {
+		if err := inv.Validate(); err != nil {
+			return nil, fmt.Errorf("inventory: %w", err)
+		}
+	}
+	existing.Inventory = inv
+	if err := s.store.PutCluster(existing); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
 // Add 接入一个新集群：先探测 Worker（可达 + swarm manager），通过后落库。
 // 探测结果同时作为初始 status/last_seen。
 func (s *Service) Add(ctx context.Context, in *store.Cluster) (*store.Cluster, error) {
@@ -107,6 +142,12 @@ func (s *Service) Add(ctx context.Context, in *store.Cluster) (*store.Cluster, e
 			return nil, err
 		} else if p == nil {
 			return nil, fmt.Errorf("project %q not found", in.ProjectID)
+		}
+	}
+	// 纳管清单校验（类型/ref/node 合法性 + 名称唯一）。
+	if in.Inventory != nil {
+		if err := in.Inventory.Validate(); err != nil {
+			return nil, fmt.Errorf("inventory: %w", err)
 		}
 	}
 
@@ -131,6 +172,7 @@ func (s *Service) Add(ctx context.Context, in *store.Cluster) (*store.Cluster, e
 		MCPURL:    mcpURL,
 		Token:     in.Token,
 		Desc:      in.Desc,
+		Inventory: in.Inventory,
 		Status:    store.ClusterOnline,
 		LastSeen:  time.Now().UTC(),
 	}
@@ -168,6 +210,13 @@ func (s *Service) Update(ctx context.Context, in *store.Cluster) (*store.Cluster
 	}
 	if in.Desc != "" {
 		existing.Desc = in.Desc
+	}
+	// Inventory: 仅在请求体显式包含时更新（nil = 不动现有清单）。
+	if in.Inventory != nil {
+		if err := in.Inventory.Validate(); err != nil {
+			return nil, fmt.Errorf("inventory: %w", err)
+		}
+		existing.Inventory = in.Inventory
 	}
 	if err := s.store.PutCluster(existing); err != nil {
 		return nil, err

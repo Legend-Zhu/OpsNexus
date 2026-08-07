@@ -48,6 +48,18 @@ type ContainerSpec struct {
 	Healthcheck *HealthConfig      `json:"Healthcheck,omitempty"`
 	Secrets     []*SecretReference `json:"Secrets,omitempty"`
 	Configs     []*ConfigReference `json:"Configs,omitempty"`
+	// Privileges holds security-related options (Docker API v1.40+). SecurityOpt
+	// lives here, not at the top level — the Engine API rejects/ignores a bare
+	// SecurityOpt on ContainerSpec.
+	Privileges  *Privileges        `json:"Privileges,omitempty"`
+	// PidMode is the PID namespace mode (Docker API v1.46+, Docker 26.0+).
+	// "host" shares the host PID namespace. Ignored on older daemons.
+	PidMode     string             `json:"PidMode,omitempty"`
+}
+
+// Privileges wraps security options accepted by the swarm ContainerSpec.
+type Privileges struct {
+	SecurityOpt []string `json:"SecurityOpt,omitempty"`
 }
 
 // ServiceMode is replicated or global.

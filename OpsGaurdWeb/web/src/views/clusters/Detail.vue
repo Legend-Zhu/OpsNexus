@@ -68,7 +68,7 @@
               <!-- 宿主机进程 -->
               <el-tab-pane label="宿主机进程" name="procs">
                 <div class="drawer-toolbar">
-                  <span class="og-dim">宿主机进程（Top N，按 CPU）</span>
+                  <span class="og-dim">宿主机进程（共 {{ processes.length }}，按 CPU 排序）</span>
                   <el-input
                     v-model="procFilter"
                     size="small"
@@ -80,7 +80,7 @@
                   />
                   <el-button size="small" :icon="Refresh" @click="loadProcesses('cpu')">刷新</el-button>
                 </div>
-                <el-table :data="processes" size="small" v-loading="procsLoading" max-height="440">
+                <el-table :data="pagedProcesses" size="small" v-loading="procsLoading" max-height="400">
                   <el-table-column prop="pid" label="PID" width="80" />
                   <el-table-column prop="name" label="进程" min-width="140" show-overflow-tooltip />
                   <el-table-column prop="cmdline" label="命令行" min-width="220" show-overflow-tooltip class-name="mono" />
@@ -91,6 +91,15 @@
                     <template #default="{ row }">{{ fmtKB(row.memKb) }}</template>
                   </el-table-column>
                 </el-table>
+                <el-pagination
+                  v-if="processes.length > procPageSize"
+                  v-model:current-page="procPage"
+                  :page-size="procPageSize"
+                  :total="processes.length"
+                  layout="prev, pager, next, total"
+                  size="small"
+                  style="margin-top: 8px; justify-content: flex-end"
+                />
               </el-tab-pane>
 
               <!-- 节点全部容器（含 standalone，如 r-nacos） -->
@@ -174,23 +183,30 @@
         </el-table>
       </el-tab-pane>
 
-      <!-- 中间件：category=middleware 的服务 -->
-      <el-tab-pane :label="`中间件 (${middlewares.length})`" name="middleware">
-        <el-table v-loading="wLoading" :data="middlewares" empty-text="暂无中间件（部署时给服务加 labels.category=middleware 归类）">
-          <el-table-column label="名称" prop="name" min-width="150" />
-          <el-table-column label="镜像" prop="image" min-width="200" show-overflow-tooltip />
-          <el-table-column label="端口" min-width="150">
+      <!-- 中间件：swarm middleware + inventory 里 category=middleware 的 -->
+      <el-tab-pane :label="`中间件 (${middlewareViews.length})`" name="middleware">
+        <div class="tab-toolbar">
+          <el-button size="small" :icon="Refresh" @click="loadInventory">刷新</el-button>
+          <el-button size="small" :icon="Setting" @click="openInvConfig">纳管配置</el-button>
+        </div>
+        <el-table v-loading="invLoading" :data="middlewareViews" empty-text="暂无中间件（swarm 部署加 labels.category=middleware，或在纳管配置里声明 standalone/host-service）">
+          <el-table-column label="名称" prop="name" min-width="120" />
+          <el-table-column label="来源" width="80">
             <template #default="{ row }">
-              <span v-for="p in row.ports ?? []" :key="p.publishedPort" class="port-chip mono">
-                {{ p.publishedPort }}→{{ p.targetPort }}
-              </span>
-              <span v-if="!row.ports?.length">—</span>
+              <el-tag size="small" :type="sourceTagType(row.source)">{{ sourceLabel(row.source) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="副本" prop="replica" width="80" />
-          <el-table-column label="操作" width="110">
+          <el-table-column label="镜像" prop="image" min-width="200" show-overflow-tooltip />
+          <el-table-column label="状态" width="100">
             <template #default="{ row }">
-              <el-button link type="primary" @click="openDetail(row)">详情</el-button>
+              <el-tag size="small" :type="statusTagType(row.status)">{{ row.status }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="节点" prop="node" width="140" />
+          <el-table-column label="端口" prop="ports" min-width="120" show-overflow-tooltip />
+          <el-table-column label="操作" width="80">
+            <template #default="{ row }">
+              <el-button v-if="row.source === 'swarm'" link type="primary" @click="openDetailByName(row.name)">详情</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -385,16 +401,37 @@ monitoring:
         </div>
       </template>
     </el-drawer>
+
+    <!-- 纳管配置编辑器 -->
+    <el-dialog v-model="invConfigVisible" title="纳管配置" width="680px" :close-on-click-modal="false">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
+        声明集群纳管的外部对象（非 OpsGaurd 部署的 swarm service）。type 可选
+        standalone-container（docker run 容器，ref=容器名、node=所在节点 hostname）
+        或 host-service（宿主机端口探活，ref=host:port）。
+      </el-alert>
+      <el-input
+        v-model="invConfigText"
+        type="textarea"
+        :rows="18"
+        placeholder="items:"
+        class="mono"
+      />
+      <template #footer>
+        <el-button @click="invConfigVisible = false">取消</el-button>
+        <el-button type="primary" :loading="invSaving" @click="saveInvConfig">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Back, Plus, Refresh } from '@element-plus/icons-vue'
+import { Back, Plus, Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import { clusterApi, eventApi, nodeApi, workloadApi } from '@/api'
-import type { ClusterNode, ClusterSummary, ContainerInfo, EventItem, LogLine, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
+import { clusterApi, eventApi, inventoryApi, nodeApi, workloadApi } from '@/api'
+import type { ClusterNode, ClusterSummary, ContainerInfo, EventItem, InventoryConfig, InventoryView, LogLine, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
+import { dump as yamlDump, load as yamlLoad } from 'js-yaml'
 
 const route = useRoute()
 const clusterName = computed(() => route.params.name as string)
@@ -445,6 +482,13 @@ const currentNode = ref<ClusterNode | null>(null)
 const nodeDrawerTab = ref('procs')
 const processes = ref<ProcessInfo[]>([])
 const procFilter = ref('')
+const procPage = ref(1)
+const procPageSize = ref(20)
+// 分页后的进程列表（客户端分页）
+const pagedProcesses = computed(() => {
+  const start = (procPage.value - 1) * procPageSize.value
+  return processes.value.slice(start, start + procPageSize.value)
+})
 const containers = ref<ContainerInfo[]>([])
 const containersLoading = ref(false)
 const procsLoading = ref(false)
@@ -452,7 +496,17 @@ const procsLoading = ref(false)
 // 工作负载 / 中间件
 const wLoading = ref(false)
 const workloads = ref<Workload[]>([])
-const middlewares = computed(() => workloads.value.filter((w) => categoryOf(w) === 'middleware'))
+
+// 纳管清单（合并 swarm + inventory，含实时状态）
+const invLoading = ref(false)
+const inventoryViews = ref<InventoryView[]>([])
+// 中间件 tab = 纳管清单里 category=middleware 的条目（swarm + standalone + host-service）
+const middlewareViews = computed(() => inventoryViews.value.filter((v) => v.category === 'middleware'))
+
+// 纳管配置编辑器
+const invConfigVisible = ref(false)
+const invConfigText = ref('')
+const invSaving = ref(false)
 
 // 事件
 const events = ref<EventItem[]>([])
@@ -514,6 +568,59 @@ function categoryOf(w: Workload): string {
   return w.labels?.['category'] ?? 'service'
 }
 
+// ---- 纳管清单 ----
+async function loadInventory() {
+  invLoading.value = true
+  try {
+    const resp = await inventoryApi.get(clusterName.value)
+    inventoryViews.value = resp.items ?? []
+  } catch {
+    inventoryViews.value = []
+  } finally {
+    invLoading.value = false
+  }
+}
+
+// swarm 中间件条目点"详情"→ 查 workloads 找到原始 Workload 对象
+function openDetailByName(name: string) {
+  const w = workloads.value.find((x) => x.name === name)
+  if (w) openDetail(w)
+}
+
+function sourceTagType(source: string) {
+  return source === 'swarm' ? 'info' : 'warning'
+}
+function sourceLabel(source: string) {
+  return source === 'swarm' ? 'swarm' : '纳管'
+}
+function statusTagType(status: string) {
+  if (status === 'running' || status === 'ok') return 'success'
+  if (status === 'down' || status === 'not-found' || status === 'unreachable' || status === 'exited') return 'danger'
+  if (status === 'node-not-found' || status === 'invalid-ref') return 'warning'
+  return 'info'
+}
+
+// 纳管配置编辑器：YAML 文本编辑（整体替换）
+function openInvConfig() {
+  const inv = cluster.value?.inventory
+  invConfigText.value = yamlDump(inv ?? { items: [] }, { indent: 2, lineWidth: 120 })
+  invConfigVisible.value = true
+}
+async function saveInvConfig() {
+  invSaving.value = true
+  try {
+    const obj = yamlLoad(invConfigText.value) as InventoryConfig
+    await inventoryApi.update(clusterName.value, obj)
+    ElMessage.success('纳管清单已保存')
+    invConfigVisible.value = false
+    await Promise.all([loadInventory(), fetchCluster()])
+  } catch (e: any) {
+    ElMessage.error('保存失败: ' + (e?.message ?? String(e)))
+  } finally {
+    invSaving.value = false
+  }
+}
+
 // ---- 集群 ----
 async function fetchCluster() {
   try {
@@ -568,10 +675,11 @@ async function loadContainers() {
 async function loadProcesses(top: string) {
   if (!currentNode.value) return
   procsLoading.value = true
+  procPage.value = 1
   try {
     const resp = await nodeApi.processes(clusterName.value, currentNode.value.id, {
       top,
-      limit: 100,
+      limit: 500,
       filter: procFilter.value.trim() || undefined,
     })
     processes.value = resp.processes ?? []
@@ -771,15 +879,15 @@ function authHeaders(): Record<string, string> {
 // 切 Tab 时按需加载
 watch(tab, (t) => {
   if (t === 'workloads' && !workloads.value.length) void loadWorkloads()
-  if (t === 'middleware' && !workloads.value.length) void loadWorkloads()
+  if (t === 'middleware' && !inventoryViews.value.length) void loadInventory()
   if (t === 'events' && !events.value.length) void loadEvents()
 })
 
 onMounted(async () => {
   loading.value = true
   await fetchCluster()
-  // 并行加载节点 + 工作负载，让 tab 标签数字（容器与服务 N）进页面即显示。
-  await Promise.all([loadNodes(), loadWorkloads()])
+  // 并行加载节点 + 工作负载 + 纳管清单，让 tab 标签数字进页面即显示。
+  await Promise.all([loadNodes(), loadWorkloads(), loadInventory()])
   loading.value = false
 })
 

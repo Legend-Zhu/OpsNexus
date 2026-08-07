@@ -33,6 +33,9 @@ type Cluster struct {
 	LastSeen  time.Time     `json:"last_seen"`
 	// HasToken 仅在 Public() 输出时填充：true=已配 token。不暴露值本身。
 	HasToken bool `json:"has_token,omitempty"`
+	// Inventory 纳管清单：声明集群里要纳管的外部对象（非 OpsGaurd 部署的
+	// swarm service）。nil = 空清单（旧记录不受影响）。
+	Inventory *InventoryConfig `json:"inventory,omitempty"`
 	// Err 最近一次健康探测错误（不持久化，运行时填充）
 	Err string `json:"-"`
 }

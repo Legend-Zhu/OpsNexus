@@ -17,12 +17,13 @@ import (
 
 // addClusterRequest 接入集群的请求体。
 type addClusterRequest struct {
-	Name      string `json:"name" binding:"required"`
-	ProjectID string `json:"project_id"`
-	WorkerURL string `json:"worker_url" binding:"required"`
-	MCPURL    string `json:"mcp_url"`
-	Token     string `json:"token"`
-	Desc      string `json:"desc"`
+	Name      string                 `json:"name" binding:"required"`
+	ProjectID string                 `json:"project_id"`
+	WorkerURL string                 `json:"worker_url" binding:"required"`
+	MCPURL    string                 `json:"mcp_url"`
+	Token     string                 `json:"token"`
+	Desc      string                 `json:"desc"`
+	Inventory *store.InventoryConfig `json:"inventory,omitempty"`
 }
 
 // ListClusters godoc: GET /api/v1/clusters
@@ -83,6 +84,7 @@ func (h *Handlers) AddCluster(c *gin.Context) {
 		MCPURL:    req.MCPURL,
 		Token:     req.Token,
 		Desc:      req.Desc,
+		Inventory: req.Inventory,
 	})
 	if err != nil {
 		var pf cluster.ErrProbeFailed
@@ -115,6 +117,7 @@ func (h *Handlers) UpdateCluster(c *gin.Context) {
 		MCPURL:    req.MCPURL,
 		Token:     req.Token,
 		Desc:      req.Desc,
+		Inventory: req.Inventory,
 	})
 	if err != nil {
 		var nf cluster.ErrNotFound

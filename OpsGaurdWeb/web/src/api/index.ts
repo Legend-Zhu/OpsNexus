@@ -13,6 +13,8 @@ import type {
   ClusterSummary,
   EventItem,
   IdpClient,
+  InventoryConfig,
+  InventoryView,
   Investigation,
   Me,
   NodeStats,
@@ -65,6 +67,13 @@ export const nodeApi = {
     ),
   containers: (cluster: string, nodeId: string) =>
     get<{ items: ContainerInfo[] }>(`/v1/clusters/${cluster}/nodes/${nodeId}/containers`),
+}
+
+// ---- 纳管清单（集群纳管的外部对象：standalone 容器 / 宿主机服务） ----
+export const inventoryApi = {
+  get: (cluster: string) => get<{ items: InventoryView[] }>(`/v1/clusters/${cluster}/inventory`),
+  update: (cluster: string, body: InventoryConfig) =>
+    put<InventoryConfig>(`/v1/clusters/${cluster}/inventory`, body),
 }
 
 // ---- 工作负载（经 Worker） ----

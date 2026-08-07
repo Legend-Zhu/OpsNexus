@@ -38,6 +38,15 @@ type Service struct {
 	Rollback        *UpdateConfig     `yaml:"rollback,omitempty" json:"rollback,omitempty"`
 	Restart         *RestartPolicy    `yaml:"restart,omitempty" json:"restart,omitempty"`
 	LogDriver       *LogDriver        `yaml:"logDriver,omitempty" json:"logDriver,omitempty"`
+	// SecurityOpt maps to ContainerSpec.Privileges.SecurityOpt (Docker API
+	// v1.40+). Needed for Rust services like r-nacos that require
+	// "seccomp=unconfined" — docker service create does not expose --security-opt,
+	// but the Engine API accepts it under Privileges.
+	SecurityOpt     []string          `yaml:"securityOpt,omitempty" json:"securityOpt,omitempty"`
+	// PidMode maps to ContainerSpec.PidMode (Docker API v1.46+, Docker 26.0+).
+	// "host" lets a service see host processes (e.g. worker pid=host). On older
+	// daemons the field is ignored silently.
+	PidMode         string            `yaml:"pidMode,omitempty"   json:"pidMode,omitempty"`   // "" | "host"
 }
 
 // RegistryAuth references credentials for pulling from a private registry.
