@@ -47,7 +47,15 @@ type StatsResp struct {
 // the host's CPU/memory usage. Shared by the HTTP handler and the gRPC server
 // so the collection logic lives once. CPU sampling (host + containers) needs
 // two snapshots ~1s apart; the sleep is shared across all samples.
+//
+// Results are cached for statsCacheTTL: every node card / monitor refresh
+// would otherwise pay the full ~1s sampling again. The returned value is a
+// defensive copy (callers may hold it while a refresh repopulates the cache).
 func (a *API) LocalStats(ctx context.Context) (StatsResp, error) {
+	if resp, ok := a.cachedStats(); ok {
+		return resp, nil
+	}
+
 	host, _ := hostname()
 	cs, err := a.cli.ListContainers(ctx, docker.Filter{"label": {"com.docker.swarm.service.id"}})
 	if err != nil {
@@ -111,7 +119,29 @@ func (a *API) LocalStats(ctx context.Context) (StatsResp, error) {
 	if all, err := a.cli.ListAllContainers(ctx); err == nil {
 		resp.ContainerCount = len(all)
 	}
+
+	a.putStatsCache(&resp)
 	return resp, nil
+}
+
+// cachedStats 返回 TTL 内的缓存副本；未命中返回 ok=false。
+func (a *API) cachedStats() (StatsResp, bool) {
+	a.statsMu.Lock()
+	defer a.statsMu.Unlock()
+	if a.statsCache == nil || time.Since(a.statsAt) > statsCacheTTL {
+		return StatsResp{}, false
+	}
+	out := *a.statsCache
+	out.Containers = append([]ContainerStat(nil), a.statsCache.Containers...)
+	return out, true
+}
+
+// putStatsCache 写入采样结果（带时间戳）。
+func (a *API) putStatsCache(resp *StatsResp) {
+	a.statsMu.Lock()
+	defer a.statsMu.Unlock()
+	a.statsCache = resp
+	a.statsAt = time.Now()
 }
 
 // hostCPUCores returns the number of host CPU cores (cpu0..cpuN lines in

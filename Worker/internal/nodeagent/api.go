@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sync"
+	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/agent"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
@@ -19,7 +21,16 @@ type API struct {
 	cli    docker.Client
 	policy *agent.CommandPolicy
 	log    *slog.Logger
+
+	// statsCache 宿主机/容器资源采样的短时缓存：采样本身固定耗时 ~1s
+	// （两次快照间隔），节点列表/监控页每次刷新都全量采样会造成明显卡顿。
+	// TTL 内命中直接返回上次结果（快照型数据，5s 精度损失可忽略）。
+	statsMu    sync.Mutex
+	statsCache *StatsResp
+	statsAt    time.Time
 }
+
+const statsCacheTTL = 5 * time.Second
 
 // New builds the local API.
 func New(cli docker.Client, policy *agent.CommandPolicy, log *slog.Logger) *API {
@@ -32,15 +43,16 @@ func New(cli docker.Client, policy *agent.CommandPolicy, log *slog.Logger) *API 
 // Routes returns the local endpoint handlers.
 func (a *API) Routes() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
-		"GET /api/v1/local/stats":       a.stats,
-		"GET /api/v1/local/processes":   a.processes,
-		"GET /api/v1/local/containers":  a.containers,
-		"POST /api/v1/local/exec":       a.exec,
-		"POST /api/v1/local/host":       a.host,
-		"GET /api/v1/local/logs":        a.logs,
-		"GET /api/v1/local/check/port":  a.checkPort,
-		"POST /api/v1/local/check/http": a.checkHTTP,
-		"POST /api/v1/local/check/flow": a.checkFlow,
+		"GET /api/v1/local/stats":         a.stats,
+		"GET /api/v1/local/processes":     a.processes,
+		"GET /api/v1/local/containers":    a.containers,
+		"POST /api/v1/local/containers/restart": a.restartContainer,
+		"POST /api/v1/local/exec":         a.exec,
+		"POST /api/v1/local/host":         a.host,
+		"GET /api/v1/local/logs":          a.logs,
+		"GET /api/v1/local/check/port":    a.checkPort,
+		"POST /api/v1/local/check/http":   a.checkHTTP,
+		"POST /api/v1/local/check/flow":   a.checkFlow,
 	}
 }
 

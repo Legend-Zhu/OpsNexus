@@ -59,7 +59,7 @@ func (h *Handler) registerResources(s *mcp.Server) {
 		Description: "Recent monitoring events (newest first)",
 		MIMEType:    "application/json",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-		evs := h.mon.Events("", "", 50)
+		evs := h.mon.Events("", "", 0, 50)
 		return textResult(req, evs), nil
 	})
 }

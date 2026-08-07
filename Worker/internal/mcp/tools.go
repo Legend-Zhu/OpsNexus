@@ -261,7 +261,7 @@ func (h *Handler) registerTools(s *mcp.Server) {
 		if limit <= 0 {
 			limit = 50
 		}
-		evs := h.mon.Events(in.Service, monitorEventType(in.Type), limit)
+		evs := h.mon.Events(in.Service, monitorEventType(in.Type), 0, limit)
 		out := eventsOut{Events: make([]monitorEvent, 0, len(evs))}
 		for _, e := range evs {
 			out.Events = append(out.Events, monitorEvent{

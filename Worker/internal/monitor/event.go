@@ -167,8 +167,9 @@ func (s *EventStore) Add(e Event) Event {
 }
 
 // List returns events newest-first, optionally filtered by service and type.
-// limit <= 0 returns all matching.
-func (s *EventStore) List(service string, typ EventType, limit int) []Event {
+// after > 0 returns only seq < after (倒序分页游标：前端"加载更多"传上一页
+// 最小 seq 取更早的一页)。limit <= 0 returns all matching.
+func (s *EventStore) List(service string, typ EventType, after int64, limit int) []Event {
 	q := `SELECT seq, id, ts, service, type, level, msg, detail FROM events`
 	var args []any
 	where := ""
@@ -183,6 +184,14 @@ func (s *EventStore) List(service string, typ EventType, limit int) []Event {
 			where += " AND type = ?"
 		}
 		args = append(args, string(typ))
+	}
+	if after > 0 {
+		if where == "" {
+			where = " WHERE seq < ?"
+		} else {
+			where += " AND seq < ?"
+		}
+		args = append(args, after)
 	}
 	q += where + " ORDER BY seq DESC"
 	if limit > 0 {

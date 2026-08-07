@@ -6,6 +6,7 @@ package nodeagent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -73,6 +74,41 @@ func (a *API) containers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"node": hostnameOr(""), "containers": cs})
+}
+
+// restartReq 容器重启请求（name 为容器名或 ID）。
+type restartReq struct {
+	Name string `json:"name"`
+}
+
+// restartResp 容器重启结果。
+type restartResp struct {
+	Node      string `json:"node"`
+	Container string `json:"container"`
+	OK        bool   `json:"ok"`
+	Message   string `json:"message,omitempty"`
+}
+
+// restartContainer POST /api/v1/local/containers/restart
+// 重启本机一个容器（docker restart）。独立部署（docker run）的中间件容器
+// （如 r-nacos）在服务视图之外，管理端由此触发重启。
+func (a *API) restartContainer(w http.ResponseWriter, r *http.Request) {
+	var req restartReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Name == "" {
+		writeErr(w, http.StatusBadRequest, errEmpty("name"))
+		return
+	}
+	if err := a.cli.RestartContainer(r.Context(), req.Name); err != nil {
+		writeJSON(w, http.StatusBadGateway, restartResp{
+			Node: hostnameOr(""), Container: req.Name, OK: false, Message: err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, restartResp{Node: hostnameOr(""), Container: req.Name, OK: true})
 }
 
 func hostnameOr(fallback string) string {

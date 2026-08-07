@@ -381,6 +381,23 @@ func (s *Server) NodeContainers(ctx context.Context, req *pb.NodeContainersReque
 	return resp, nil
 }
 
+// RestartContainer restarts a container on the target node (standalone
+// docker run containers are invisible to swarm-service views, so the
+// management plane triggers container restarts through this RPC).
+func (s *Server) RestartContainer(ctx context.Context, req *pb.ContainerActionRequest) (*pb.ContainerActionResult, error) {
+	addr, err := s.orch.ResolveNodeAddr(ctx, req.GetNodeId())
+	if err != nil {
+		if orchestrator.NodeNotFound(err) {
+			return nil, status.Error(codes.NotFound, err.Error())
+		}
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	if err := s.orch.NodeClientByAddr(addr).RestartContainer(ctx, req.GetContainer()); err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	return &pb.ContainerActionResult{Node: addr, Container: req.GetContainer(), Ok: true}, nil
+}
+
 func (s *Server) NodeProcesses(ctx context.Context, req *pb.NodeProcessesRequest) (*pb.ProcessesResponse, error) {
 	addr, err := s.orch.ResolveNodeAddr(ctx, req.GetNodeId())
 	if err != nil {
@@ -491,7 +508,7 @@ func (s *Server) CheckFlow(ctx context.Context, req *pb.CheckFlowRequest) (*pb.F
 // ---- events / audit point queries ----
 
 func (s *Server) ListEvents(ctx context.Context, req *pb.ListEventsRequest) (*pb.ListEventsResponse, error) {
-	evs := s.events.List(req.GetService(), monitor.EventType(req.GetType()), int(req.GetLimit()))
+	evs := s.events.List(req.GetService(), monitor.EventType(req.GetType()), req.GetAfterSeq(), int(req.GetLimit()))
 	raw, err := json.Marshal(evs)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())

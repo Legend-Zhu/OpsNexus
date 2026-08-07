@@ -13,7 +13,7 @@ func TestEventStoreAddList(t *testing.T) {
 	s.Add(Event{Service: "a", Type: EventHTTPUnhealthy, Level: LevelWarn, Msg: "5xx"})
 	s.Add(Event{Service: "b", Type: EventResourceOver, Level: LevelWarn, Msg: "mem"})
 
-	list := s.List("", "", 0)
+	list := s.List("", "", 0, 0)
 	if len(list) != 3 {
 		t.Fatalf("want 3 events, got %d", len(list))
 	}
@@ -21,13 +21,19 @@ func TestEventStoreAddList(t *testing.T) {
 	if list[0].Type != EventResourceOver {
 		t.Errorf("newest first: got %s", list[0].Type)
 	}
-	filtered := s.List("a", "", 0)
+	filtered := s.List("a", "", 0, 0)
 	if len(filtered) != 2 {
 		t.Errorf("filter by service failed: got %d", len(filtered))
 	}
-	byType := s.List("", EventPortDown, 0)
+	byType := s.List("", EventPortDown, 0, 0)
 	if len(byType) != 1 || byType[0].Type != EventPortDown {
 		t.Errorf("filter by type failed: %+v", byType)
+	}
+	// 游标分页：after = 中间 seq，只应返回更早的一条。
+	after := list[1].Seq
+	paged := s.List("", "", after, 0)
+	if len(paged) != 1 || paged[0].Seq != list[2].Seq {
+		t.Errorf("after-seq paging failed: %+v", paged)
 	}
 }
 
@@ -57,7 +63,7 @@ func TestEventStoreAckGC(t *testing.T) {
 	if err := s.GC(time.Hour); err != nil {
 		t.Fatalf("GC: %v", err)
 	}
-	if got := len(s.List("", "", 0)); got != 0 {
+	if got := len(s.List("", "", 0, 0)); got != 0 {
 		t.Errorf("GC should remove old acked event, got %d", got)
 	}
 }

@@ -57,6 +57,9 @@ type Client interface {
 	ContainerExecCreate(ctx context.Context, containerID string, cmd []string) (string, error)
 	ExecStart(ctx context.Context, execID string) (io.ReadCloser, error)
 	ExecInspect(ctx context.Context, execID string) (ExecInspect, error)
+	// RestartContainer restarts a container by ID or name (docker restart;
+	// 404 on a nonexistent container is an error here, the caller maps it).
+	RestartContainer(ctx context.Context, containerID string) error
 }
 
 // Filter is a map of filter key → list of values, encoded as the Engine API

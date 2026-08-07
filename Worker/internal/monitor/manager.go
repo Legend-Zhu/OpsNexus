@@ -111,7 +111,8 @@ func (m *Manager) Unregister(service string) {
 	m.log.Info("monitoring unregistered", "service", service)
 }
 
-// Events returns events from the store, filtered.
-func (m *Manager) Events(service string, typ EventType, limit int) []Event {
-	return m.store.List(service, typ, limit)
+// Events returns events from the store, filtered. after > 0 时仅返回
+// seq < after 的更早一页（倒序分页游标）。
+func (m *Manager) Events(service string, typ EventType, after int64, limit int) []Event {
+	return m.store.List(service, typ, after, limit)
 }

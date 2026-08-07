@@ -96,11 +96,28 @@ func (o *Orchestrator) ListNodesView(ctx context.Context) ([]NodeView, error) {
 }
 
 // ResolveNodeAddr 把 id（node ID 或 hostname）解析为 ready 节点的 worker 地址。
-// 节点不存在/未 ready 返回 errNotFound；docker 失败返回原始错误。
+// 空 id 表示"本机"（manager 自身）——host-service 探活等未指定节点时从
+// manager 发起。节点不存在/未 ready 返回 errNotFound；docker 失败返回原始错误。
 func (o *Orchestrator) ResolveNodeAddr(ctx context.Context, id string) (string, error) {
 	nodes, err := o.cli.ListNodes(ctx, nil)
 	if err != nil {
 		return "", err
+	}
+	if id == "" {
+		selfID, err := o.SelfNodeID(ctx)
+		if err != nil {
+			return "", err
+		}
+		for _, n := range nodes {
+			if n.ID != selfID {
+				continue
+			}
+			if n.Status.State == "ready" && n.Status.Addr != "" {
+				return n.Status.Addr, nil
+			}
+			break
+		}
+		return "", errNotFound("node", "(self)")
 	}
 	for _, n := range nodes {
 		if n.ID != id && n.Description.Hostname != id {

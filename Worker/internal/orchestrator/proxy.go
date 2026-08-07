@@ -228,6 +228,24 @@ type NodeContainerInfo struct {
 	Ports   string `json:"ports"`
 }
 
+// RestartContainer restarts a container on the node via
+// POST /api/v1/local/containers/restart (docker restart).
+func (n *NodeClient) RestartContainer(ctx context.Context, name string) error {
+	var out struct {
+		Node      string `json:"node"`
+		Container string `json:"container"`
+		OK        bool   `json:"ok"`
+		Message   string `json:"message,omitempty"`
+	}
+	if err := n.postJSON(ctx, "/api/v1/local/containers/restart", map[string]string{"name": name}, &out); err != nil {
+		return err
+	}
+	if !out.OK {
+		return fmt.Errorf("restart container %q: %s", name, out.Message)
+	}
+	return nil
+}
+
 // CheckPort runs an ad-hoc TCP probe from the node worker.
 func (n *NodeClient) CheckPort(ctx context.Context, host, port, timeout string) (PortCheckResult, error) {
 	q := url.Values{"host": {host}, "port": {port}}
