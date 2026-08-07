@@ -229,3 +229,63 @@ compose → OpsGaurd 字段对照（避免踩坑）：
 2. r-nacos 镜像构建 + 上传内嵌 registry + stack 模板入库
 3. 平台侧：地址注入改造、巡检项配置、OpenAPI 对接页面（可分迭代）
 4. 试点 → 灰度 → 全量 → 下线 Nacos（按 §五节奏）
+
+---
+
+## 附录 A：r-nacos 实际配置参考（disaster 集群 2026-08-07）
+
+部署位置：`10.60.171.232`（swarm leader，外网映射 `172.28.49.151`）。配置文件宿主机路径 `/opt/rnacos/rnacos.env`，启动脚本 `/opt/rnacos/run-rnacos.sh`。
+
+### rnacos.env（应用层配置，改后 docker restart 生效）
+
+```properties
+# ---- 基础 ----
+RNACOS_CONFIG_DB_DIR=/io/nacos_db
+RNACOS_RAFT_NODE_ID=1
+RNACOS_RAFT_NODE_ADDR=0.0.0.0:7848
+RNACOS_RAFT_AUTO_INIT=1
+RNACOS_BACKUP_TOKEN=2db9196c3b483503e70b183f9619b004bde3029f7c310731
+
+# ---- OAuth2（对接 OpsGaurd IdP，经 worker gRPC 隧道免反向防火墙）----
+RNACOS_OAUTH2_CLIENT_ID=cli-36c97ea0d5839614
+RNACOS_OAUTH2_CLIENT_SECRET=389d253578fcda255ef9aa1790127c10798d072841bc3185d0c4a93407fb5a28
+# 浏览器跳转端点：OpsGaurd 政务外网映射地址（authorize 是浏览器交互）
+RNACOS_OAUTH2_AUTHORIZATION_URL=http://172.28.50.176:8080/api/v1/idp/authorize
+# 服务端端点：worker 隧道地址（r-nacos → worker /idp-proxy/ → server IdP）
+RNACOS_OAUTH2_TOKEN_URL=http://10.60.171.232:6060/idp-proxy/api/v1/idp/token
+RNACOS_OAUTH2_USERINFO_URL=http://10.60.171.232:6060/idp-proxy/api/v1/idp/userinfo
+# 回调地址：r-nacos 控制台的政务外网映射地址
+RNACOS_OAUTH2_REDIRECT_URI=http://172.28.49.151:10848/oauth2/login
+RNACOS_OAUTH2_SCOPES=openid,profile,email
+RNACOS_OAUTH2_USERNAME_CLAIM_NAME=username
+RNACOS_OAUTH2_USER_DEFAULT_ROLE=1
+```
+
+### run-rnacos.sh（启动脚本，改端口映射时重跑）
+
+```bash
+#!/bin/bash
+set -e
+docker rm -f rnacos
+docker run -d --name rnacos --restart=always \
+  --security-opt seccomp=unconfined \
+  -v rnacos-data:/io \
+  -v /opt/rnacos/rnacos.env:/opt/rnacos.env:ro \
+  -p 8848:8848 -p 10848:10848 -p 9848:9848 -p 7848:7848 \
+  qingpan/rnacos:stable \
+  --env-file /opt/rnacos.env
+```
+
+### 关键配置值说明
+
+| 配置 | 值 | 来源/含义 |
+|---|---|---|
+| `RNACOS_OAUTH2_CLIENT_ID` | `cli-36c97ea0d5839614` | OpsGaurd 管理台「身份提供者」注册得到 |
+| `RNACOS_OAUTH2_CLIENT_SECRET` | `389d2...5a28` | 同上（一次性明文，轮换在管理台 rotate-secret） |
+| `RNACOS_OAUTH2_AUTHORIZATION_URL` | `http://172.28.50.176:8080/...` | OpsGaurd 政务外网映射（189.6→172.28.50.176） |
+| `RNACOS_OAUTH2_TOKEN_URL` | `http://10.60.171.232:6060/idp-proxy/...` | worker http 端口（disaster 是 6060）+ 隧道前缀 |
+| `RNACOS_OAUTH2_REDIRECT_URI` | `http://172.28.49.151:10848/oauth2/login` | r-nacos 政务外网映射（232→172.28.49.151）+ 回调路径 |
+| `RNACOS_OAUTH2_USERNAME_CLAIM_NAME` | `username` | OpsGaurd ID token 里的 username claim |
+| `RNACOS_OAUTH2_USER_DEFAULT_ROLE` | `1` | r-nacos 内置角色 ID（1=管理员） |
+
+> ⚠️ 安全提示：本附录含真实 secret 值仅供部署参考。生产环境应通过管理台 rotate-secret 定期轮换，轮换后同步更新 `rnacos.env` 的 `CLIENT_SECRET`。
