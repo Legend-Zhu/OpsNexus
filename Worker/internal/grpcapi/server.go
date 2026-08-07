@@ -41,6 +41,11 @@ type Server struct {
 	local  *nodeagent.API
 	log    *slog.Logger
 
+	// tunnel owns the reverse IdP HTTP tunnel (server-initiated bidi stream);
+	// the local /idp-proxy/ HTTP handler forwards in-cluster IdP requests
+	// through it. nil when the Worker has no tunnel (older servers / node role).
+	tunnel *TunnelManager
+
 	// leader forwarding: an internal gRPC client to the swarm leader's
 	// management service, used by non-leader managers for write RPCs. Cached
 	// per leader address; rebuilt when leadership changes.
@@ -52,13 +57,18 @@ type Server struct {
 
 // New creates a management gRPC server. All backends are required for a
 // manager-role worker. local is the nodeagent.API used for NodeStats and
-// StreamLogs on this node.
-func New(orch *orchestrator.Orchestrator, events *monitor.EventStore, auditStore *audit.Store, local *nodeagent.API, log *slog.Logger) *Server {
+// StreamLogs on this node. tunnel is the reverse IdP tunnel manager (may be
+// nil to disable tunneling).
+func New(orch *orchestrator.Orchestrator, events *monitor.EventStore, auditStore *audit.Store, local *nodeagent.API, tunnel *TunnelManager, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{orch: orch, events: events, audit: auditStore, local: local, log: log}
+	return &Server{orch: orch, events: events, audit: auditStore, local: local, tunnel: tunnel, log: log}
 }
+
+// TunnelManager returns the reverse IdP tunnel manager (nil if not enabled).
+// Worker main wires the local /idp-proxy/ HTTP handler to it.
+func (s *Server) TunnelManager() *TunnelManager { return s.tunnel }
 
 // Register attaches the service to a *grpc.Server (called from main).
 func (s *Server) Register(srv *grpc.Server) {
@@ -537,4 +547,16 @@ func ints32ToInts(in []int32) []int {
 		out[i] = int(v)
 	}
 	return out
+}
+
+// ---- idp reverse tunnel ----
+
+// Tunnel delegates to the TunnelManager. The management server opens this
+// stream; the Worker's local /idp-proxy/ HTTP handler forwards IdP requests
+// over it (Send) and receives paired responses (Recv inside the manager).
+func (s *Server) Tunnel(stream pb.ManagementService_TunnelServer) error {
+	if s.tunnel == nil {
+		return status.Error(codes.Unavailable, "idp tunnel not enabled on this worker")
+	}
+	return s.tunnel.Tunnel(stream)
 }

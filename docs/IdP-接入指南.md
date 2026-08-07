@@ -241,3 +241,55 @@ sudo systemctl reload nginx
 
 CA 私钥（`ca.key`）泄漏需重新生成整套 CA + 所有服务证书，并把新 CA 重新分发到所有 RP。
 
+
+## 七、经 Worker gRPC 隧道对接（集群→管理端单向网络不通场景）
+
+当对接 IdP 的服务（如 r-nacos 控制台）处在与 OpsGaurd 管理端**网络隔离**的集群里（集群节点无法主动访问管理端的 IdP 端点），无需开通反向防火墙——OpsGaurd 提供 **gRPC 反向隧道**，复用已有的"管理端→Worker"长连 gRPC（`SubscribeEvents` 同一条连接、同一方向），把集群内的 IdP 请求反向打洞回源到管理端本地 IdP。
+
+### 原理：混合通路
+
+OIDC 流程的两类通信各走一条已通的通路：
+
+| 通信 | 端点 | 通路 | 谁发起 |
+|---|---|---|---|
+| 浏览器跳转 | `authorize`、`logout` | 用户浏览器 → 管理端**公网/政务外网地址**（如 `172.28.50.176:8080`） | 运维浏览器 |
+| 服务端 API | `discovery`/`token`/`jwks`/`userinfo`/`introspect` | 服务 → Worker 本地 `/idp-proxy/` → **gRPC Tunnel bidi 流**（复用管理端→Worker:9080 长连） → 管理端本地 IdP | 集群内服务 |
+
+**关键技巧**：Worker 的 `/idp-proxy/` 反代时会**改写 discovery 文档**——把 `authorization_endpoint`/`end_session_endpoint` 指向管理端公网地址（浏览器直连），其余端点指向 Worker 本地隧道地址（服务端经隧道走）。这样一次 discovery 拉取，两类端点各得其所，整个流程自洽。
+
+### 数据流（以 r-nacos 为例）
+
+```
+【登录】运维浏览器 → r-nacos(集群) 点登录
+  → 浏览器跳 公网管理端/api/v1/idp/authorize → OpsGaurd 登录 → 302 回 r-nacos?code=xxx
+【换 token】r-nacos(集群) POST worker本地/idp-proxy/api/v1/idp/token
+  → Worker 经 Tunnel 流把请求帧发给管理端 → 管理端 loopback 回源本地 IdP
+  → 响应帧原路返回 → r-nacos 拿到 token（验签用 jwks 也走同样隧道）
+```
+
+### 启用步骤
+
+**管理端**（`config.docker.yaml`）：IdP 启用后，`idptunnel` manager 自动为每个已纳管集群开一条 Tunnel 流，无需额外配置。
+
+**Worker**（环境变量，仅 manager 角色）：
+```bash
+OPSGUARD_TUNNEL_BASE=http://10.60.171.232:8080        # 本 Worker 对集群内可达的地址（r-nacos 用它作 issuer）
+OPSGUARD_IDP_PUBLIC_ISSUER=http://172.28.50.176:8080  # 管理端公网地址（authorize 浏览器跳转用）
+```
+配了 `OPSGUARD_TUNNEL_BASE` 的 Worker 会在 `:8080/idp-proxy/` 暴露本地隧道入口（已自动放行鉴权），并在 discovery 里按上面两个地址改写端点。
+
+**对接服务**（如 r-nacos）：issuer 指向 `http://<OPSGUARD_TUNNEL_BASE>/idp-proxy`，client_id/secret 在管理台「身份提供者」注册。
+
+### 验证
+```bash
+# 从集群内节点探测隧道入口（应返回改写后的 discovery）
+curl http://10.60.171.232:8080/idp-proxy/.well-known/openid-configuration | jq .
+#   authorization_endpoint = 公网管理端地址
+#   token_endpoint/jwks_uri/userinfo_endpoint = Worker 本地/idp-proxy 地址
+```
+
+### 适用条件与限制
+- 隧道复用现有管理端→Worker 的 gRPC 长连，**完全不开反向防火墙**。
+- 仅适用 manager 角色 Worker（gRPC 服务在 manager 上）；对接服务需与该 Worker 同集群可达。
+- `authorize`/`logout` 依赖运维浏览器可达管理端公网地址（OIDC 浏览器跳转固有要求）。
+- 隧道断开时，在途请求超时失败（调用方重试）；管理端自动重连（指数退避，仿 `SubscribeEvents`）。

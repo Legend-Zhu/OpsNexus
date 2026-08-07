@@ -68,6 +68,15 @@ service ManagementService {
   // entries. On reconnect the server resumes from the last persisted cursor.
   rpc SubscribeEvents(stream SubscribeRequest) returns (stream MonitorEvent);
   rpc SubscribeAudit(stream SubscribeRequest) returns (stream AuditEntry);
+
+  // ---- idp reverse tunnel ----
+  // Bidirectional HTTP-tunnel stream opened by the server (the one-way network
+  // policy still holds). The Worker forwards IdP-bound HTTP requests from
+  // in-cluster clients (e.g. r-nacos OIDC) as TunnelFrame request frames; the
+  // server proxies them to its local IdP and returns TunnelFrame response frames
+  // keyed by id. This lets services in an isolated cluster reach the management
+  // plane's IdP endpoints without a reverse firewall hole.
+  rpc Tunnel(stream TunnelFrame) returns (stream TunnelFrame);
 }
 
 // ---- common ----
@@ -369,4 +378,29 @@ message AuditEntry {
   string target = 8;
   bool ok = 9;
   string detail = 10;
+}
+
+// ---- idp reverse tunnel ----
+
+// TunnelFrame carries one HTTP request (Worker→server) or response
+// (server→Worker) over the Tunnel bidi stream. `id` pairs a response to its
+// request; a request frame fills method/path/headers/body, a response frame
+// fills status/body (or error).
+message TunnelFrame {
+  string id = 1;
+  // request fields (Worker → server)
+  string method = 2;
+  string path = 3;                 // path + query, e.g. /api/v1/idp/token
+  repeated TunnelHeader headers = 4;
+  bytes body = 5;
+  // response fields (server → Worker)
+  int32 status = 6;
+  string error = 7;                // set when the server could not proxy at all
+}
+
+// TunnelHeader is a single (key, value) pair; a header with N values becomes N
+// TunnelHeader entries with the same key (proto3 maps cannot repeat values).
+message TunnelHeader {
+  string key = 1;
+  string value = 2;
 }

@@ -20,6 +20,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/idp"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/idptunnel"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
@@ -171,6 +172,18 @@ func main() {
 		}
 		h.SetIdPService(idpSvc)
 		log.Info("idp enabled (OpsGaurd as OIDC provider)", "issuer", cfg.IdP.Issuer)
+
+		// 反向 IdP 隧道（idptunnel）：为每个已纳管集群开一条 server 发起的 bidi
+		// Tunnel 流，把集群内服务（如 r-nacos）经 Worker /idp-proxy/ 转发来的 IdP
+		// 请求回源到本进程 IdP（loopback）。仅在 IdP 启用时才有意义。集群增删跟随。
+		// 这让隔离网段（集群→管理端单向不通）也能访问 IdP，无需开反向防火墙。
+		idpTunnel := idptunnel.NewManager(clusterSvc, st, "http://127.0.0.1:"+serverPort(cfg.Server.Addr), log)
+		if err := idpTunnel.Start(context.Background()); err != nil {
+			log.Error("idp tunnel manager start failed", "err", err)
+		}
+		clusterSvc.OnClusterAdd(idpTunnel.Add)
+		clusterSvc.OnClusterRemove(idpTunnel.Remove)
+		defer idpTunnel.Stop()
 	}
 
 	log.Info("server starting",

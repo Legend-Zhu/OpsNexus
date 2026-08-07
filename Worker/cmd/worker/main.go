@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/grpcapi"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/idpproxy"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/logging"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/mcp"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/monitor"
@@ -245,15 +247,36 @@ func main() {
 
 	// Auth: bearer-token middleware wraps the whole API (incl. /mcp and the
 	// local node endpoints, which can execute host commands). OAuth 2.1
-	// protected-resource metadata and /healthz are public for discovery.
+	// protected-resource metadata, /healthz and the /idp-proxy/ tunnel entry are
+	// public for discovery and in-cluster IdP access.
 	authzMW := authz.New(&agCfg.Auth)
 	authzMW.PublicPaths = []string{
 		"/.well-known/oauth-protected-resource",
 		"/healthz",
+		"/idp-proxy/", // reverse IdP tunnel: in-cluster services (r-nacos) reach IdP via here, no bearer
 	}
 	if agCfg.Auth.Enabled {
 		log.Info("auth enabled", "tokens", len(agCfg.Auth.Tokens))
 		mux.Handle("GET /.well-known/oauth-protected-resource", authz.MetadataHandler(authzMW))
+	}
+
+	// Reverse IdP tunnel: a manager-role worker owns the bidi Tunnel stream the
+	// management server opens. The local /idp-proxy/ HTTP entry forwards
+	// in-cluster IdP requests (r-nacos discovery/token/jwks/userinfo) over it,
+	// avoiding a reverse firewall hole. Enabled only when a tunnel is reachable
+	// (OPSGUARD_TUNNEL_BASE configured) on manager-role workers.
+	var tunnelMgr *grpcapi.TunnelManager
+	if isManager {
+		tunnelBase := os.Getenv("OPSGUARD_TUNNEL_BASE") // e.g. http://10.60.171.232:8080
+		if tunnelBase != "" {
+			tunnelMgr = grpcapi.NewTunnelManager(log)
+			mux.Handle("/idp-proxy/", idpproxy.Handler(idpproxy.Config{
+				PublicIssuer: os.Getenv("OPSGUARD_IDP_PUBLIC_ISSUER"), // e.g. http://172.28.50.176:8080
+				TunnelBase:   tunnelBase,
+			}, tunnelMgrAdapter{tunnelMgr}, log))
+			log.Info("idp reverse tunnel enabled", "tunnel_base", tunnelBase,
+				"public_issuer", os.Getenv("OPSGUARD_IDP_PUBLIC_ISSUER"))
+		}
 	}
 
 	// Management gRPC server (server↔worker API). Only the manager role serves
@@ -270,7 +293,7 @@ func main() {
 			grpc.ChainUnaryInterceptor(authzMW.GRPCUnaryInterceptor()),
 			grpc.ChainStreamInterceptor(authzMW.GRPCStreamInterceptor()),
 		)
-		mgmt = grpcapi.New(orch, evStore, auditStore, localAPI, log)
+		mgmt = grpcapi.New(orch, evStore, auditStore, localAPI, tunnelMgr, log)
 		mgmt.Register(grpcSrv)
 	}
 
@@ -345,4 +368,23 @@ func main() {
 		_ = mgmt.Close()
 	}
 	log.Info("stopped")
+}
+
+// tunnelMgrAdapter adapts *grpcapi.TunnelManager to idpproxy.TunnelSender by
+// delegating to its RoundTripHTTP method. It lets the idpproxy handler stay
+// decoupled from the grpcapi/pb types.
+type tunnelMgrAdapter struct{ m *grpcapi.TunnelManager }
+
+func (a tunnelMgrAdapter) Available() bool {
+	if a.m == nil {
+		return false
+	}
+	return a.m.Available()
+}
+
+func (a tunnelMgrAdapter) RoundTrip(method, path string, headers http.Header, body []byte, timeout time.Duration) (int, http.Header, []byte, error) {
+	if a.m == nil {
+		return 0, nil, nil, fmt.Errorf("idp tunnel disabled")
+	}
+	return a.m.RoundTripHTTP(method, path, headers, body, timeout)
 }

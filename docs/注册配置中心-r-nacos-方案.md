@@ -138,6 +138,82 @@ networks:
 
 server 调 r-nacos 的 Nacos OpenAPI（协议兼容 ⇒ API 兼容）拉取服务/实例清单，在 cluster/项目视图中展示（实例数、健康状态、元数据）；控制台入口（10848）可嵌入平台导航。
 
+### 6.5 控制台 SSO 对接 OpsGaurd IdP（gRPC 隧道，免反向防火墙）
+
+r-nacos 控制台支持 OAuth2 登录（`OAUTH2_*` 环境变量）。对接 OpsGaurd IdP 后，用户用 OpsGaurd 账号（admin 等）单点登录 r-nacos 控制台，无需在 r-nacos 重复建账号。
+
+**网络背景**：disaster 集群（`10.60.171.x`）与管理端（`10.60.189.6`）网段隔离，防火墙只开 `189.6→171.232:6060-6064` 单向，反向不通。直接让 r-nacos 访问管理端 IdP 需开反向防火墙——成本高。OpsGaurd 提供 **gRPC 反向隧道**（复用管理端→Worker 长连）绕开此约束，详见 `docs/IdP-接入指南.md` 第七章。
+
+**部署分两阶段**：
+
+**阶段一：r-nacos 本地账号跑通**（不依赖 IdP）。镜像离线导入 + 单副本部署（见下方部署模板），用 r-nacos 内置账号登录，立即可用。
+
+**阶段二：对接 IdP**。前置：管理端启用 IdP（`idp.enabled`，issuer 填公网地址如 `http://172.28.50.176:8080`）；Worker 配隧道 env（`OPSGUARD_TUNNEL_BASE=http://10.60.171.232:8080`、`OPSGUARD_IDP_PUBLIC_ISSUER=http://172.28.50.176:8080`）。然后在管理台「身份提供者」注册 client（`rnacos-console`，机密，回调 `http://10.60.171.232:10848/<r-nacos回调路径>`），最后更新 r-nacos 服务的 env 取消注释：
+
+```yaml
+env:
+  # ... 其余不变
+  - "OAUTH2_ENABLE=true"
+  - "OAUTH2_ISSUER=http://10.60.171.232:8080/idp-proxy"   # Worker 本地隧道入口
+  - "OAUTH2_CLIENT_ID=cli-rnacos"
+  - "OAUTH2_CLIENT_SECRET=<注册得到的一次性 secret>"
+```
+
+r-nacos 拉 discovery 时拿到改写后的端点：`authorize`→公网管理端（浏览器跳），`token`/`jwks`/`userinfo`→Worker 隧道地址（服务端走）。登录流程自洽，全程不开反向防火墙。
+
+**部署模板（OpsGaurd `config.Service` 语法，非 compose）**：方案文档原 §6.1 的 stack yaml 是 docker-compose 语法（给 `docker stack deploy` 用），**不能直接贴进 OpsGaurd**。下方是改写后的 OpsGaurd 部署 YAML，贴入集群详情→「部署服务」即可：
+
+```yaml
+service:
+  name: rnacos
+  image: rustack/rnacos:v0.8.0          # 离线 docker load 到 232
+  replicas: 1                            # 试点单副本；扩 3 副本需重评估 Raft+VIP gRPC 连通性
+  imagePullPolicy: missing               # 离线环境本地有即不拉
+  ports:                                 # host 模式 + 锁 232，固定回调 IP
+    - { target: 8848,  published: 8848,  mode: host }
+    - { target: 10848, published: 10848, mode: host }
+    - { target: 7848,  published: 7848,  mode: host }
+  env:
+    - "RNACOS_HTTP_PORT=8848"
+    - "RNACOS_CONSOLE_PORT=10848"
+    - "RNACOS_CONFIG_DB_DIR=/data/nacos_db"
+    - "RNACOS_RAFT_NODE_ID=1"
+    - "RNACOS_RAFT_NODE_ADDR=0.0.0.0:7848"
+    - "RNACOS_RAFT_AUTO_INIT=1"
+    - "RNACOS_BACKUP_TOKEN=<32位随机串>"
+  mounts:
+    - { type: volume, source: rnacos-data, target: /data }
+  networks: [ops-net]                     # 先 docker network create -d overlay ops-net
+  placement:
+    constraints: [node.role==manager]     # 锁 swarm leader 232
+  labels: { category: middleware, app: rnacos }
+  resources:
+    limits: { cpu: "1.0", memory: "512Mi" }
+    reservations: { memory: "128Mi" }
+  restart: { condition: any, delay: 10s }
+  healthcheck:
+    test: ["CMD", "wget", "-qO-", "http://localhost:8848/nacos/v1/console/health/liveness"]
+    interval: 15s
+    timeout: 5s
+    retries: 5
+    startPeriod: 20s
+monitoring:
+  portChecks: [{ port: "8848" }, { port: "10848" }]
+  httpChecks:
+    - { url: "http://localhost:8848/nacos/v1/console/health/liveness", expectedStatus: [200] }
+```
+
+compose → OpsGaurd 字段对照（避免踩坑）：
+
+| compose（§6.1 原文） | OpsGaurd config.Service |
+|---|---|
+| `deploy.replicas: 3` | `replicas: 1`（顶层，试点先单副本） |
+| `deploy.placement.constraints: [node.role==manager]` | `placement.constraints: [node.role==manager]` |
+| `deploy.endpoint_mode: dnsrr` | **不支持**（OpsGaurd 未暴露 endpoint_mode）；单副本+host 模式规避 |
+| `environment: KEY: VAL` | `env: ["KEY=VAL"]`（字符串数组） |
+| `volumes: rnacos-data:/data` | `mounts: [{type: volume, source: rnacos-data, target: /data}]` |
+| `networks: [ops-net]` | `networks: [ops-net]`（需先建 overlay 网络） |
+
 ## 七、兜底方案
 
 若试点撞到协议兼容边角（极小概率，如冷门 OpenAPI 行为差异）：**Nacos 瘦身并跑续命**——单机模式 + 内嵌 Derby + JVM `-Xms256m -Xmx512m` + 关闭非必要模块，可压至 ~500MB。此为减配续命，不是方向；兼容问题应优先向 r-nacos 社区反馈修复。

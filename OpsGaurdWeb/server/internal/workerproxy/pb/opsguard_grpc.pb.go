@@ -57,6 +57,7 @@ const (
 	ManagementService_StreamLogs_FullMethodName      = "/opsguard.v1.ManagementService/StreamLogs"
 	ManagementService_SubscribeEvents_FullMethodName = "/opsguard.v1.ManagementService/SubscribeEvents"
 	ManagementService_SubscribeAudit_FullMethodName  = "/opsguard.v1.ManagementService/SubscribeAudit"
+	ManagementService_Tunnel_FullMethodName          = "/opsguard.v1.ManagementService/Tunnel"
 )
 
 // ManagementServiceClient is the client API for ManagementService service.
@@ -103,6 +104,14 @@ type ManagementServiceClient interface {
 	// entries. On reconnect the server resumes from the last persisted cursor.
 	SubscribeEvents(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SubscribeRequest, MonitorEvent], error)
 	SubscribeAudit(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SubscribeRequest, AuditEntry], error)
+	// ---- idp reverse tunnel ----
+	// Bidirectional HTTP-tunnel stream opened by the server (the one-way network
+	// policy still holds). The Worker forwards IdP-bound HTTP requests from
+	// in-cluster clients (e.g. r-nacos OIDC) as TunnelFrame request frames; the
+	// server proxies them to its local IdP and returns TunnelFrame response frames
+	// keyed by id. This lets services in an isolated cluster reach the management
+	// plane's IdP endpoints without a reverse firewall hole.
+	Tunnel(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TunnelFrame, TunnelFrame], error)
 }
 
 type managementServiceClient struct {
@@ -338,6 +347,19 @@ func (c *managementServiceClient) SubscribeAudit(ctx context.Context, opts ...gr
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ManagementService_SubscribeAuditClient = grpc.BidiStreamingClient[SubscribeRequest, AuditEntry]
 
+func (c *managementServiceClient) Tunnel(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TunnelFrame, TunnelFrame], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ManagementService_ServiceDesc.Streams[3], ManagementService_Tunnel_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[TunnelFrame, TunnelFrame]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ManagementService_TunnelClient = grpc.BidiStreamingClient[TunnelFrame, TunnelFrame]
+
 // ManagementServiceServer is the server API for ManagementService service.
 // All implementations must embed UnimplementedManagementServiceServer
 // for forward compatibility.
@@ -382,6 +404,14 @@ type ManagementServiceServer interface {
 	// entries. On reconnect the server resumes from the last persisted cursor.
 	SubscribeEvents(grpc.BidiStreamingServer[SubscribeRequest, MonitorEvent]) error
 	SubscribeAudit(grpc.BidiStreamingServer[SubscribeRequest, AuditEntry]) error
+	// ---- idp reverse tunnel ----
+	// Bidirectional HTTP-tunnel stream opened by the server (the one-way network
+	// policy still holds). The Worker forwards IdP-bound HTTP requests from
+	// in-cluster clients (e.g. r-nacos OIDC) as TunnelFrame request frames; the
+	// server proxies them to its local IdP and returns TunnelFrame response frames
+	// keyed by id. This lets services in an isolated cluster reach the management
+	// plane's IdP endpoints without a reverse firewall hole.
+	Tunnel(grpc.BidiStreamingServer[TunnelFrame, TunnelFrame]) error
 	mustEmbedUnimplementedManagementServiceServer()
 }
 
@@ -454,6 +484,9 @@ func (UnimplementedManagementServiceServer) SubscribeEvents(grpc.BidiStreamingSe
 }
 func (UnimplementedManagementServiceServer) SubscribeAudit(grpc.BidiStreamingServer[SubscribeRequest, AuditEntry]) error {
 	return status.Error(codes.Unimplemented, "method SubscribeAudit not implemented")
+}
+func (UnimplementedManagementServiceServer) Tunnel(grpc.BidiStreamingServer[TunnelFrame, TunnelFrame]) error {
+	return status.Error(codes.Unimplemented, "method Tunnel not implemented")
 }
 func (UnimplementedManagementServiceServer) mustEmbedUnimplementedManagementServiceServer() {}
 func (UnimplementedManagementServiceServer) testEmbeddedByValue()                           {}
@@ -825,6 +858,13 @@ func _ManagementService_SubscribeAudit_Handler(srv interface{}, stream grpc.Serv
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ManagementService_SubscribeAuditServer = grpc.BidiStreamingServer[SubscribeRequest, AuditEntry]
 
+func _ManagementService_Tunnel_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ManagementServiceServer).Tunnel(&grpc.GenericServerStream[TunnelFrame, TunnelFrame]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ManagementService_TunnelServer = grpc.BidiStreamingServer[TunnelFrame, TunnelFrame]
+
 // ManagementService_ServiceDesc is the grpc.ServiceDesc for ManagementService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -920,6 +960,12 @@ var ManagementService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "SubscribeAudit",
 			Handler:       _ManagementService_SubscribeAudit_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Tunnel",
+			Handler:       _ManagementService_Tunnel_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

@@ -2666,6 +2666,158 @@ func (x *AuditEntry) GetDetail() string {
 	return ""
 }
 
+// TunnelFrame carries one HTTP request (Worker→server) or response
+// (server→Worker) over the Tunnel bidi stream. `id` pairs a response to its
+// request; a request frame fills method/path/headers/body, a response frame
+// fills status/body (or error).
+type TunnelFrame struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// request fields (Worker → server)
+	Method  string          `protobuf:"bytes,2,opt,name=method,proto3" json:"method,omitempty"`
+	Path    string          `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"` // path + query, e.g. /api/v1/idp/token
+	Headers []*TunnelHeader `protobuf:"bytes,4,rep,name=headers,proto3" json:"headers,omitempty"`
+	Body    []byte          `protobuf:"bytes,5,opt,name=body,proto3" json:"body,omitempty"`
+	// response fields (server → Worker)
+	Status        int32  `protobuf:"varint,6,opt,name=status,proto3" json:"status,omitempty"`
+	Error         string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"` // set when the server could not proxy at all
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelFrame) Reset() {
+	*x = TunnelFrame{}
+	mi := &file_opsguard_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelFrame) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelFrame) ProtoMessage() {}
+
+func (x *TunnelFrame) ProtoReflect() protoreflect.Message {
+	mi := &file_opsguard_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelFrame.ProtoReflect.Descriptor instead.
+func (*TunnelFrame) Descriptor() ([]byte, []int) {
+	return file_opsguard_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *TunnelFrame) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *TunnelFrame) GetMethod() string {
+	if x != nil {
+		return x.Method
+	}
+	return ""
+}
+
+func (x *TunnelFrame) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *TunnelFrame) GetHeaders() []*TunnelHeader {
+	if x != nil {
+		return x.Headers
+	}
+	return nil
+}
+
+func (x *TunnelFrame) GetBody() []byte {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+func (x *TunnelFrame) GetStatus() int32 {
+	if x != nil {
+		return x.Status
+	}
+	return 0
+}
+
+func (x *TunnelFrame) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// TunnelHeader is a single (key, value) pair; a header with N values becomes N
+// TunnelHeader entries with the same key (proto3 maps cannot repeat values).
+type TunnelHeader struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelHeader) Reset() {
+	*x = TunnelHeader{}
+	mi := &file_opsguard_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelHeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelHeader) ProtoMessage() {}
+
+func (x *TunnelHeader) ProtoReflect() protoreflect.Message {
+	mi := &file_opsguard_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelHeader.ProtoReflect.Descriptor instead.
+func (*TunnelHeader) Descriptor() ([]byte, []int) {
+	return file_opsguard_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *TunnelHeader) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *TunnelHeader) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
 var File_opsguard_proto protoreflect.FileDescriptor
 
 const file_opsguard_proto_rawDesc = "" +
@@ -2899,7 +3051,18 @@ const file_opsguard_proto_rawDesc = "" +
 	"\x06target\x18\b \x01(\tR\x06target\x12\x0e\n" +
 	"\x02ok\x18\t \x01(\bR\x02ok\x12\x16\n" +
 	"\x06detail\x18\n" +
-	" \x01(\tR\x06detail2\xc8\v\n" +
+	" \x01(\tR\x06detail\"\xc0\x01\n" +
+	"\vTunnelFrame\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
+	"\x06method\x18\x02 \x01(\tR\x06method\x12\x12\n" +
+	"\x04path\x18\x03 \x01(\tR\x04path\x123\n" +
+	"\aheaders\x18\x04 \x03(\v2\x19.opsguard.v1.TunnelHeaderR\aheaders\x12\x12\n" +
+	"\x04body\x18\x05 \x01(\fR\x04body\x12\x16\n" +
+	"\x06status\x18\x06 \x01(\x05R\x06status\x12\x14\n" +
+	"\x05error\x18\a \x01(\tR\x05error\"6\n" +
+	"\fTunnelHeader\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value2\x8a\f\n" +
 	"\x11ManagementService\x12-\n" +
 	"\x04Ping\x12\x12.opsguard.v1.Empty\x1a\x11.opsguard.v1.Pong\x121\n" +
 	"\x04Self\x12\x12.opsguard.v1.Empty\x1a\x15.opsguard.v1.SelfInfo\x12S\n" +
@@ -2924,7 +3087,8 @@ const file_opsguard_proto_rawDesc = "" +
 	"\n" +
 	"StreamLogs\x12\x1e.opsguard.v1.StreamLogsRequest\x1a\x14.opsguard.v1.LogLine0\x01\x12O\n" +
 	"\x0fSubscribeEvents\x12\x1d.opsguard.v1.SubscribeRequest\x1a\x19.opsguard.v1.MonitorEvent(\x010\x01\x12L\n" +
-	"\x0eSubscribeAudit\x12\x1d.opsguard.v1.SubscribeRequest\x1a\x17.opsguard.v1.AuditEntry(\x010\x01b\x06proto3"
+	"\x0eSubscribeAudit\x12\x1d.opsguard.v1.SubscribeRequest\x1a\x17.opsguard.v1.AuditEntry(\x010\x01\x12@\n" +
+	"\x06Tunnel\x12\x18.opsguard.v1.TunnelFrame\x1a\x18.opsguard.v1.TunnelFrame(\x010\x01b\x06proto3"
 
 var (
 	file_opsguard_proto_rawDescOnce sync.Once
@@ -2938,7 +3102,7 @@ func file_opsguard_proto_rawDescGZIP() []byte {
 	return file_opsguard_proto_rawDescData
 }
 
-var file_opsguard_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
+var file_opsguard_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
 var file_opsguard_proto_goTypes = []any{
 	(*Empty)(nil),                 // 0: opsguard.v1.Empty
 	(*Pong)(nil),                  // 1: opsguard.v1.Pong
@@ -2978,71 +3142,76 @@ var file_opsguard_proto_goTypes = []any{
 	(*SubscribeRequest)(nil),      // 35: opsguard.v1.SubscribeRequest
 	(*MonitorEvent)(nil),          // 36: opsguard.v1.MonitorEvent
 	(*AuditEntry)(nil),            // 37: opsguard.v1.AuditEntry
-	nil,                           // 38: opsguard.v1.CheckHTTPRequest.HeadersEntry
-	nil,                           // 39: opsguard.v1.CheckFlowRequest.VarsEntry
-	nil,                           // 40: opsguard.v1.FlowStep.HeadersEntry
-	nil,                           // 41: opsguard.v1.FlowStep.ExtractEntry
-	(*timestamppb.Timestamp)(nil), // 42: google.protobuf.Timestamp
+	(*TunnelFrame)(nil),           // 38: opsguard.v1.TunnelFrame
+	(*TunnelHeader)(nil),          // 39: opsguard.v1.TunnelHeader
+	nil,                           // 40: opsguard.v1.CheckHTTPRequest.HeadersEntry
+	nil,                           // 41: opsguard.v1.CheckFlowRequest.VarsEntry
+	nil,                           // 42: opsguard.v1.FlowStep.HeadersEntry
+	nil,                           // 43: opsguard.v1.FlowStep.ExtractEntry
+	(*timestamppb.Timestamp)(nil), // 44: google.protobuf.Timestamp
 }
 var file_opsguard_proto_depIdxs = []int32{
 	15, // 0: opsguard.v1.ListNodesResponse.nodes:type_name -> opsguard.v1.Node
 	17, // 1: opsguard.v1.NodeStatsResponse.containers:type_name -> opsguard.v1.ContainerStat
 	20, // 2: opsguard.v1.ProcessesResponse.processes:type_name -> opsguard.v1.ProcessInfo
-	38, // 3: opsguard.v1.CheckHTTPRequest.headers:type_name -> opsguard.v1.CheckHTTPRequest.HeadersEntry
+	40, // 3: opsguard.v1.CheckHTTPRequest.headers:type_name -> opsguard.v1.CheckHTTPRequest.HeadersEntry
 	26, // 4: opsguard.v1.CheckFlowRequest.steps:type_name -> opsguard.v1.FlowStep
-	39, // 5: opsguard.v1.CheckFlowRequest.vars:type_name -> opsguard.v1.CheckFlowRequest.VarsEntry
-	40, // 6: opsguard.v1.FlowStep.headers:type_name -> opsguard.v1.FlowStep.HeadersEntry
-	41, // 7: opsguard.v1.FlowStep.extract:type_name -> opsguard.v1.FlowStep.ExtractEntry
+	41, // 5: opsguard.v1.CheckFlowRequest.vars:type_name -> opsguard.v1.CheckFlowRequest.VarsEntry
+	42, // 6: opsguard.v1.FlowStep.headers:type_name -> opsguard.v1.FlowStep.HeadersEntry
+	43, // 7: opsguard.v1.FlowStep.extract:type_name -> opsguard.v1.FlowStep.ExtractEntry
 	28, // 8: opsguard.v1.FlowCheckResult.steps:type_name -> opsguard.v1.FlowStepResult
-	42, // 9: opsguard.v1.MonitorEvent.ts:type_name -> google.protobuf.Timestamp
-	42, // 10: opsguard.v1.AuditEntry.ts:type_name -> google.protobuf.Timestamp
-	0,  // 11: opsguard.v1.ManagementService.Ping:input_type -> opsguard.v1.Empty
-	0,  // 12: opsguard.v1.ManagementService.Self:input_type -> opsguard.v1.Empty
-	3,  // 13: opsguard.v1.ManagementService.ListServices:input_type -> opsguard.v1.ListServicesRequest
-	5,  // 14: opsguard.v1.ManagementService.GetService:input_type -> opsguard.v1.GetServiceRequest
-	7,  // 15: opsguard.v1.ManagementService.Deploy:input_type -> opsguard.v1.DeployRequest
-	8,  // 16: opsguard.v1.ManagementService.Update:input_type -> opsguard.v1.UpdateRequest
-	9,  // 17: opsguard.v1.ManagementService.Scale:input_type -> opsguard.v1.ScaleRequest
-	10, // 18: opsguard.v1.ManagementService.Restart:input_type -> opsguard.v1.RestartRequest
-	11, // 19: opsguard.v1.ManagementService.Remove:input_type -> opsguard.v1.RemoveRequest
-	12, // 20: opsguard.v1.ManagementService.GetOperation:input_type -> opsguard.v1.GetOperationRequest
-	0,  // 21: opsguard.v1.ManagementService.ListNodes:input_type -> opsguard.v1.Empty
-	0,  // 22: opsguard.v1.ManagementService.NodeStats:input_type -> opsguard.v1.Empty
-	18, // 23: opsguard.v1.ManagementService.NodeProcesses:input_type -> opsguard.v1.NodeProcessesRequest
-	21, // 24: opsguard.v1.ManagementService.CheckPort:input_type -> opsguard.v1.CheckPortRequest
-	23, // 25: opsguard.v1.ManagementService.CheckHTTP:input_type -> opsguard.v1.CheckHTTPRequest
-	25, // 26: opsguard.v1.ManagementService.CheckFlow:input_type -> opsguard.v1.CheckFlowRequest
-	29, // 27: opsguard.v1.ManagementService.ListEvents:input_type -> opsguard.v1.ListEventsRequest
-	31, // 28: opsguard.v1.ManagementService.ListAudit:input_type -> opsguard.v1.ListAuditRequest
-	33, // 29: opsguard.v1.ManagementService.StreamLogs:input_type -> opsguard.v1.StreamLogsRequest
-	35, // 30: opsguard.v1.ManagementService.SubscribeEvents:input_type -> opsguard.v1.SubscribeRequest
-	35, // 31: opsguard.v1.ManagementService.SubscribeAudit:input_type -> opsguard.v1.SubscribeRequest
-	1,  // 32: opsguard.v1.ManagementService.Ping:output_type -> opsguard.v1.Pong
-	2,  // 33: opsguard.v1.ManagementService.Self:output_type -> opsguard.v1.SelfInfo
-	4,  // 34: opsguard.v1.ManagementService.ListServices:output_type -> opsguard.v1.ListServicesResponse
-	6,  // 35: opsguard.v1.ManagementService.GetService:output_type -> opsguard.v1.ServiceDetail
-	13, // 36: opsguard.v1.ManagementService.Deploy:output_type -> opsguard.v1.Operation
-	13, // 37: opsguard.v1.ManagementService.Update:output_type -> opsguard.v1.Operation
-	13, // 38: opsguard.v1.ManagementService.Scale:output_type -> opsguard.v1.Operation
-	13, // 39: opsguard.v1.ManagementService.Restart:output_type -> opsguard.v1.Operation
-	13, // 40: opsguard.v1.ManagementService.Remove:output_type -> opsguard.v1.Operation
-	13, // 41: opsguard.v1.ManagementService.GetOperation:output_type -> opsguard.v1.Operation
-	14, // 42: opsguard.v1.ManagementService.ListNodes:output_type -> opsguard.v1.ListNodesResponse
-	16, // 43: opsguard.v1.ManagementService.NodeStats:output_type -> opsguard.v1.NodeStatsResponse
-	19, // 44: opsguard.v1.ManagementService.NodeProcesses:output_type -> opsguard.v1.ProcessesResponse
-	22, // 45: opsguard.v1.ManagementService.CheckPort:output_type -> opsguard.v1.PortCheckResult
-	24, // 46: opsguard.v1.ManagementService.CheckHTTP:output_type -> opsguard.v1.HTTPCheckResult
-	27, // 47: opsguard.v1.ManagementService.CheckFlow:output_type -> opsguard.v1.FlowCheckResult
-	30, // 48: opsguard.v1.ManagementService.ListEvents:output_type -> opsguard.v1.ListEventsResponse
-	32, // 49: opsguard.v1.ManagementService.ListAudit:output_type -> opsguard.v1.ListAuditResponse
-	34, // 50: opsguard.v1.ManagementService.StreamLogs:output_type -> opsguard.v1.LogLine
-	36, // 51: opsguard.v1.ManagementService.SubscribeEvents:output_type -> opsguard.v1.MonitorEvent
-	37, // 52: opsguard.v1.ManagementService.SubscribeAudit:output_type -> opsguard.v1.AuditEntry
-	32, // [32:53] is the sub-list for method output_type
-	11, // [11:32] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	44, // 9: opsguard.v1.MonitorEvent.ts:type_name -> google.protobuf.Timestamp
+	44, // 10: opsguard.v1.AuditEntry.ts:type_name -> google.protobuf.Timestamp
+	39, // 11: opsguard.v1.TunnelFrame.headers:type_name -> opsguard.v1.TunnelHeader
+	0,  // 12: opsguard.v1.ManagementService.Ping:input_type -> opsguard.v1.Empty
+	0,  // 13: opsguard.v1.ManagementService.Self:input_type -> opsguard.v1.Empty
+	3,  // 14: opsguard.v1.ManagementService.ListServices:input_type -> opsguard.v1.ListServicesRequest
+	5,  // 15: opsguard.v1.ManagementService.GetService:input_type -> opsguard.v1.GetServiceRequest
+	7,  // 16: opsguard.v1.ManagementService.Deploy:input_type -> opsguard.v1.DeployRequest
+	8,  // 17: opsguard.v1.ManagementService.Update:input_type -> opsguard.v1.UpdateRequest
+	9,  // 18: opsguard.v1.ManagementService.Scale:input_type -> opsguard.v1.ScaleRequest
+	10, // 19: opsguard.v1.ManagementService.Restart:input_type -> opsguard.v1.RestartRequest
+	11, // 20: opsguard.v1.ManagementService.Remove:input_type -> opsguard.v1.RemoveRequest
+	12, // 21: opsguard.v1.ManagementService.GetOperation:input_type -> opsguard.v1.GetOperationRequest
+	0,  // 22: opsguard.v1.ManagementService.ListNodes:input_type -> opsguard.v1.Empty
+	0,  // 23: opsguard.v1.ManagementService.NodeStats:input_type -> opsguard.v1.Empty
+	18, // 24: opsguard.v1.ManagementService.NodeProcesses:input_type -> opsguard.v1.NodeProcessesRequest
+	21, // 25: opsguard.v1.ManagementService.CheckPort:input_type -> opsguard.v1.CheckPortRequest
+	23, // 26: opsguard.v1.ManagementService.CheckHTTP:input_type -> opsguard.v1.CheckHTTPRequest
+	25, // 27: opsguard.v1.ManagementService.CheckFlow:input_type -> opsguard.v1.CheckFlowRequest
+	29, // 28: opsguard.v1.ManagementService.ListEvents:input_type -> opsguard.v1.ListEventsRequest
+	31, // 29: opsguard.v1.ManagementService.ListAudit:input_type -> opsguard.v1.ListAuditRequest
+	33, // 30: opsguard.v1.ManagementService.StreamLogs:input_type -> opsguard.v1.StreamLogsRequest
+	35, // 31: opsguard.v1.ManagementService.SubscribeEvents:input_type -> opsguard.v1.SubscribeRequest
+	35, // 32: opsguard.v1.ManagementService.SubscribeAudit:input_type -> opsguard.v1.SubscribeRequest
+	38, // 33: opsguard.v1.ManagementService.Tunnel:input_type -> opsguard.v1.TunnelFrame
+	1,  // 34: opsguard.v1.ManagementService.Ping:output_type -> opsguard.v1.Pong
+	2,  // 35: opsguard.v1.ManagementService.Self:output_type -> opsguard.v1.SelfInfo
+	4,  // 36: opsguard.v1.ManagementService.ListServices:output_type -> opsguard.v1.ListServicesResponse
+	6,  // 37: opsguard.v1.ManagementService.GetService:output_type -> opsguard.v1.ServiceDetail
+	13, // 38: opsguard.v1.ManagementService.Deploy:output_type -> opsguard.v1.Operation
+	13, // 39: opsguard.v1.ManagementService.Update:output_type -> opsguard.v1.Operation
+	13, // 40: opsguard.v1.ManagementService.Scale:output_type -> opsguard.v1.Operation
+	13, // 41: opsguard.v1.ManagementService.Restart:output_type -> opsguard.v1.Operation
+	13, // 42: opsguard.v1.ManagementService.Remove:output_type -> opsguard.v1.Operation
+	13, // 43: opsguard.v1.ManagementService.GetOperation:output_type -> opsguard.v1.Operation
+	14, // 44: opsguard.v1.ManagementService.ListNodes:output_type -> opsguard.v1.ListNodesResponse
+	16, // 45: opsguard.v1.ManagementService.NodeStats:output_type -> opsguard.v1.NodeStatsResponse
+	19, // 46: opsguard.v1.ManagementService.NodeProcesses:output_type -> opsguard.v1.ProcessesResponse
+	22, // 47: opsguard.v1.ManagementService.CheckPort:output_type -> opsguard.v1.PortCheckResult
+	24, // 48: opsguard.v1.ManagementService.CheckHTTP:output_type -> opsguard.v1.HTTPCheckResult
+	27, // 49: opsguard.v1.ManagementService.CheckFlow:output_type -> opsguard.v1.FlowCheckResult
+	30, // 50: opsguard.v1.ManagementService.ListEvents:output_type -> opsguard.v1.ListEventsResponse
+	32, // 51: opsguard.v1.ManagementService.ListAudit:output_type -> opsguard.v1.ListAuditResponse
+	34, // 52: opsguard.v1.ManagementService.StreamLogs:output_type -> opsguard.v1.LogLine
+	36, // 53: opsguard.v1.ManagementService.SubscribeEvents:output_type -> opsguard.v1.MonitorEvent
+	37, // 54: opsguard.v1.ManagementService.SubscribeAudit:output_type -> opsguard.v1.AuditEntry
+	38, // 55: opsguard.v1.ManagementService.Tunnel:output_type -> opsguard.v1.TunnelFrame
+	34, // [34:56] is the sub-list for method output_type
+	12, // [12:34] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_opsguard_proto_init() }
@@ -3056,7 +3225,7 @@ func file_opsguard_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_opsguard_proto_rawDesc), len(file_opsguard_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   42,
+			NumMessages:   44,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

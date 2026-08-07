@@ -11,6 +11,16 @@ auth:
   token_secret: "d46ab1ef0b62f3f33577b67c641da4f4af1a117d11201516"
   token_ttl: "24h"
 
+# IdP（OpsGaurd 作为 OIDC 身份提供者）：启用后其他系统（r-nacos 控制台等）
+# 可经 OpsGaurd 账号单点登录。issuer 填对外可达地址——政务外网用户经此访问。
+# 配合 Worker 的 OPSGUARD_TUNNEL_BASE / OPSGUARD_IDP_PUBLIC_ISSUER，隔离网段集群
+# 可经 gRPC 隧道访问 IdP，无需开反向防火墙。详见 docs/IdP-接入指南.md。
+# idp:
+#   enabled: true
+#   issuer: "http://172.28.50.176:8080"   # 政务外网映射地址（authorize 浏览器跳转用）
+#   access_token_ttl: "1h"
+#   refresh_token_ttl: "720h"
+
 # 持久化：LevelDB 数据目录（容器内 /app/data，挂载宿主 /opt/opsguard/server/data）
 store:
   path: "./data"
