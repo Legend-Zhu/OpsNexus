@@ -63,26 +63,33 @@ func (h *Handlers) ListWorkloads(c *gin.Context) {
 }
 
 // GetWorkload godoc: GET /api/v1/clusters/:name/workloads/:service
+// 服务详情（tasks + 健康），并附最近一次部署/更新的配置快照（config）供
+// 前端"编辑服务"预填；无快照（外部创建等）时省略。
 func (h *Handlers) GetWorkload(c *gin.Context) {
 	cli, got := h.workerClient(c)
 	if !got {
 		return
 	}
-	detail, err := cli.GetWorkload(c.Request.Context(), c.Param("service"))
+	name := c.Param("service")
+	detail, err := cli.GetWorkload(c.Request.Context(), name)
 	if err != nil {
 		proxyErr(c, "get workload", err)
 		return
 	}
+	if sc, _ := h.clusters.ServiceConfig(c.Param("name"), name); sc != nil {
+		detail.Config = sc.Config
+	}
 	ok(c, http.StatusOK, detail)
 }
 
-// deployWorkloadRequest 部署请求体（config 为 Worker YAML/JSON 配置）。
+// deployWorkloadRequest 部署/更新请求体（config 为 Worker YAML/JSON 配置）。
 type deployWorkloadRequest struct {
 	Config string `json:"config" binding:"required"`
 }
 
 // DeployWorkload godoc: POST /api/v1/clusters/:name/workloads
 // 部署服务：config 下发到 Worker，返回异步操作（前端轮询 ops/:id）。
+// 成功后保存配置快照（编辑预填用）。
 func (h *Handlers) DeployWorkload(c *gin.Context) {
 	cli, got := h.workerClient(c)
 	if !got {
@@ -98,6 +105,32 @@ func (h *Handlers) DeployWorkload(c *gin.Context) {
 		proxyErr(c, "deploy", err)
 		return
 	}
+	if op.Service != "" {
+		_ = h.clusters.SaveServiceConfig(c.Param("name"), op.Service, req.Config)
+	}
+	ok(c, http.StatusAccepted, op)
+}
+
+// UpdateWorkload godoc: PUT /api/v1/clusters/:name/workloads/:service
+// 更新服务配置（整体替换，语义同部署）：config 下发到 Worker 的 Update RPC，
+// 成功后更新配置快照。
+func (h *Handlers) UpdateWorkload(c *gin.Context) {
+	cli, got := h.workerClient(c)
+	if !got {
+		return
+	}
+	var req deployWorkloadRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
+		return
+	}
+	name := c.Param("service")
+	op, err := cli.Update(c.Request.Context(), name, req.Config)
+	if err != nil {
+		proxyErr(c, "update", err)
+		return
+	}
+	_ = h.clusters.SaveServiceConfig(c.Param("name"), name, req.Config)
 	ok(c, http.StatusAccepted, op)
 }
 
@@ -137,16 +170,19 @@ func (h *Handlers) RestartWorkload(c *gin.Context) {
 }
 
 // RemoveWorkload godoc: DELETE /api/v1/clusters/:name/workloads/:service
+// 移除服务，成功后清理其配置快照。
 func (h *Handlers) RemoveWorkload(c *gin.Context) {
 	cli, got := h.workerClient(c)
 	if !got {
 		return
 	}
-	op, err := cli.Remove(c.Request.Context(), c.Param("service"))
+	name := c.Param("service")
+	op, err := cli.Remove(c.Request.Context(), name)
 	if err != nil {
 		proxyErr(c, "remove", err)
 		return
 	}
+	_ = h.clusters.DeleteServiceConfig(c.Param("name"), name)
 	ok(c, http.StatusOK, op)
 }
 
@@ -213,14 +249,16 @@ func mustJSON(v any) string {
 
 // --- 监控事件 / 审计（经 Worker /api/v1/events、/api/v1/audit） ---
 
-// ListEvents godoc: GET /api/v1/clusters/:name/events
+// ListEvents godoc: GET /api/v1/clusters/:name/events?service=&type=&limit=&after_seq=
+// after_seq 为倒序分页游标：返回 seq < after_seq 的更早一页（0 = 最新一页）。
 func (h *Handlers) ListEvents(c *gin.Context) {
 	cli, got := h.workerClient(c)
 	if !got {
 		return
 	}
 	limit, _ := strconv.Atoi(c.Query("limit"))
-	items, err := cli.Events(c.Request.Context(), c.Query("service"), c.Query("type"), limit)
+	afterSeq, _ := strconv.ParseInt(c.Query("after_seq"), 10, 64)
+	items, err := cli.Events(c.Request.Context(), c.Query("service"), c.Query("type"), afterSeq, limit)
 	if err != nil {
 		proxyErr(c, "list events", err)
 		return

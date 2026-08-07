@@ -111,6 +111,74 @@ func TestAddDuplicate(t *testing.T) {
 	}
 }
 
+// TestAddNameValidation 集群名必须匹配 [a-zA-Z0-9][a-zA-Z0-9._-]{0,62}。
+func TestAddNameValidation(t *testing.T) {
+	svc, url := newTestService(t, false)
+	for _, bad := range []string{"", "a/b", "a b", "#x", "-lead", ".lead", strings.Repeat("a", 64)} {
+		if _, err := svc.Add(context.Background(), &store.Cluster{Name: bad, WorkerURL: url}); err == nil {
+			t.Fatalf("name %q should be rejected", bad)
+		}
+	}
+	for _, ok := range []string{"dev", "dev-cluster", "c1", "a.b_c-d", strings.Repeat("a", 63)} {
+		if _, err := svc.Add(context.Background(), &store.Cluster{Name: ok, WorkerURL: url}); err != nil {
+			t.Fatalf("name %q should be accepted: %v", ok, err)
+		}
+	}
+}
+
+// TestPublicCarriesErr Public() 保留探测错误（离线原因对前端可见），仅抹除 token。
+func TestPublicCarriesErr(t *testing.T) {
+	svc, url := newTestService(t, false)
+	c, err := svc.Add(context.Background(), &store.Cluster{Name: "dev", WorkerURL: url, Token: "secret"})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	c.Err = "probe: connection refused"
+	pub := c.Public()
+	if pub.Err != "probe: connection refused" {
+		t.Fatalf("Public() should carry Err, got %q", pub.Err)
+	}
+	if pub.Token != "" || pub.HasToken != true {
+		t.Fatalf("Public() should mask token: token=%q hasToken=%v", pub.Token, pub.HasToken)
+	}
+}
+
+// TestServiceConfigSnapshot 服务配置快照的读写删。
+func TestServiceConfigSnapshot(t *testing.T) {
+	svc, _ := newTestService(t, false)
+	cfg := "service:\n  name: web\n  image: nginx:alpine\n"
+
+	if sc, err := svc.ServiceConfig("dev", "web"); err != nil || sc != nil {
+		t.Fatalf("missing snapshot should return nil: %v", err)
+	}
+	if err := svc.SaveServiceConfig("dev", "web", cfg); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	sc, err := svc.ServiceConfig("dev", "web")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sc == nil || sc.Config != cfg {
+		t.Fatalf("snapshot mismatch: %+v", sc)
+	}
+	// 覆盖写
+	newCfg := cfg + "  replicas: 2\n"
+	if err := svc.SaveServiceConfig("dev", "web", newCfg); err != nil {
+		t.Fatalf("re-save: %v", err)
+	}
+	sc, _ = svc.ServiceConfig("dev", "web")
+	if sc.Config != newCfg {
+		t.Fatalf("overwrite failed: %+v", sc)
+	}
+	// 删除
+	if err := svc.DeleteServiceConfig("dev", "web"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if sc, _ := svc.ServiceConfig("dev", "web"); sc != nil {
+		t.Fatal("snapshot should be gone after delete")
+	}
+}
+
 // TestListProbeAndOffline 列表逐个探测：可达 → online；停掉的 Worker → offline。
 func TestListProbeAndOffline(t *testing.T) {
 	dir := t.TempDir()

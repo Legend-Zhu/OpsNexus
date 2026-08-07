@@ -9,12 +9,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy"
 )
+
+// namePattern 集群名合法字符集：字母/数字开头，可含 . _ -，最长 63。
+var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$`)
 
 // ErrNotFound 集群不存在。
 type ErrNotFound struct{ Name string }
@@ -127,6 +131,11 @@ func (s *Service) Add(ctx context.Context, in *store.Cluster) (*store.Cluster, e
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		return nil, fmt.Errorf("cluster name is required")
+	}
+	// 名称同时作为 URL 路径段（/clusters/:name）与 router-link 参数，限制
+	// 字符集避免特殊字符破坏路由/编码。
+	if !namePattern.MatchString(name) {
+		return nil, fmt.Errorf("cluster name must match %s (letters, digits, . _ -; 1-63 chars)", namePattern)
 	}
 	if in.WorkerURL == "" {
 		return nil, fmt.Errorf("worker_url is required")
@@ -349,6 +358,23 @@ func (s *Service) WorkerClient(name string) (*workerproxy.Client, error) {
 	cli.SetTimeout(30 * time.Second)
 	cli.SetCache(s.store, name)
 	return cli, nil
+}
+
+// --- 服务配置快照（svccfg：部署/更新时保存原始 config，编辑预填用） ---
+
+// SaveServiceConfig 保存（覆盖）集群内某个服务的配置快照。
+func (s *Service) SaveServiceConfig(cluster, service, config string) error {
+	return s.store.PutServiceConfig(cluster, service, config)
+}
+
+// ServiceConfig 读取服务配置快照；不存在返回 (nil, nil)。
+func (s *Service) ServiceConfig(cluster, service string) (*store.ServiceConfig, error) {
+	return s.store.GetServiceConfig(cluster, service)
+}
+
+// DeleteServiceConfig 删除服务配置快照（服务移除时清理）。
+func (s *Service) DeleteServiceConfig(cluster, service string) error {
+	return s.store.DeleteServiceConfig(cluster, service)
 }
 
 // --- 告警（P3，经 store.Alert） ---

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 
@@ -27,6 +28,9 @@ type InventoryView struct {
 	Image    string `json:"image,omitempty"`
 	Ports    string `json:"ports,omitempty"`
 	Desc     string `json:"desc,omitempty"`
+	// Ref 仅 inventory 条目携带：standalone-container → 容器名；host-service → host:port。
+	// 前端"重启容器"等操作需要它（Name 只是展示名）。
+	Ref string `json:"ref,omitempty"`
 }
 
 // GetInventory GET /api/v1/clusters/:name/inventory
@@ -38,7 +42,7 @@ type InventoryView struct {
 //   - host-service: 端口探活 ok/down
 //
 // 集群不可达时仍返回 inventory 配置声明（status=unreachable），swarm 部分
-// 跳过。
+// 跳过。items 探测并发执行（每个 item 一次 RPC，串行会随条目数线性变慢）。
 func (h *Handlers) GetInventory(c *gin.Context) {
 	if h.clusters == nil {
 		fail(c, http.StatusServiceUnavailable, "cluster service not initialized")
@@ -86,18 +90,21 @@ func (h *Handlers) GetInventory(c *gin.Context) {
 		}
 	}
 
-	// 2. inventory items → 按 type 分发查询
+	// 2. inventory items → 按 type 分发查询。节点直接传 hostname（worker 的
+	// ResolveNodeAddr 支持按 hostname 解析，无需先拉节点表建映射）。
 	if clusterRec.Inventory != nil && len(clusterRec.Inventory.Items) > 0 {
-		// hostname → node ID 映射（用于 NodeContainers / CheckPort 的 nodeID 参数）
-		nodes, _ := cli.ListNodes(ctx)
-		nodeMap := make(map[string]string, len(nodes))
-		for _, n := range nodes {
-			nodeMap[n.Hostname] = n.ID
+		items := clusterRec.Inventory.Items
+		itemViews := make([]InventoryView, len(items))
+		var wg sync.WaitGroup
+		for i := range items {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				itemViews[i] = probeInventoryItem(ctx, cli, items[i])
+			}(i)
 		}
-
-		for _, item := range clusterRec.Inventory.Items {
-			views = append(views, probeInventoryItem(ctx, cli, item, nodeMap))
-		}
+		wg.Wait()
+		views = append(views, itemViews...)
 	}
 
 	ok(c, http.StatusOK, gin.H{"items": views})
@@ -131,13 +138,13 @@ func (h *Handlers) UpsertInventory(c *gin.Context) {
 }
 
 // probeInventoryItem 按 item.Type 分发查询，返回带实时状态的 InventoryView。
-//   - standalone-container: 在 item.Node 上查 NodeContainers，按 ref 匹配容器名
-//   - host-service: 解析 ref 为 host:port，从 item.Node（或 manager）探活
+//   - standalone-container: 在 item.Node（hostname）上查 NodeContainers，按 ref 匹配容器名
+//   - host-service: 解析 ref 为 host:port，从 item.Node（或 manager，node 为空时）
+//     探活——worker 的 ResolveNodeAddr 空 id 即本机
 func probeInventoryItem(
 	ctx context.Context,
 	cli *workerproxy.Client,
 	item store.InventoryItem,
-	nodeMap map[string]string,
 ) InventoryView {
 	v := InventoryView{
 		Name:     item.Name,
@@ -145,18 +152,14 @@ func probeInventoryItem(
 		Category: item.Category,
 		Source:   "inventory",
 		Node:     item.Node,
+		Ref:      item.Ref,
 		Desc:     item.Desc,
 		Status:   "unknown",
 	}
 
 	switch item.Type {
 	case store.InvStandaloneContainer:
-		nodeID, ok := nodeMap[item.Node]
-		if !ok {
-			v.Status = "node-not-found"
-			break
-		}
-		containers, err := cli.NodeContainers(ctx, nodeID)
+		containers, err := cli.NodeContainers(ctx, item.Node)
 		if err != nil {
 			v.Status = "unreachable"
 			break
@@ -184,12 +187,8 @@ func probeInventoryItem(
 			break
 		}
 		port, _ := strconv.Atoi(portStr)
-		// 探活发起节点：优先 item.Node，未指定时用 manager（空 nodeID）
-		nodeID := ""
-		if item.Node != "" {
-			nodeID = nodeMap[item.Node] // may be "" if node not found
-		}
-		result, pErr := cli.CheckPort(ctx, nodeID, host, port, "5s")
+		// 探活发起节点：item.Node（hostname）或空串 = manager 本机
+		result, pErr := cli.CheckPort(ctx, item.Node, host, port, "2s")
 		if pErr != nil {
 			v.Status = "unreachable"
 			break

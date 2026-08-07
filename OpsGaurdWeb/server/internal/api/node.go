@@ -54,3 +54,24 @@ func (h *Handlers) NodeContainers(c *gin.Context) {
 	}
 	ok(c, http.StatusOK, gin.H{"items": cs})
 }
+
+// NodeContainerRestart godoc: POST /api/v1/clusters/:name/nodes/:id/containers/restart
+// 重启节点上的一个容器（standalone docker run 容器；body: {"container": "名称或ID"}）。
+func (h *Handlers) NodeContainerRestart(c *gin.Context) {
+	cli, got := h.workerClient(c)
+	if !got {
+		return
+	}
+	var req struct {
+		Container string `json:"container" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
+		return
+	}
+	if err := cli.RestartContainer(c.Request.Context(), c.Param("id"), req.Container); err != nil {
+		proxyErr(c, "restart container", err)
+		return
+	}
+	ok(c, http.StatusOK, gin.H{"restarted": req.Container})
+}

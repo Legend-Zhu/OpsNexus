@@ -33,6 +33,7 @@ const (
 	BucketInvestigation = "investigation" // 排查会话落库（对话式 troubleshoot）
 	BucketSecret        = "secret"        // 密钥引用（巡检 flow 拨测账号等）
 	BucketCursor        = "cursor"        // 事件/审计订阅游标（cluster -> last_seq）
+	BucketSvcCfg        = "svccfg"        // 服务配置快照（cluster/service -> 部署时 config YAML，编辑预填用）
 
 	// IdP（OpsGaurd 作为 OIDC 身份提供者）相关 bucket。v2 新增，无历史数据迁移。
 	BucketClient        = "idpclient"  // OIDC client（RP）注册表

@@ -105,6 +105,7 @@ func New(h *api.Handlers) *gin.Engine {
 		clusters.GET("/:name/workloads", h.ListWorkloads)
 		clusters.POST("/:name/workloads", h.DeployWorkload)
 		clusters.GET("/:name/workloads/:service", h.GetWorkload)
+		clusters.PUT("/:name/workloads/:service", h.UpdateWorkload)
 		clusters.DELETE("/:name/workloads/:service", h.RemoveWorkload)
 		clusters.POST("/:name/workloads/:service/scale", h.ScaleWorkload)
 		clusters.POST("/:name/workloads/:service/restart", h.RestartWorkload)
@@ -118,6 +119,7 @@ func New(h *api.Handlers) *gin.Engine {
 		clusters.GET("/:name/nodes", h.ListNodes)
 		clusters.GET("/:name/nodes/:id/processes", h.NodeProcesses)
 		clusters.GET("/:name/nodes/:id/containers", h.NodeContainers)
+		clusters.POST("/:name/nodes/:id/containers/restart", h.NodeContainerRestart)
 
 		// 纳管清单（集群纳管的外部对象：standalone 容器 / 宿主机服务）
 		clusters.GET("/:name/inventory", h.GetInventory)

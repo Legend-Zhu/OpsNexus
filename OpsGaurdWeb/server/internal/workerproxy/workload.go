@@ -240,6 +240,9 @@ type WorkloadDetail struct {
 	Workload
 	Tasks   []TaskView `json:"tasks"`
 	Healthy int        `json:"healthy"`
+	// Config 最近一次部署/更新的原始配置体（svccfg 快照，仅 GetWorkload 由
+	// handler 填充；worker 返回的详情里恒为空）。
+	Config string `json:"config,omitempty"`
 }
 
 // TaskView 任务的轻量视图。

@@ -109,7 +109,7 @@ func (h *Handlers) alertAndClient(c *gin.Context, alertID string) (*store.Alert,
 // gatherEvidence 拉取告警上下文证据（近期事件 + 审计 + 服务日志）。
 // 每个证据源都有字节上限，防海量证据一次性打爆模型上下文；失败不阻塞。
 func gatherEvidence(ctx context.Context, cli *workerproxy.Client, service string, maxEvents, logTail int) (json.RawMessage, json.RawMessage, []workerproxy.LogLine) {
-	events, _ := cli.Events(ctx, service, "", maxEvents)
+	events, _ := cli.Events(ctx, service, "", 0, maxEvents)
 	audit, _ := cli.Audit(ctx, "", 10)
 	events = capEvidence(events, evidenceBytes)
 	audit = capEvidence(audit, evidenceBytes)

@@ -40,12 +40,12 @@ type Cluster struct {
 	Err string `json:"-"`
 }
 
-// Public 返回去除敏感字段（Token/Err）的对外视图，保留 HasToken 布尔标记。
+// Public 返回去除敏感字段（Token）的对外视图，保留 HasToken 布尔标记与
+// 最近一次探测错误（Err，供前端展示离线原因）。
 func (c *Cluster) Public() *Cluster {
 	out := *c
 	out.HasToken = c.Token != ""
 	out.Token = ""
-	out.Err = ""
 	return &out
 }
 

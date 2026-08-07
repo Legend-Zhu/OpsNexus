@@ -360,6 +360,21 @@ func (c *Client) NodeContainers(ctx context.Context, nodeID string) ([]Container
 	return out, nil
 }
 
+// RestartContainer 重启指定节点上的容器（standalone docker run 容器）。
+// nodeID 为 node ID 或 hostname（worker 的 ResolveNodeAddr 语义）。
+func (c *Client) RestartContainer(ctx context.Context, nodeID, container string) error {
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.stub.RestartContainer(cctx, &pb.ContainerActionRequest{NodeId: nodeID, Container: container})
+	if err != nil {
+		return c.wrapErr(err)
+	}
+	if !resp.GetOk() {
+		return fmt.Errorf("restart container %q on %s: %s", container, nodeID, resp.GetMessage())
+	}
+	return nil
+}
+
 // ListNodes 获取集群节点列表。
 // ListNodes 获取集群节点列表。启用缓存时先返回缓存快照（避免页面白屏），
 // 后台刷新并更新缓存。
@@ -481,11 +496,11 @@ func (c *Client) CheckFlow(ctx context.Context, nodeID string, req FlowCheckRequ
 }
 
 // Events 获取监控事件（原始 JSON，P3 消费）。
-func (c *Client) Events(ctx context.Context, service, typ string, limit int) (json.RawMessage, error) {
+func (c *Client) Events(ctx context.Context, service, typ string, afterSeq int64, limit int) (json.RawMessage, error) {
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.stub.ListEvents(cctx, &pb.ListEventsRequest{
-		Service: service, Type: typ, Limit: int32(limit),
+		Service: service, Type: typ, Limit: int32(limit), AfterSeq: afterSeq,
 	})
 	if err != nil {
 		return nil, c.wrapErr(err)
