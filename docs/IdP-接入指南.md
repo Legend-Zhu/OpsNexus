@@ -94,3 +94,150 @@ Worker 的 `/.well-known/oauth-protected-resource` 会把该 issuer 写入 `auth
 | 动态 client 注册 | 不支持 | client 仅由管理员预注册（企业内可信对接） |
 | consent 页 | 不支持 | client 预注册即视为可信，授权码直接签发；`consent_required` 字段已预留 |
 | 多实例部署 | 部分 | token/refresh/client 已落 LevelDB 可共享；IdP 会话 cookie 需共享存储（已知约束） |
+
+## 六、HTTPS 与证书（含自签命令）
+
+> ⚠️ 生产环境 issuer 必须 `https://`（localhost 例外）。OpsGaurd 进程本身跑明文 HTTP，证书装在反向代理（nginx / ingress）做 TLS 终结。
+
+按场景三选一：
+
+| 场景 | 推荐方案 | 证书分发 |
+|---|---|---|
+| 纯本机开发 | `http://localhost` / `http://127.0.0.1` | 无需证书（代码已开例外） |
+| 内网生产 | 自签 **CA** + 该 CA 签发的服务证书 | 把 CA 证书分发给所有 RP 的系统信任池 |
+| 有正式域名 | Let's Encrypt / 内网 PKI | 自动信任，免维护 |
+
+### 6.1 自签 CA + 服务证书（内网生产推荐）
+
+下面的命令生成一个自签 CA，再用它签发 OpsGaurd 用的服务证书（含 SAN 多域名/IP）。关键是**签 CA 这一步用 CA 证书（非服务私钥）去分发给客户端**——这样以后轮换服务证书不用再逐台重装。
+
+```bash
+# === 1) 生成自签 CA（ca.key + ca.crt）—— 一次，长期使用，妥善保管 ca.key ===
+openssl genrsa -out ca.key 4096
+openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 \
+  -subj "/CN=OpsGaurd Internal CA" \
+  -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -out ca.crt
+
+# === 2) 生成服务证书私钥 + CSR ===
+openssl genrsa -out opsguard.key 2048
+
+# 3) 准备 SAN 扩展（多域名/多IP 都写这里；RP 调用时必须命中其中之一）
+cat > opsguard.ext <<'EOF'
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = opsguard.example.com
+DNS.2 = opsguard
+IP.1  = 10.0.0.10
+IP.2  = 192.168.1.10
+EOF
+
+# === 4) 用 CA 签发服务证书（有效期 1 年，到期用同一 CA 重签，ca.key 不动） ===
+openssl x509 -req -in opsguard.csr \
+  -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out opsguard.crt -days 365 -sha256 \
+  -extfile opsguard.ext
+```
+
+产物：
+- `ca.crt` —— **CA 根证书，分发给所有 RP**（下文 6.3）
+- `opsguard.key` + `opsguard.crt` —— 服务证书私钥与证书，装到 nginx/ingress（下文 6.2）
+- `ca.key`、`ca.srl` —— **CA 私钥，严格保密**，只在续签服务证书时用到
+
+### 6.2 nginx 做 TLS 终结
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name opsguard.example.com;
+
+    ssl_certificate     /etc/nginx/tls/opsguard.crt;   # 上一步的 opsguard.crt
+    ssl_certificate_key /etc/nginx/tls/opsguard.key;   # 上一步的 opsguard.key
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    # IdP 端点与前端 SPA 都转发给本机 OpsGaurd（明文 HTTP，:8090）
+    location / {
+        proxy_pass http://127.0.0.1:8090;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;   # 让 OpsGaurd 知道外面是 https
+    }
+}
+```
+
+对应 `config.yaml`：
+```yaml
+idp:
+  enabled: true
+  issuer: "https://opsguard.example.com"   # 对外 https 地址，须命中服务证书 SAN
+```
+
+### 6.3 RP 客户端信任自签 CA
+
+分两种思路，**优先选 6.3.1（装系统信任池）**，因为它一次配置全局生效、不污染代码。
+
+#### 6.3.1 把 CA 装进操作系统信任池（推荐）
+
+**Linux（RHEL/CentOS）**：
+```bash
+sudo cp ca.crt /etc/pki/ca-trust/source/anchors/opsguard-ca.crt
+sudo update-ca-trust extract
+```
+**Linux（Debian/Ubuntu）**：
+```bash
+sudo cp ca.crt /usr/local/share/ca-certificates/opsguard-ca.crt
+sudo update-ca-certificates
+```
+装好后，go-oidc / go 客户端默认 `oidc.NewProvider(ctx, ...)` 会自动信任（Go 读系统证书池）。
+
+**RP 本身是 nginx/ingress 反代**：同样把 CA 放到反代验证上游或做 mTLS 的位置。
+
+#### 6.3.2 Go 客户端代码级信任（不便动系统时）
+
+把 `ca.crt` 与程序一起部署，构造带 CA 池的 http.Client：
+
+```go
+import (
+    "crypto/x509"
+    "net/http"
+    "os"
+
+    "github.com/coreos/go-oidc/v3/oidc"
+)
+
+func newProviderWithCA(issuer, caPath string) (*oidc.Provider, error) {
+    caPEM, err := os.ReadFile(caPath)
+    if err != nil {
+        return nil, err
+    }
+    pool := x509.NewCertPool()
+    if !pool.AppendCertsFromPEM(caPEM) {
+        return nil, fmt.Errorf("invalid CA pem")
+    }
+    client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
+    return oidc.NewProvider(oidc.ClientContext(context.Background(), client), issuer)
+}
+```
+
+> ❌ 不要在生产用 `InsecureSkipVerify: true` 绕过校验——它跳过所有证书检查，易被中间人。仅本机调试临时用。
+
+### 6.4 续签服务证书
+
+服务证书到期前，用原 CA（`ca.key` 不变）重签，nginx reload 即可，RP 端无需任何改动（CA 没变）：
+
+```bash
+openssl x509 -req -in opsguard.csr \
+  -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out opsguard.crt -days 365 -sha256 -extfile opsguard.ext
+sudo systemctl reload nginx
+```
+
+CA 私钥（`ca.key`）泄漏需重新生成整套 CA + 所有服务证书，并把新 CA 重新分发到所有 RP。
+
