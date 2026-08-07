@@ -9,14 +9,14 @@
 # swarm overlay 用 UDP 4789，已确认空闲，互不冲突。
 # swarm 会静默忽略 privileged/pid: host（见 README「限制」一节）。
 #
-# 前置：5 节点均已 docker load opsguard-worker:1.0.1；/etc/opsguard/agent-config.yaml 就位。
+# 前置：5 节点均已 docker load opsguard-worker:1.0.8；/etc/opsguard/agent-config.yaml 就位。
 # 部署（在 232 上）：docker stack deploy -c stack.disaster.yml opsguard
 
 version: "3.8"
 
 services:
   worker:
-    image: opsguard-worker:1.0.2
+    image: opsguard-worker:1.0.8
     hostname: "{{.Node.Hostname}}"
     # swarm 忽略以下两项（保留作普通容器形态的权限说明）
     privileged: true
