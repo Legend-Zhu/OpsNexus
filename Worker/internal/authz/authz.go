@@ -49,7 +49,14 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for _, p := range m.PublicPaths {
-			if r.URL.Path == p {
+			// Entries ending in '/' match as a path prefix (e.g. "/idp-proxy/"
+			// matches "/idp-proxy/.well-known/..."); others match exactly.
+			if strings.HasSuffix(p, "/") {
+				if strings.HasPrefix(r.URL.Path, p) {
+					next.ServeHTTP(w, r)
+					return
+				}
+			} else if r.URL.Path == p {
 				next.ServeHTTP(w, r)
 				return
 			}

@@ -140,24 +140,12 @@ func (c *Config) Validate() error {
 		if c.IdP.Issuer == "" {
 			return fmt.Errorf("idp.issuer is required when idp.enabled is true")
 		}
-		// 生产强制 https；localhost 例外便于本地开发。
-		if !isHTTPSorLocalhost(c.IdP.Issuer) {
-			return fmt.Errorf("idp.issuer must be an https:// URL (got %q)", c.IdP.Issuer)
+		// issuer 须是带 scheme 的合法 URL。不强制 https：内网/政务网部署常用
+		// http（OIDC 浏览器跳转虽建议 https，但内网可信环境下 http 可接受；
+		// 生产对外暴露建议在前置反代做 TLS 终结，见 docs/IdP-接入指南.md 第六章）。
+		if !strings.Contains(c.IdP.Issuer, "://") {
+			return fmt.Errorf("idp.issuer must be a full URL with scheme (got %q)", c.IdP.Issuer)
 		}
 	}
 	return nil
-}
-
-// isHTTPSorLocalhost issuer 是否合规：https:// 或 http://localhost/http://127.0.0.1。
-func isHTTPSorLocalhost(issuer string) bool {
-	if issuer == "" {
-		return false
-	}
-	if strings.HasPrefix(issuer, "https://") {
-		return true
-	}
-	if strings.HasPrefix(issuer, "http://localhost") || strings.HasPrefix(issuer, "http://127.0.0.1") {
-		return true
-	}
-	return false
 }

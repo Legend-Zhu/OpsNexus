@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy/pb"
+	"google.golang.org/grpc/metadata"
 )
 
 // ServeTunnel opens the reverse IdP tunnel bidi stream to the Worker and runs
@@ -33,6 +34,13 @@ func (c *Client) ServeTunnel(ctx context.Context, localBase string, log *slog.Lo
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// gRPC bidi streams carry per-RPC metadata from the context; the auth token
+	// must be attached here (unary RPCs do it in callCtx, but streams open the
+	// context directly). Without it the Worker's stream interceptor rejects with
+	// Unauthenticated.
+	if c.token != "" {
+		streamCtx = metadata.AppendToOutgoingContext(streamCtx, "authorization", "Bearer "+c.token)
+	}
 	stream, err := c.stub.Tunnel(streamCtx)
 	if err != nil {
 		return c.wrapErr(err)

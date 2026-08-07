@@ -11,6 +11,7 @@ import (
 	"io"
 
 	pb "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy/pb"
+	"google.golang.org/grpc/metadata"
 )
 
 // --- 操作（异步编排）---
@@ -359,6 +360,11 @@ func (s *EventSubscription) Ack(seq int64) error {
 // afterSeq (0 = from the beginning). The caller owns Recv/Ack; the stream
 // stays open until Recv returns io.EOF or an error.
 func (c *Client) SubscribeEvents(ctx context.Context, afterSeq int64) (*EventSubscription, error) {
+	// Attach bearer token to the stream context (bidi streams read metadata from
+	// the context passed to the open call; unary RPCs use callCtx, streams do not).
+	if c.token != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.token)
+	}
 	stream, err := c.stub.SubscribeEvents(ctx)
 	if err != nil {
 		return nil, c.wrapErr(err)
@@ -385,6 +391,9 @@ func (s *AuditSubscription) Ack(seq int64) error {
 
 // SubscribeAudit opens a bidirectional audit subscription starting after afterSeq.
 func (c *Client) SubscribeAudit(ctx context.Context, afterSeq int64) (*AuditSubscription, error) {
+	if c.token != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.token)
+	}
 	stream, err := c.stub.SubscribeAudit(ctx)
 	if err != nil {
 		return nil, c.wrapErr(err)
