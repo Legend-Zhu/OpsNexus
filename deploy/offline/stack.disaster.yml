@@ -16,7 +16,7 @@ version: "3.8"
 
 services:
   worker:
-    image: opsguard-worker:1.0.8
+    image: opsguard-worker:1.1.0
     hostname: "{{.Node.Hostname}}"
     # swarm 忽略以下两项（保留作普通容器形态的权限说明）
     privileged: true
@@ -32,6 +32,10 @@ services:
           memory: 256M
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
+      # IdP 反向隧道：集群内服务（如 r-nacos）经 worker 的 /idp-proxy/ 访问
+      # 管理端 IdP；TUNNEL_BASE 是集群内可达的 worker HTTP 地址。
+      - OPSGUARD_TUNNEL_BASE=http://10.60.171.232:6060
+      - OPSGUARD_IDP_PUBLIC_ISSUER=http://172.28.50.176:8080
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /etc/opsguard/agent-config.yaml:/etc/opsguard/agent-config.yaml:ro
