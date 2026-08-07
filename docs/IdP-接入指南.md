@@ -293,3 +293,19 @@ curl http://10.60.171.232:8080/idp-proxy/.well-known/openid-configuration | jq .
 - 仅适用 manager 角色 Worker（gRPC 服务在 manager 上）；对接服务需与该 Worker 同集群可达。
 - `authorize`/`logout` 依赖运维浏览器可达管理端公网地址（OIDC 浏览器跳转固有要求）。
 - 隧道断开时，在途请求超时失败（调用方重试）；管理端自动重连（指数退避，仿 `SubscribeEvents`）。
+
+### 实测记录（2026-08-07 disaster 集群）
+
+disaster 集群（`10.60.171.x`，swarm leader `10.60.171.232`）对接管理端（`10.60.189.6`，政务外网映射 `172.28.50.176:8080`）实测通过。部署过程踩到的坑（均已修复）：
+
+1. **镜像名**：r-nacos 官方镜像是 `qingpan/rnacos`（不是 rustack/qinghui），用 `stable` tag（v0.8.6）。
+2. **seccomp**：r-nacos 的 Rust tokio runtime 必须放宽 seccomp（`--security-opt seccomp=unconfined`），否则起线程 panic（exit 101）。docker swarm service 不支持该 flag，故试点用 `docker run` 部署。
+3. **控制台端口**：v0.8.x 是 `10848`（非旧版 10010）；OpenAPI `8848`、gRPC `9848`、Raft `7848`。
+4. **idptunnel bidi stream 鉴权**：bidi stream（Tunnel/SubscribeEvents/SubscribeAudit）打开时必须用 `metadata.AppendToOutgoingContext` 注入 bearer token——原实现仅 unary RPC 的 `callCtx` 带 token，bidi 裸连，Worker 开鉴权后报 `Unauthenticated`。已修复（`workerproxy/tunnel.go`、`workload.go`）。
+5. **authz PublicPaths 前缀匹配**：Worker 的 `/idp-proxy/` 需放行其下所有子路径，原精确匹配不放行。已修复（`authz.go`：以 `/` 结尾的项按前缀匹配）。
+6. **OPSGUARD_TUNNEL_BASE 端口**：填 Worker 的 HTTP 端口（disaster 是 `6060`），不是管理端的 8080。
+7. **issuer http 校验**：内网用 http 合法，config 校验已放宽（不再强制 https，仅要求带 scheme）。
+
+**镜像分发**（离线环境）：本机构建 `opsguard-server:1.1.2` + `opsguard-worker:1.0.5`，`docker save` 后经 sftp 分发（server→189.6，worker→5 节点），各节点 `docker load`，server `docker rm -f`+`run` 重建、worker `docker service update --image`。
+
+**验证**：从 232 执行 `curl http://localhost:6060/idp-proxy/api/v1/idp/jwks` 返回 `200`（459B RSA 公钥），discovery 经隧道回源并改写（authorize→公网、token/jwks/userinfo→隧道地址）。隧道链路打通。

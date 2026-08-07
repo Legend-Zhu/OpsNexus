@@ -154,54 +154,36 @@ r-nacos 控制台支持 OAuth2 登录（`OAUTH2_*` 环境变量）。对接 OpsG
 env:
   # ... 其余不变
   - "OAUTH2_ENABLE=true"
-  - "OAUTH2_ISSUER=http://10.60.171.232:8080/idp-proxy"   # Worker 本地隧道入口
+  - "OAUTH2_ISSUER=http://10.60.171.232:6060/idp-proxy"   # Worker 本地隧道入口（worker http 端口 6060）
   - "OAUTH2_CLIENT_ID=cli-rnacos"
   - "OAUTH2_CLIENT_SECRET=<注册得到的一次性 secret>"
 ```
 
 r-nacos 拉 discovery 时拿到改写后的端点：`authorize`→公网管理端（浏览器跳），`token`/`jwks`/`userinfo`→Worker 隧道地址（服务端走）。登录流程自洽，全程不开反向防火墙。
 
-**部署模板（OpsGaurd `config.Service` 语法，非 compose）**：方案文档原 §6.1 的 stack yaml 是 docker-compose 语法（给 `docker stack deploy` 用），**不能直接贴进 OpsGaurd**。下方是改写后的 OpsGaurd 部署 YAML，贴入集群详情→「部署服务」即可：
+**部署模板（实测版，2026-08-07 disaster 集群验证）**：原 §6.1 的 stack yaml 是 docker-compose 语法，不能直接用。下方是实测可用的部署方式。注意三个实测要点：
+1. **镜像名是 `qingpan/rnacos`**（不是 rustack），最新 `stable` tag（v0.8.6）
+2. **必须 `--security-opt seccomp=unconfined`**：r-nacos 的 Rust tokio runtime 起线程会被 docker 默认 seccomp 拦截（panic exit 101）。OpsGaurd 的 `config.Service` 暂未暴露 security_opt，故试点用 `docker run`（非 swarm service）部署。
+3. **控制台端口是 10848**（v0.8.x，非旧版 10010）；工作目录 `/io`，数据卷挂 `/io`。
 
-```yaml
-service:
-  name: rnacos
-  image: rustack/rnacos:v0.8.0          # 离线 docker load 到 232
-  replicas: 1                            # 试点单副本；扩 3 副本需重评估 Raft+VIP gRPC 连通性
-  imagePullPolicy: missing               # 离线环境本地有即不拉
-  ports:                                 # host 模式 + 锁 232，固定回调 IP
-    - { target: 8848,  published: 8848,  mode: host }
-    - { target: 10848, published: 10848, mode: host }
-    - { target: 7848,  published: 7848,  mode: host }
-  env:
-    - "RNACOS_HTTP_PORT=8848"
-    - "RNACOS_CONSOLE_PORT=10848"
-    - "RNACOS_CONFIG_DB_DIR=/data/nacos_db"
-    - "RNACOS_RAFT_NODE_ID=1"
-    - "RNACOS_RAFT_NODE_ADDR=0.0.0.0:7848"
-    - "RNACOS_RAFT_AUTO_INIT=1"
-    - "RNACOS_BACKUP_TOKEN=<32位随机串>"
-  mounts:
-    - { type: volume, source: rnacos-data, target: /data }
-  networks: [ops-net]                     # 先 docker network create -d overlay ops-net
-  placement:
-    constraints: [node.role==manager]     # 锁 swarm leader 232
-  labels: { category: middleware, app: rnacos }
-  resources:
-    limits: { cpu: "1.0", memory: "512Mi" }
-    reservations: { memory: "128Mi" }
-  restart: { condition: any, delay: 10s }
-  healthcheck:
-    test: ["CMD", "wget", "-qO-", "http://localhost:8848/nacos/v1/console/health/liveness"]
-    interval: 15s
-    timeout: 5s
-    retries: 5
-    startPeriod: 20s
-monitoring:
-  portChecks: [{ port: "8848" }, { port: "10848" }]
-  httpChecks:
-    - { url: "http://localhost:8848/nacos/v1/console/health/liveness", expectedStatus: [200] }
+```bash
+# 232 上（disaster swarm leader）。镜像先离线 docker load。
+docker volume create rnacos-data
+docker run -d --name rnacos --restart=always \
+  --security-opt seccomp=unconfined \
+  -e RNACOS_CONFIG_DB_DIR=/io/nacos_db \
+  -e RNACOS_RAFT_NODE_ID=1 \
+  -e RNACOS_RAFT_NODE_ADDR=0.0.0.0:7848 \
+  -e RNACOS_RAFT_AUTO_INIT=1 \
+  -e RNACOS_BACKUP_TOKEN=<32位随机串> \
+  -v rnacos-data:/io \
+  -p 8848:8848 -p 10848:10848 -p 9848:9848 -p 7848:7848 \
+  qingpan/rnacos:stable
 ```
+
+端口约定（v0.8.6 启动日志确认）：`8848` OpenAPI、`10848` 控制台、`9848` Nacos2 gRPC、`7848` Raft。健康检查：`curl http://localhost:8848/nacos/v1/ns/operator/metrics` 返回 200。
+
+> 原 OpsGaurd `config.Service` 部署模板（含 healthcheck/monitoring/resources）见下，**但需先在 config.Service 增加 securityOpt 字段支持**（待实现），否则 r-nacos 会 panic：
 
 compose → OpsGaurd 字段对照（避免踩坑）：
 
