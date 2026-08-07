@@ -12,6 +12,8 @@ export interface ClusterSummary {
   status: 'online' | 'offline' | 'unknown'
   last_seen: string
   has_token?: boolean
+  /** 最近一次健康探测错误（离线原因，Public() 保留） */
+  err?: string
   /** 纳管清单（外部对象声明） */
   inventory?: InventoryConfig
 }
@@ -125,6 +127,8 @@ export interface PortMapping {
 export interface WorkloadDetail extends Workload {
   tasks: WorkloadTask[]
   healthy: number
+  /** 最近一次部署/更新的配置快照（svccfg；编辑服务时预填，无快照则省略） */
+  config?: string
 }
 
 /** 任务视图 */
@@ -417,6 +421,8 @@ export interface InventoryView {
   image?: string
   ports?: string
   desc?: string
+  /** 仅 inventory 条目：standalone-container → 容器名；host-service → host:port */
+  ref?: string
 }
 
 /** 用户（P6） */
@@ -450,6 +456,8 @@ export interface IdpClient {
 /** 监控事件（来自 Worker /api/v1/events） */
 export interface EventItem {
   id: string
+  /** worker 侧 SQLite 自增 seq（倒序分页游标：加载更多传上一页最小 seq） */
+  seq?: number
   ts: string
   service: string
   type: string

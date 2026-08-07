@@ -25,7 +25,9 @@
       </el-table-column>
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
-          <el-tag :type="statusTag(row.status)" size="small" effect="dark">{{ statusText(row.status) }}</el-tag>
+          <el-tooltip :disabled="!row.err" :content="row.err" placement="top">
+            <el-tag :type="statusTag(row.status)" size="small" effect="dark">{{ statusText(row.status) }}</el-tag>
+          </el-tooltip>
         </template>
       </el-table-column>
       <el-table-column label="Manager 端点" prop="worker_url" min-width="200" show-overflow-tooltip />
@@ -69,19 +71,7 @@
         <el-form-item label="描述">
           <el-input v-model="form.desc" placeholder="可选" />
         </el-form-item>
-        <!-- 纳管范围（可选，仅接入时；接入后在集群详情「纳管配置」编辑） -->
-        <el-form-item v-if="!editing" label="纳管范围">
-          <el-input
-            v-model="invYaml"
-            type="textarea"
-            :rows="8"
-            placeholder="留空跳过；接入后在集群详情「纳管配置」编辑"
-            class="mono"
-          />
-          <div class="form-tip">声明集群纳管的外部对象（非 OpsGaurd 部署的 swarm service）<br>
-            standalone-container: ref=容器名, node=所在节点 hostname<br>
-            host-service: ref=host:port</div>
-        </el-form-item>
+        <div class="form-tip">接入后可到集群详情页「纳管配置」声明外部纳管对象（standalone 容器 / 宿主机服务）</div>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -95,9 +85,8 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import { load as yamlLoad } from 'js-yaml'
 import { clusterApi, projectApi } from '@/api'
-import type { AddClusterPayload, ClusterSummary, InventoryConfig, Project } from '@/types'
+import type { AddClusterPayload, ClusterSummary, Project } from '@/types'
 
 const loading = ref(false)
 const adding = ref(false)
@@ -109,11 +98,16 @@ const editing = ref(false)
 const editingHasToken = ref(false)
 const formRef = ref<FormInstance>()
 const form = reactive<AddClusterPayload>({ name: '', project_id: '', worker_url: '', token: '', desc: '' })
-// 纳管范围（接入向导可选步骤，YAML 编辑）
-const invYaml = ref('')
 
 const rules: FormRules = {
-  name: [{ required: true, message: '请输入集群名称', trigger: 'blur' }],
+  name: [
+    { required: true, message: '请输入集群名称', trigger: 'blur' },
+    {
+      pattern: /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$/,
+      message: '字母/数字开头，可含 . _ -，最长 63 字符',
+      trigger: 'blur',
+    },
+  ],
   worker_url: [{ required: true, message: '请输入 Worker 地址', trigger: 'blur' }],
 }
 
@@ -152,8 +146,7 @@ async function fetchProjects() {
 
 function openDialog() {
   editing.value = false
-  Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '', inventory: undefined })
-  invYaml.value = ''
+  Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '' })
   dialogVisible.value = true
 }
 
@@ -174,16 +167,6 @@ async function submitCluster() {
   await formRef.value?.validate()
   adding.value = true
   try {
-    if (!editing.value && invYaml.value.trim()) {
-      try {
-        form.inventory = yamlLoad(invYaml.value) as InventoryConfig
-      } catch (e: any) {
-        ElMessage.error('纳管范围 YAML 解析失败: ' + (e?.message ?? e))
-        return
-      }
-    } else {
-      form.inventory = undefined
-    }
     if (editing.value) {
       await clusterApi.update(form.name, form)
       ElMessage.success('集群已更新')
@@ -192,8 +175,7 @@ async function submitCluster() {
       ElMessage.success('集群接入成功')
     }
     dialogVisible.value = false
-    Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '', inventory: undefined })
-    invYaml.value = ''
+    Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '' })
     await fetchClusters()
   } catch {
     // 错误提示已由 http.ts 统一处理（探测失败 502 等）
@@ -203,9 +185,13 @@ async function submitCluster() {
 }
 
 async function removeCluster(row: ClusterSummary) {
-  await ElMessageBox.confirm(`确定移除集群「${row.name}」？此操作仅删除管理端注册记录。`, '移除集群', {
-    type: 'warning',
-  })
+  try {
+    await ElMessageBox.confirm(`确定移除集群「${row.name}」？此操作仅删除管理端注册记录。`, '移除集群', {
+      type: 'warning',
+    })
+  } catch {
+    return // 用户取消
+  }
   await clusterApi.remove(row.name)
   ElMessage.success('已移除')
   await fetchClusters()

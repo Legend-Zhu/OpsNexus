@@ -4,10 +4,23 @@
       <div class="head-left">
         <el-button link :icon="Back" @click="$router.push('/clusters')">集群</el-button>
         <h2 class="page-title">{{ clusterName }}</h2>
-        <el-tag v-if="cluster?.status" :type="cluster.status === 'online' ? 'success' : 'danger'" size="small">
+        <el-tooltip v-if="cluster?.err" :content="cluster.err" placement="bottom">
+          <el-tag v-if="cluster?.status" :type="cluster.status === 'online' ? 'success' : 'danger'" size="small">
+            {{ cluster.status === 'online' ? '在线' : '离线' }}
+          </el-tag>
+        </el-tooltip>
+        <el-tag v-else-if="cluster?.status" :type="cluster.status === 'online' ? 'success' : 'danger'" size="small">
           {{ cluster.status === 'online' ? '在线' : '离线' }}
         </el-tag>
         <span class="og-dim mono">{{ cluster?.worker_url }}</span>
+      </div>
+      <div class="head-actions">
+        <el-tooltip :disabled="cluster?.status !== 'offline'" :content="cluster?.err ?? '集群离线，无法部署'" placement="bottom">
+          <el-button type="primary" size="small" :icon="Plus" :disabled="cluster?.status === 'offline'" @click="openDeploy">
+            部署
+          </el-button>
+        </el-tooltip>
+        <el-button size="small" :icon="Setting" @click="openInvConfig">纳管配置</el-button>
       </div>
     </div>
 
@@ -132,52 +145,48 @@
         </el-drawer>
       </el-tab-pane>
 
-      <!-- 容器与服务 -->
-      <el-tab-pane :label="`容器与服务 (${workloads.length})`" name="workloads">
+      <!-- 服务：所有纳管对象（swarm service + standalone 容器 + 裸进程） -->
+      <el-tab-pane :label="`服务 (${inventoryViews.length})`" name="workloads">
         <div class="tab-toolbar">
-          <el-tag size="small" effect="plain" class="og-dim">
-            按部署配置 labels.category 归类（service / middleware）
-          </el-tag>
-          <el-button type="primary" size="small" :icon="Plus" :disabled="!clusterName" @click="openDeploy">
-            部署服务
-          </el-button>
+          <el-button size="small" :icon="Refresh" @click="loadInventory">刷新</el-button>
         </div>
-        <el-table v-loading="wLoading" :data="workloads" empty-text="该集群暂无服务，点击「部署服务」创建">
-          <el-table-column label="名称" min-width="150">
+        <el-table v-loading="invLoading" :data="inventoryViews" :empty-text="clusterOffline ? '集群离线（' + (cluster?.err ?? 'Worker 不可达') + '），无法读取服务' : '该集群暂无纳管对象'">
+          <el-table-column label="名称" min-width="130">
             <template #default="{ row }">
-              <el-link type="primary" @click="openDetail(row)">{{ row.name }}</el-link>
+              <el-link v-if="row.source === 'swarm'" type="primary" @click="openDetailByName(row.name)">{{ row.name }}</el-link>
+              <span v-else>{{ row.name }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="类别" width="110">
+          <el-table-column label="来源" width="70">
             <template #default="{ row }">
-              <el-tag size="small" :type="categoryOf(row) === 'middleware' ? 'warning' : 'info'" effect="plain">
-                {{ categoryOf(row) }}
-              </el-tag>
+              <el-tag size="small" :type="sourceTagType(row.source)">{{ sourceLabel(row.source) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="分类" width="90">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.category === 'middleware' ? 'warning' : 'info'" effect="plain">{{ row.category || '—' }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="镜像" prop="image" min-width="200" show-overflow-tooltip />
-          <el-table-column label="模式" width="90">
+          <el-table-column label="状态" width="100">
             <template #default="{ row }">
-              <el-tag size="small" :type="row.mode === 'global' ? 'warning' : 'info'" effect="plain">
-                {{ row.mode ?? '—' }}
-              </el-tag>
+              <el-tag size="small" :type="statusTagType(row.status)">{{ row.status }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="副本" prop="replica" width="80" />
-          <el-table-column label="端口" min-width="150">
+          <el-table-column label="节点" prop="node" width="130" />
+          <el-table-column label="端口" prop="ports" min-width="120" show-overflow-tooltip />
+          <el-table-column label="操作" width="250" fixed="right">
             <template #default="{ row }">
-              <span v-for="p in row.ports ?? []" :key="`${p.publishedPort}:${p.targetPort}`" class="port-chip mono">
-                {{ p.publishedPort }}→{{ p.targetPort }}
-              </span>
-              <span v-if="!row.ports?.length">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="210" fixed="right">
-            <template #default="{ row }">
-              <el-button link type="primary" @click="openDetail(row)">详情</el-button>
-              <el-button link type="primary" @click="openScale(row)">缩放</el-button>
-              <el-button link type="warning" @click="restart(row)">重启</el-button>
-              <el-button link type="danger" @click="remove(row)">移除</el-button>
+              <template v-if="row.source === 'swarm'">
+                <el-button link type="primary" @click="openDetailByName(row.name)">详情</el-button>
+                <el-button link type="primary" @click="openEditService(row)">编辑</el-button>
+                <el-button v-if="!isGlobalWorkload(row.name)" link type="primary" @click="swarmAction(row.name, openScale)">缩放</el-button>
+                <el-button link type="warning" @click="swarmAction(row.name, restart)">重启</el-button>
+                <el-button link type="danger" @click="swarmAction(row.name, remove)">移除</el-button>
+              </template>
+              <template v-else-if="row.source === 'inventory' && row.type === 'standalone-container'">
+                <el-button link type="primary" @click="restartStandalone(row)">重启</el-button>
+              </template>
             </template>
           </el-table-column>
         </el-table>
@@ -187,7 +196,6 @@
       <el-tab-pane :label="`中间件 (${middlewareViews.length})`" name="middleware">
         <div class="tab-toolbar">
           <el-button size="small" :icon="Refresh" @click="loadInventory">刷新</el-button>
-          <el-button size="small" :icon="Setting" @click="openInvConfig">纳管配置</el-button>
         </div>
         <el-table v-loading="invLoading" :data="middlewareViews" empty-text="暂无中间件（swarm 部署加 labels.category=middleware，或在纳管配置里声明 standalone/host-service）">
           <el-table-column label="名称" prop="name" min-width="120" />
@@ -212,51 +220,13 @@
         </el-table>
       </el-tab-pane>
 
-      <!-- 监控：集群全节点资源 -->
-      <el-tab-pane label="监控" name="monitor">
-        <div class="tab-toolbar">
-          <el-button size="small" :icon="Refresh" @click="loadNodes">刷新</el-button>
-        </div>
-        <el-table :data="nodes" v-loading="nodesLoading" size="small" empty-text="暂无节点数据">
-          <el-table-column label="节点" prop="hostname" min-width="140" />
-          <el-table-column label="角色" prop="role" width="90">
-            <template #default="{ row }">
-              <el-tag size="small" :type="row.role === 'manager' ? 'warning' : 'info'">{{ row.role }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" width="80">
-            <template #default="{ row }">
-              <el-tag size="small" :type="row.reachable ? 'success' : 'danger'">{{ row.reachable ? '可达' : '离线' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="CPU 核心" prop="cpuCores" width="90" />
-          <el-table-column label="CPU 占用" width="130">
-            <template #default="{ row }">
-              <el-progress :percentage="Math.min(100, row.cpuPercent)" :stroke-width="8" />
-            </template>
-          </el-table-column>
-          <el-table-column label="内存占用" width="130">
-            <template #default="{ row }">
-              <el-progress
-                :percentage="Math.min(100, row.memPercent)"
-                :stroke-width="8"
-                :status="row.memPercent > 85 ? 'exception' : undefined"
-              />
-            </template>
-          </el-table-column>
-          <el-table-column label="内存" width="120">
-            <template #default="{ row }">{{ fmtBytes(row.memBytes) }}</template>
-          </el-table-column>
-          <el-table-column label="容器数" prop="containerCount" width="80" />
-        </el-table>
-      </el-tab-pane>
-
       <!-- 事件 -->
       <el-tab-pane :label="`事件 (${events.length})`" name="events">
         <div class="tab-toolbar">
-          <el-button size="small" :icon="Refresh" @click="loadEvents">刷新</el-button>
+          <span class="og-dim">最近 100 条（按时间倒序；「加载更多」翻更早）</span>
+          <el-button size="small" :icon="Refresh" @click="loadEvents()">刷新</el-button>
         </div>
-        <el-table :data="events" size="small" empty-text="暂无事件">
+        <el-table :data="events" size="small" v-loading="eventsLoading" empty-text="暂无事件">
           <el-table-column label="时间" width="170">
             <template #default="{ row }">{{ new Date(row.ts).toLocaleString() }}</template>
           </el-table-column>
@@ -270,11 +240,14 @@
           </el-table-column>
           <el-table-column label="内容" prop="msg" min-width="260" show-overflow-tooltip />
         </el-table>
+        <div v-if="eventsHasMore" class="events-more">
+          <el-button :loading="eventsLoading" @click="loadEvents(true)">加载更多</el-button>
+        </div>
       </el-tab-pane>
     </el-tabs>
 
-    <!-- 部署对话框 -->
-    <el-dialog v-model="deployVisible" title="部署服务" width="680px">
+    <!-- 部署/编辑对话框 -->
+    <el-dialog v-model="deployVisible" :title="deployMode === 'edit' ? `编辑服务 ${deployTarget ?? ''}` : '部署'" width="680px">
       <el-form label-width="80px">
         <el-form-item label="集群">
           <el-tag>{{ clusterName }}</el-tag>
@@ -305,6 +278,9 @@ monitoring:
   portChecks:
     - { port: &quot;8080&quot; }"
           />
+          <div v-if="deployMode === 'edit' && !deployHasSnapshot" class="edit-no-snapshot">
+            无历史配置快照（服务可能由外部创建）——保存将以当前输入整体替换服务配置，请谨慎填写
+          </div>
         </el-form-item>
         <el-form-item>
           <el-collapse class="cfg-doc">
@@ -337,7 +313,9 @@ monitoring:
       </el-form>
       <template #footer>
         <el-button @click="deployVisible = false">取消</el-button>
-        <el-button type="primary" :loading="deploying" @click="deploy">部署</el-button>
+        <el-button type="primary" :loading="deploying" @click="deploy">
+          {{ deployMode === 'edit' ? '保存' : '部署' }}
+        </el-button>
       </template>
     </el-dialog>
 
@@ -358,7 +336,7 @@ monitoring:
     </el-dialog>
 
     <!-- 详情抽屉（任务 + 日志） -->
-    <el-drawer v-model="detailVisible" :title="`${current?.name ?? ''} 详情`" size="55%">
+    <el-drawer v-model="detailVisible" :title="`${current?.name ?? ''} 详情`" size="55%" @closed="onDetailClosed">
       <template v-if="detail">
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="镜像">{{ detail.image || '—' }}</el-descriptions-item>
@@ -402,23 +380,18 @@ monitoring:
       </template>
     </el-drawer>
 
-    <!-- 纳管配置编辑器 -->
-    <el-dialog v-model="invConfigVisible" title="纳管配置" width="680px" :close-on-click-modal="false">
+    <!-- 纳管配置编辑器（表单 + YAML 双模式） -->
+    <el-dialog v-model="invConfigVisible" title="纳管配置" width="720px" :close-on-click-modal="false">
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
-        声明集群纳管的外部对象（非 OpsGaurd 部署的 swarm service）。type 可选
-        standalone-container（docker run 容器，ref=容器名、node=所在节点 hostname）
-        或 host-service（宿主机端口探活，ref=host:port）。
+        声明集群纳管的外部对象（非 OpsGaurd 部署的 swarm service）：standalone-container
+        （docker run 容器，ref=容器名、node=所在节点 hostname）或 host-service
+        （宿主机端口探活，ref=host:port）。保存会整体替换当前清单。
       </el-alert>
-      <el-input
-        v-model="invConfigText"
-        type="textarea"
-        :rows="18"
-        placeholder="items:"
-        class="mono"
-      />
+      <!-- key 每次打开递增 → 组件重建，表单始终反映当前已保存的清单（杜绝草稿残留/引用不变不刷新的问题） -->
+      <InventoryEditor ref="invEditorRef" :key="invEditorKey" :config="invConfigSnapshot" @save="saveInvConfig" />
       <template #footer>
         <el-button @click="invConfigVisible = false">取消</el-button>
-        <el-button type="primary" :loading="invSaving" @click="saveInvConfig">保存</el-button>
+        <el-button type="primary" :loading="invSaving" @click="submitInvConfig">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -429,12 +402,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Back, Plus, Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
+import InventoryEditor from '@/components/InventoryEditor.vue'
 import { clusterApi, eventApi, inventoryApi, nodeApi, workloadApi } from '@/api'
 import type { ClusterNode, ClusterSummary, ContainerInfo, EventItem, InventoryConfig, InventoryView, LogLine, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
-import { dump as yamlDump, load as yamlLoad } from 'js-yaml'
 
 const route = useRoute()
 const clusterName = computed(() => route.params.name as string)
+const clusterOffline = computed(() => cluster.value?.status === 'offline')
 
 const tab = ref('nodes')
 const loading = ref(false)
@@ -494,7 +468,6 @@ const containersLoading = ref(false)
 const procsLoading = ref(false)
 
 // 工作负载 / 中间件
-const wLoading = ref(false)
 const workloads = ref<Workload[]>([])
 
 // 纳管清单（合并 swarm + inventory，含实时状态）
@@ -503,19 +476,32 @@ const inventoryViews = ref<InventoryView[]>([])
 // 中间件 tab = 纳管清单里 category=middleware 的条目（swarm + standalone + host-service）
 const middlewareViews = computed(() => inventoryViews.value.filter((v) => v.category === 'middleware'))
 
-// 纳管配置编辑器
+// 纳管配置编辑器（InventoryEditor 组件，表单 + YAML 双模式）
 const invConfigVisible = ref(false)
-const invConfigText = ref('')
+const invConfigSnapshot = ref<InventoryConfig | null>(null)
+const invEditorRef = ref<InstanceType<typeof InventoryEditor>>()
 const invSaving = ref(false)
+/** 每次打开对话框递增，强制重建编辑器组件（表单始终反映当前已保存清单） */
+const invEditorKey = ref(0)
 
 // 事件
 const events = ref<EventItem[]>([])
+const eventsLoading = ref(false)
+const eventsHasMore = ref(false)
+/** 上一页最小 seq（倒序分页游标）；0 = 拉最新一页 */
+const eventsAfterSeq = ref(0)
+/** 事件 tab 最近一次加载时间（懒加载节流） */
+const eventsLoadedAt = ref(0)
 
-// 部署/缩放/详情
+// 部署/编辑/缩放/详情
 const deployVisible = ref(false)
 const deployConfig = ref('')
 const deployCategory = ref('service')
 const deploying = ref(false)
+/** 对话框模式：deploy=部署新服务；edit=更新已有服务（复用同一表单） */
+const deployMode = ref<'deploy' | 'edit'>('deploy')
+const deployTarget = ref('')
+const deployHasSnapshot = ref(false)
 const scaleVisible = ref(false)
 const scaleReplicas = ref(1)
 const scaling = ref(false)
@@ -564,9 +550,6 @@ function fmtKB(kb?: number) {
   if (!kb) return '—'
   return fmtBytes(kb * 1024)
 }
-function categoryOf(w: Workload): string {
-  return w.labels?.['category'] ?? 'service'
-}
 
 // ---- 纳管清单 ----
 async function loadInventory() {
@@ -582,9 +565,35 @@ async function loadInventory() {
 }
 
 // swarm 中间件条目点"详情"→ 查 workloads 找到原始 Workload 对象
-function openDetailByName(name: string) {
-  const w = workloads.value.find((x) => x.name === name)
-  if (w) openDetail(w)
+async function openDetailByName(name: string) {
+  let w = workloads.value.find((x) => x.name === name)
+  if (!w) {
+    // workloads 可能因挂载时集群不可达而缺失：重载一次再试
+    await loadWorkloads()
+    w = workloads.value.find((x) => x.name === name)
+    if (!w) {
+      ElMessage.warning(`服务「${name}」不在当前工作负载列表中，请刷新后重试`)
+      return
+    }
+  }
+  openDetail(w)
+}
+// swarm service 操作：通过名字查 workloads 找到原始 Workload 再调用
+async function swarmAction(name: string, fn: (w: Workload) => void) {
+  let w = workloads.value.find((x) => x.name === name)
+  if (!w) {
+    await loadWorkloads()
+    w = workloads.value.find((x) => x.name === name)
+    if (!w) {
+      ElMessage.warning(`服务「${name}」不在当前工作负载列表中，请刷新后重试`)
+      return
+    }
+  }
+  fn(w)
+}
+// global 模式服务不可缩放（模板里用它隐藏「缩放」按钮）
+function isGlobalWorkload(name: string): boolean {
+  return workloads.value.find((x) => x.name === name)?.mode === 'global'
 }
 
 function sourceTagType(source: string) {
@@ -593,32 +602,47 @@ function sourceTagType(source: string) {
 function sourceLabel(source: string) {
   return source === 'swarm' ? 'swarm' : '纳管'
 }
+// 状态标签：inventory 状态可能是 "2/3"（副本串）或 "3 running"，解析出健康色
 function statusTagType(status: string) {
   if (status === 'running' || status === 'ok') return 'success'
   if (status === 'down' || status === 'not-found' || status === 'unreachable' || status === 'exited') return 'danger'
   if (status === 'node-not-found' || status === 'invalid-ref') return 'warning'
+  const m = /^(\d+)\/(\d+)$/.exec(status)
+  if (m) {
+    const [cur, want] = [Number(m[1]), Number(m[2])]
+    if (want > 0 && cur >= want) return 'success'
+    if (cur > 0) return 'warning'
+    return 'danger'
+  }
   return 'info'
 }
 
-// 纳管配置编辑器：YAML 文本编辑（整体替换）
+// 纳管配置编辑器：快照当前清单交给组件（组件内表单/YAML 编辑与校验）；
+// key 递增强制重建，避免组件复用旧状态
 function openInvConfig() {
-  const inv = cluster.value?.inventory
-  invConfigText.value = yamlDump(inv ?? { items: [] }, { indent: 2, lineWidth: 120 })
+  invConfigSnapshot.value = cluster.value?.inventory ?? null
+  invEditorKey.value++
   invConfigVisible.value = true
 }
-async function saveInvConfig() {
+
+// 组件校验通过后回调（含空清单二次确认）
+async function saveInvConfig(config: InventoryConfig) {
   invSaving.value = true
   try {
-    const obj = yamlLoad(invConfigText.value) as InventoryConfig
-    await inventoryApi.update(clusterName.value, obj)
+    await inventoryApi.update(clusterName.value, config)
     ElMessage.success('纳管清单已保存')
     invConfigVisible.value = false
     await Promise.all([loadInventory(), fetchCluster()])
-  } catch (e: any) {
-    ElMessage.error('保存失败: ' + (e?.message ?? String(e)))
+  } catch {
+    // 校验/保存错误已由组件与 http.ts 提示，不再重复弹
   } finally {
     invSaving.value = false
   }
+}
+
+// 对话框「保存」→ 触发组件内部校验（通过后 emit save）
+function submitInvConfig() {
+  invEditorRef.value?.doSave()
 }
 
 // ---- 集群 ----
@@ -692,31 +716,71 @@ async function loadProcesses(top: string) {
 
 // ---- 工作负载 ----
 async function loadWorkloads() {
-  wLoading.value = true
   try {
     const resp = await workloadApi.list(clusterName.value)
     workloads.value = resp.items ?? []
   } catch {
     workloads.value = []
-  } finally {
-    wLoading.value = false
   }
 }
 
-// ---- 事件 ----
-async function loadEvents() {
+// ---- 事件（倒序分页：after_seq = 上一页最小 seq） ----
+const EVENT_PAGE = 50
+
+async function loadEvents(more = false) {
+  eventsLoading.value = true
   try {
-    const resp = await eventApi.list(clusterName.value, { limit: 100 })
-    events.value = resp.items ?? []
+    const params: { limit: number; after_seq?: number } = { limit: EVENT_PAGE }
+    if (more && eventsAfterSeq.value > 0) params.after_seq = eventsAfterSeq.value
+    const resp = await eventApi.list(clusterName.value, params)
+    const items = resp.items ?? []
+    if (more) {
+      events.value.push(...items)
+    } else {
+      events.value = items
+    }
+    // 返回条数等于页大小 → 可能还有更早的；且以本页最小 seq 作为下一页游标
+    const minSeq = items.length ? Math.min(...items.map((e) => e.seq ?? 0)) : 0
+    eventsHasMore.value = items.length >= EVENT_PAGE && minSeq > 0
+    if (minSeq > 0) eventsAfterSeq.value = minSeq
+    eventsLoadedAt.value = Date.now()
   } catch {
     events.value = []
+    eventsHasMore.value = false
+  } finally {
+    eventsLoading.value = false
   }
 }
 
-// ---- 部署 ----
+// ---- 部署 / 编辑 ----
 function openDeploy() {
+  deployMode.value = 'deploy'
+  deployTarget.value = ''
+  deployHasSnapshot.value = false
   deployConfig.value = `service:\n  name: web\n  image: nginx:alpine\n  replicas: 1\n  labels:\n    category: ${deployCategory.value}\n  ports:\n    - { target: 80, published: 8080 }\n# monitoring:              # 可选：监控（端口/HTTP/日志/资源阈值）\n#   enabled: true\n#   portChecks:\n#     - { port: "8080" }\n#   httpChecks:\n#     - { url: "http://localhost:8080/health", expectedStatus: [200] }`
   deployVisible.value = true
+}
+
+// 编辑已有服务：预填最近一次部署/更新的配置快照（svccfg）
+async function openEditService(row: InventoryView) {
+  deployMode.value = 'edit'
+  deployTarget.value = row.name
+  deployVisible.value = true
+  deploying.value = true
+  try {
+    const detail = await workloadApi.get(clusterName.value, row.name)
+    deployHasSnapshot.value = !!detail.config
+    deployConfig.value =
+      detail.config ??
+      `service:\n  name: ${row.name}\n  image: ${row.image || ''}\n  replicas: 1\n# 无历史配置快照——将整体替换服务配置`
+    if (row.category) deployCategory.value = row.category
+  } catch {
+    deployHasSnapshot.value = false
+    deployConfig.value = ''
+    ElMessage.error('读取服务配置失败，请稍后重试')
+  } finally {
+    deploying.value = false
+  }
 }
 
 async function deploy() {
@@ -726,9 +790,16 @@ async function deploy() {
   }
   deploying.value = true
   try {
-    const op = await workloadApi.deploy(clusterName.value, { config: deployConfig.value })
+    const body = { config: deployConfig.value }
+    const op =
+      deployMode.value === 'edit' && deployTarget.value
+        ? await workloadApi.update(clusterName.value, deployTarget.value, body)
+        : await workloadApi.deploy(clusterName.value, body)
     deployVisible.value = false
-    ElNotification.success({ title: '部署已提交', message: `操作 ${op.id}` })
+    ElNotification.success({
+      title: deployMode.value === 'edit' ? '更新已提交' : '部署已提交',
+      message: `操作 ${op.id}`,
+    })
     pollOperation(op)
   } finally {
     deploying.value = false
@@ -767,7 +838,20 @@ async function remove(row: Workload) {
   await ElMessageBox.confirm(`确定移除服务「${row.name}」？此操作不可恢复。`, '移除服务', { type: 'error' })
   const op = await workloadApi.remove(clusterName.value, row.name)
   ElNotification.success({ title: '移除已提交', message: `操作 ${op.id}` })
-  await loadWorkloads()
+  await Promise.all([loadWorkloads(), loadInventory()])
+}
+
+// ---- 重启纳管清单里的 standalone 容器 ----
+async function restartStandalone(row: InventoryView) {
+  const container = row.ref || row.name
+  await ElMessageBox.confirm(
+    `确定重启容器「${container}」（节点 ${row.node || '未知'}）？`,
+    '重启容器',
+    { type: 'warning' },
+  )
+  await nodeApi.restartContainer(clusterName.value, row.node ?? '', container)
+  ElMessage.success('重启已提交')
+  await loadInventory()
 }
 
 // ---- 操作轮询 ----
@@ -784,13 +868,14 @@ async function pollOperation(op: Operation) {
         } else {
           ElNotification.error({ title: `操作 ${op.type} ${cur.status}`, message: cur.error || '未完全成功' })
         }
-        await loadWorkloads()
+        await Promise.all([loadWorkloads(), loadInventory()])
         return
       }
     } catch {
       return
     }
   }
+  ElMessage.warning(`操作 ${op.type} 长时间未收敛，请稍后到服务列表刷新查看`)
 }
 
 // ---- 详情 + 日志 ----
@@ -813,7 +898,9 @@ async function loadLogs(follow: boolean) {
   if (!follow) logLines.value = []
 
   try {
-    const resp = await fetch(workloadApi.logsUrl(clusterName.value, current.value.name, follow), {
+    // 非 follow 只取最近 300 行；follow 先取最近 50 行再跟随——避免全量历史
+    const tail = follow ? 50 : 300
+    const resp = await fetch(workloadApi.logsUrl(clusterName.value, current.value.name, follow, tail), {
       signal: logAbort.signal,
       headers: authHeaders(),
     })
@@ -864,6 +951,15 @@ async function toggleLogFollow() {
   }
 }
 
+// 关闭详情抽屉：断开日志流，避免后台持续拉取
+function onDetailClosed() {
+  logAbort?.abort()
+  logAbort = null
+  logFollow.value = false
+  detail.value = null
+  current.value = null
+}
+
 function scrollLogToBottom() {
   void nextTick(() => {
     const el = logBoxRef.value
@@ -876,18 +972,29 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-// 切 Tab 时按需加载
+// 切 Tab 时按需加载：事件懒加载（30s 内不重复拉）；服务/中间件在 onMounted 预载
 watch(tab, (t) => {
-  if (t === 'workloads' && !workloads.value.length) void loadWorkloads()
-  if (t === 'middleware' && !inventoryViews.value.length) void loadInventory()
-  if (t === 'events' && !events.value.length) void loadEvents()
+  if (t === 'events' && Date.now() - eventsLoadedAt.value > 30_000) void loadEvents()
+})
+
+// 详情→详情直跳（路由参数变化）：重置全部数据并重载
+watch(clusterName, async () => {
+  logAbort?.abort()
+  events.value = []
+  eventsAfterSeq.value = 0
+  eventsHasMore.value = false
+  eventsLoadedAt.value = 0
+  inventoryViews.value = []
+  workloads.value = []
+  nodes.value = []
+  await Promise.all([fetchCluster(), loadNodes(), loadWorkloads(), loadInventory()])
 })
 
 onMounted(async () => {
   loading.value = true
-  await fetchCluster()
-  // 并行加载节点 + 工作负载 + 纳管清单，让 tab 标签数字进页面即显示。
-  await Promise.all([loadNodes(), loadWorkloads(), loadInventory()])
+  // 并行加载集群信息 + 节点 + 工作负载 + 纳管清单（fetchCluster 含一次探测，
+  // 不再串行阻塞首屏；离线时其余数据照常渲染）
+  await Promise.all([fetchCluster(), loadNodes(), loadWorkloads(), loadInventory()])
   loading.value = false
 })
 
@@ -905,6 +1012,11 @@ onBeforeUnmount(() => logAbort?.abort())
   display: flex;
   align-items: center;
   gap: 10px;
+}
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .page-title {
   margin: 0;
@@ -985,13 +1097,16 @@ onBeforeUnmount(() => logAbort?.abort())
   margin: 14px 0 8px;
 }
 
-.port-chip {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 1px 6px;
-  background: var(--el-fill-color-light);
-  border-radius: 4px;
+.events-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+.edit-no-snapshot {
+  margin-top: 6px;
   font-size: 12px;
+  color: var(--el-color-warning);
+  line-height: 1.6;
 }
 .log-header {
   display: flex;

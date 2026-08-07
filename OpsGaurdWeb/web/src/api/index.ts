@@ -67,6 +67,8 @@ export const nodeApi = {
     ),
   containers: (cluster: string, nodeId: string) =>
     get<{ items: ContainerInfo[] }>(`/v1/clusters/${cluster}/nodes/${nodeId}/containers`),
+  restartContainer: (cluster: string, nodeId: string, container: string) =>
+    post<{ restarted: string }>(`/v1/clusters/${cluster}/nodes/${nodeId}/containers/restart`, { container }),
 }
 
 // ---- 纳管清单（集群纳管的外部对象：standalone 容器 / 宿主机服务） ----
@@ -83,6 +85,8 @@ export const workloadApi = {
     get<WorkloadDetail>(`/v1/clusters/${cluster}/workloads/${service}`),
   deploy: (cluster: string, body: { config: string }) =>
     post<Operation>(`/v1/clusters/${cluster}/workloads`, body),
+  update: (cluster: string, service: string, body: { config: string }) =>
+    put<Operation>(`/v1/clusters/${cluster}/workloads/${service}`, body),
   scale: (cluster: string, service: string, replicas: number) =>
     post<Operation>(`/v1/clusters/${cluster}/workloads/${service}/scale`, { replicas }),
   restart: (cluster: string, service: string) =>
@@ -91,13 +95,13 @@ export const workloadApi = {
     del<Operation>(`/v1/clusters/${cluster}/workloads/${service}`),
   operation: (cluster: string, id: string) =>
     get<Operation>(`/v1/clusters/${cluster}/workloads/ops/${id}`),
-  logsUrl: (cluster: string, service: string, follow = false) =>
-    `/api/v1/clusters/${cluster}/workloads/${service}/logs?follow=${follow}`,
+  logsUrl: (cluster: string, service: string, follow = false, tail = 0) =>
+    `/api/v1/clusters/${cluster}/workloads/${service}/logs?follow=${follow}${tail > 0 ? `&tail=${tail}` : ''}`,
 }
 
 // ---- 监控事件 / 审计 ----
 export const eventApi = {
-  list: (cluster: string, params?: { type?: string; limit?: number }) =>
+  list: (cluster: string, params?: { type?: string; limit?: number; after_seq?: number }) =>
     get<{ items: EventItem[] }>(`/v1/clusters/${cluster}/events`, { params }),
   audit: (cluster: string, params?: { action?: string; limit?: number }) =>
     get<{ items: AuditItem[] }>(`/v1/clusters/${cluster}/audit`, { params }),
