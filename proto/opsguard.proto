@@ -49,6 +49,11 @@ service ManagementService {
   rpc NodeProcesses(NodeProcessesRequest) returns (ProcessesResponse);
   rpc NodeContainers(NodeContainersRequest) returns (NodeContainersResponse);
 
+  // ---- container actions (standalone docker run containers) ----
+  // Restart a container on a node; the node is resolved by ID or hostname
+  // (same semantics as NodeContainers' node_id).
+  rpc RestartContainer(ContainerActionRequest) returns (ContainerActionResult);
+
   // ---- connectivity / HTTP probes ----
   rpc CheckPort(CheckPortRequest) returns (PortCheckResult);
   rpc CheckHTTP(CheckHTTPRequest) returns (HTTPCheckResult);
@@ -250,6 +255,20 @@ message ContainerInfo {
   string ports = 7;   // "80->8080/tcp, 443->8443/tcp" (host published)
 }
 
+// ContainerAction targets one container on a node (node_id resolved by ID or
+// hostname, same semantics as NodeContainersRequest.node_id).
+message ContainerActionRequest {
+  string node_id = 1;
+  string container = 2; // container name or ID
+}
+
+message ContainerActionResult {
+  string node = 1;
+  string container = 2;
+  bool ok = 3;
+  string message = 4; // error detail when !ok
+}
+
 message ProcessesResponse {
   string node = 1;
   int32 total = 2;
@@ -344,6 +363,8 @@ message ListEventsRequest {
   string service = 1;
   string type = 2;
   int32 limit = 3;
+  // 倒序分页游标：返回 seq < after_seq 的下一页（0 = 最新一页）。
+  int64 after_seq = 4;
 }
 
 // ListEventsResponse carries raw monitor.Event JSON (the server already has a
