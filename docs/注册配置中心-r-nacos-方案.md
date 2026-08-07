@@ -216,11 +216,11 @@ compose → OpsGaurd 字段对照（避免踩坑）：
 
 **试点验证**（拿 1 个非核心服务，预计 1~2 天出结论）：
 
-- [ ] 服务注册/反注册正常，控制台可见
+- [x] 服务注册/反注册正常，控制台可见（2026-08-07 实测：7 个 prdl-* 服务全部注册到 r-nacos，见附录 B）
 - [ ] 实例上下线通知时效（对端感知延迟秒级内）
 - [ ] 配置读取、**配置热更新推送**（改配置观察业务无重启生效）
-- [ ] 鉴权开启后业务正常连接（如使用）
-- [ ] 客户端 2.x gRPC 走 dnsrr 模式连通性（Swarm 网络下）
+- [x] 鉴权开启后业务正常连接：老 nacos 开启鉴权（SDK 凭据 `nacos/Ycyj@2024!`），r-nacos 未开 open api auth，SDK 凭据被忽略——切换后业务正常
+- [x] 客户端连通性：业务为 nacos-client **1.4.1（HTTP 短连接轮询）**，非 2.x gRPC；r-nacos HTTP 8848 完全兼容
 - [ ] 资源占用实测记录（对比 Nacos 基线）
 
 **后续行动项**：
@@ -247,6 +247,8 @@ RNACOS_RAFT_AUTO_INIT=1
 RNACOS_BACKUP_TOKEN=2db9196c3b483503e70b183f9619b004bde3029f7c310731
 
 # ---- OAuth2（对接 OpsGaurd IdP，经 worker gRPC 隧道免反向防火墙）----
+# 总开关，缺了它下面一堆都不生效（v0.8.6 实测：靠 --env-file 注入，r-nacos 不自动加载 /io/.env）
+RNACOS_OAUTH2_ENABLE=true
 RNACOS_OAUTH2_CLIENT_ID=cli-36c97ea0d5839614
 RNACOS_OAUTH2_CLIENT_SECRET=389d253578fcda255ef9aa1790127c10798d072841bc3185d0c4a93407fb5a28
 # 浏览器跳转端点：OpsGaurd 政务外网映射地址（authorize 是浏览器交互）
@@ -273,8 +275,10 @@ docker run -d --name rnacos --restart=always \
   -v /opt/rnacos/rnacos.env:/opt/rnacos.env:ro \
   -p 8848:8848 -p 10848:10848 -p 9848:9848 -p 7848:7848 \
   qingpan/rnacos:stable \
-  --env-file /opt/rnacos.env
+  --env-file /opt/rnacos.env     # r-nacos CLI 参数：每次启动重读，docker restart 即生效
 ```
+
+> 踩坑：曾把 `--env-file /opt/rnacos.env` 当成 docker 参数漏掉、或误用 `-v .../rnacos.env:/io/.env` 试图靠 dotenv 加载——**都不生效**。r-nacos v0.8.6 不自动加载工作目录的 `.env`，必须用其内置的 `--env-file` CLI 参数（实测从二进制 strings 抠出 `env_file`/`env file path` 标志确认）。
 
 ### 关键配置值说明
 
@@ -289,3 +293,104 @@ docker run -d --name rnacos --restart=always \
 | `RNACOS_OAUTH2_USER_DEFAULT_ROLE` | `1` | r-nacos 内置角色 ID（1=管理员） |
 
 > ⚠️ 安全提示：本附录含真实 secret 值仅供部署参考。生产环境应通过管理台 rotate-secret 定期轮换，轮换后同步更新 `rnacos.env` 的 `CLIENT_SECRET`。
+
+---
+
+## 附录 B：注册中心迁移实测（253 nacos-server-dm8 → 232 r-nacos，2026-08-07）
+
+> 一次真实迁移的全过程记录。手法：**业务零重启、零改动**——在老 nacos 所在节点（253）加 iptables DNAT，把 `20011→232:8848`、`21011→232:9848` 转发到 r-nacos，nacos-client 1.4.1 的 HTTP 短连接轮询自然落到 r-nacos。
+
+### B.1 迁移前现场
+
+| 项 | 老 nacos（源） | r-nacos（目标） |
+|---|---|---|
+| 容器/位置 | `nacos-server-dm8` @ 10.60.171.253 | `rnacos` @ 10.60.171.232 |
+| 镜像 | `nx/nacos-server:2.4.3-fix`（达梦8 后端） | `qingpan/rnacos:stable`（v0.8.6） |
+| 端口（HTTP/gRPC） | 20011 / 21011（host 映射） | 8848 / 9848（host 映射） |
+| 鉴权 | 开（`nacos.core.auth.enabled=true`），SDK 凭据 `nacos/Ycyj@2024!` | open api auth 未开 |
+| 业务 SDK | **nacos-client 1.4.1**（HTTP 短连接，非 2.x gRPC） | 同左，r-nacos HTTP 8848 兼容 |
+| 业务命名空间 | `test`（生产实际使用）/ `dev` / `prod` | 待迁入 |
+
+SDK 凭据来源：从业务 jar（`/usr/local/app/app.jar`）的 `BOOT-INF/classes/bootstrap-nacos.yaml` 解出 `${NACOS_USERNAME:nacos}` / `${NACOS_PASSWORD:Ycyj@2024!}`。
+
+### B.2 数据迁移（配置，逐条 md5 核对）
+
+```bash
+# 1. 老 nacos 登录拿 token（凭据 nacos/Ycyj@2024!）
+TOKEN=$(curl -s -X POST http://10.60.171.253:20011/nacos/v1/auth/login \
+  -d 'username=nacos&password=Ycyj@2024!' | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p')
+
+# 2. 导出 3 个命名空间（public 无配置跳过）
+for ns in test dev prod; do
+  curl -s -o /tmp/nacos-$ns-export.zip \
+    "http://10.60.171.253:20011/nacos/v1/cs/configs?export=true&tenant=$ns&group=&appName=&ids=&accessToken=$TOKEN"
+done
+# 实测：test=10 条、dev=9 条、prod=6 条（zip 内结构 DEFAULT_GROUP/<dataId>.yaml）
+
+# 3. r-nacos 建 3 个同名命名空间（自定义 ID，保证 SDK namespace 不变）
+for ns in test dev prod; do
+  curl -s -X POST "http://10.60.171.232:8848/nacos/v1/console/namespaces?customNamespaceId=$ns&namespaceName=$ns&namespaceDesc=$ns"
+done
+
+# 4. 逐条导入 + 回读 md5 比对（r-nacos 的 zip 导入接口报 invalid dataId，改用逐条 POST）
+bash nacos-import.sh test /tmp/nacos-test-export.zip
+# 脚本内对每个文件：POST /nacos/v1/cs/configs(dataId,group=DEFAULT_GROUP,tenant,type=yaml,content@file)
+#   再 GET 回读 md5 比对。实测：test 10/10、dev 9/9、prod 6/6 全过
+```
+
+> 注册数据无需迁：nacos 客户端是临时实例（心跳保活），端点切换后自然重新注册。
+
+### B.3 流量切换（253 DNAT 桥，业务零重启）
+
+在 **253** 上加 DNAT，让所有打向老 nacos 端口的**新连接**落到 r-nacos：
+
+```bash
+iptables -t nat -I PREROUTING 1 -p tcp --dport 20011 -j DNAT --to-destination 10.60.171.232:8848
+iptables -t nat -I PREROUTING 1 -p tcp --dport 21011 -j DNAT --to-destination 10.60.171.232:9848
+iptables -t nat -I POSTROUTING 1 -d 10.60.171.232/32 -p tcp -m multiport --dports 8848,9848 -j MASQUERADE
+```
+
+**两个必踩的坑**（已踩过）：
+
+1. **filter/FORWARD 默认 DROP 丢包**：Docker 主机 FORWARD 链只放行 docker 自管流量，DNAT 后的转发包被丢。表现为：PREROUTING DNAT 命中计数飙升、POSTROUTING MASQUERADE 计数为 0、目标端 tcpdump 抓不到包。修法：
+   ```bash
+   iptables -I FORWARD 1 -p tcp -d 10.60.171.232/32 -m multiport --dports 8848,9848 -j ACCEPT
+   iptables -I FORWARD 1 -p tcp -s 10.60.171.232/32 -m multiport --sports 8848,9848 -j ACCEPT
+   ```
+2. **会误判为 rp_filter**：先怀疑 232 rp_filter，实际是上面那条。两者表象（目标抓不到包）相同，区分看 253 POSTROUTING MASQUERADE 计数：为 0 = FORWARD 丢；非 0 = 对端 rp_filter 丢。
+
+切换后立即观测：nacos-client 1.4.1 是 HTTP 短连接轮询，**每次新建连接已被 DNAT 导向 r-nacos**，无需停老 nacos 即开始迁移；约 1~2 分钟后 r-nacos 控制台出现 7 个 prdl-* 服务全部实例，老 nacos test 命名空间实例数降为 0。
+
+### B.4 切换收尾
+
+```bash
+# 老 nacos 停掉（数据保留在卷，可回滚）
+docker stop nacos-server-dm8    # 实测 Exited 137，业务无感（253:20011 由 DNAT 独占）
+```
+
+实测切换后：230→253:20011 = 200（纯 DNAT→r-nacos，老 nacos 已停），r-nacos test 命名空间稳定 7 个服务。
+
+### B.5 后续清理（与 K8s 替换 / Swarm 迁移一并做）
+
+当前是"DNAT 桥"状态——业务仍写 `NACOS_ADDR=10.60.171.253:20011`，经 253 转发到 232。这是过渡态，目标是让业务直连 r-nacos、拆除 253 桥：
+
+1. **K8s→Swarm 迁移时**（《K8s替换方案.md》§五），新 Swarm 服务的 env 直接写 `NACOS_ADDR=10.60.171.232:8848`（不再走 253）。
+2. 待所有业务 Pod 都直连 232 后（r-nacos 日志里来源 IP 不再是 253、而是各 Pod IP），**拆除 253 桥**：
+   ```bash
+   # 在 253 上
+   iptables -t nat -D PREROUTING -p tcp --dport 20011 -j DNAT --to-destination 10.60.171.232:8848
+   iptables -t nat -D PREROUTING -p tcp --dport 21011 -j DNAT --to-destination 10.60.171.232:9848
+   iptables -t nat -D POSTROUTING -d 10.60.171.232/32 -p tcp -m multiport --dports 8848,9848 -j MASQUERADE
+   iptables -D FORWARD -p tcp -s 10.60.171.232/32 -m multiport --sports 8848,9848 -j ACCEPT
+   iptables -D FORWARD -p tcp -d 10.60.171.232/32 -m multiport --dports 8848,9848 -j ACCEPT
+   docker rm nacos-server-dm8   # 确认无回滚需求后
+   ```
+
+### B.6 回滚（任何阶段出问题）
+
+```bash
+# 在 253 上删 DNAT（恢复 20011/21011 给老 nacos），再启动老 nacos
+# （删规则命令同 B.5 第 2 步）
+docker start nacos-server-dm8
+```
+老 nacos 数据（达梦8）原样保留，配置与切换前一致；业务 SDK 自动重连回老 nacos。
