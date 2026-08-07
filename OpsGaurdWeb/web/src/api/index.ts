@@ -9,6 +9,7 @@ import type {
   BuildTask,
   Cluster,
   ClusterNode,
+  ContainerInfo,
   ClusterSummary,
   EventItem,
   IdpClient,
@@ -62,6 +63,8 @@ export const nodeApi = {
       `/v1/clusters/${cluster}/nodes/${nodeId}/processes`,
       { params },
     ),
+  containers: (cluster: string, nodeId: string) =>
+    get<{ items: ContainerInfo[] }>(`/v1/clusters/${cluster}/nodes/${nodeId}/containers`),
 }
 
 // ---- 工作负载（经 Worker） ----

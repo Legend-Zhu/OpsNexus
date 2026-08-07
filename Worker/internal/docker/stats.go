@@ -16,6 +16,18 @@ func (c *httpClient) ListContainers(ctx context.Context, f Filter) ([]Container,
 	return cs, nil
 }
 
+// ListAllContainers lists every container on the node (running and exited),
+// regardless of swarm membership — docker ps -a equivalent.
+func (c *httpClient) ListAllContainers(ctx context.Context) ([]Container, error) {
+	q := url.Values{}
+	q.Set("all", "1")
+	var cs []Container
+	if err := c.getJSON(ctx, "/containers/json", q, &cs); err != nil {
+		return nil, err
+	}
+	return cs, nil
+}
+
 // ContainerStats takes a one-shot stats snapshot for a container.
 func (c *httpClient) ContainerStats(ctx context.Context, containerID string) (Stats, error) {
 	q := url.Values{}

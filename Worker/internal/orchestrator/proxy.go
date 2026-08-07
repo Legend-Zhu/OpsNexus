@@ -58,8 +58,14 @@ func (n *NodeClient) withAuth(req *http.Request) {
 
 // NodeStats is the response shape of GET /api/v1/local/stats.
 type NodeStats struct {
-	Node       string              `json:"node"`
-	Containers []NodeContainerStat `json:"containers"`
+	Node           string              `json:"node"`
+	Containers     []NodeContainerStat `json:"containers"`
+	HostCPUPercent float64             `json:"hostCpuPercent,omitempty"`
+	HostMemPercent float64             `json:"hostMemPercent,omitempty"`
+	HostMemTotal   uint64              `json:"hostMemTotalBytes,omitempty"`
+	HostMemUsed    uint64              `json:"hostMemUsedBytes,omitempty"`
+	HostCPUCores   int                 `json:"hostCpuCores,omitempty"`
+	ContainerCount int                 `json:"containerCount,omitempty"`
 }
 
 // NodeContainerStat mirrors nodeagent.containerStat.
@@ -196,6 +202,30 @@ func (n *NodeClient) Processes(ctx context.Context, top, limit, filter string) (
 		return ProcessesResp{}, err
 	}
 	return out, nil
+}
+
+// Containers lists every container on the node (swarm tasks + standalone
+// docker run containers) via GET /api/v1/local/containers.
+func (n *NodeClient) Containers(ctx context.Context) ([]NodeContainerInfo, error) {
+	var out struct {
+		Node       string              `json:"node"`
+		Containers []NodeContainerInfo `json:"containers"`
+	}
+	if err := n.getJSON(ctx, "/api/v1/local/containers", &out); err != nil {
+		return nil, err
+	}
+	return out.Containers, nil
+}
+
+// NodeContainerInfo mirrors nodeagent.ContainerInfo (GET /api/v1/local/containers).
+type NodeContainerInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Image   string `json:"image"`
+	State   string `json:"state"`
+	Type    string `json:"type"`    // service | standalone
+	Service string `json:"service"` // swarm service name when type=service
+	Ports   string `json:"ports"`
 }
 
 // CheckPort runs an ad-hoc TCP probe from the node worker.

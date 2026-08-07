@@ -329,6 +329,37 @@ func (c *Client) NodeStats(ctx context.Context) (NodeStats, error) {
 	return ns, nil
 }
 
+// ContainerInfo 对应 Worker NodeContainers 的单个容器条目（swarm 任务容器 +
+// 宿主机 standalone 容器，如 r-nacos/grafana/nginxwebui）。
+type ContainerInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Image   string `json:"image"`
+	State   string `json:"state"`
+	Type    string `json:"type"`    // service | standalone
+	Service string `json:"service"` // swarm service name when type=service
+	Ports   string `json:"ports"`
+}
+
+// NodeContainers 获取指定节点上的全部容器（docker ps -a 等价）。
+func (c *Client) NodeContainers(ctx context.Context, nodeID string) ([]ContainerInfo, error) {
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.stub.NodeContainers(cctx, &pb.NodeContainersRequest{NodeId: nodeID})
+	if err != nil {
+		return nil, c.wrapErr(err)
+	}
+	out := make([]ContainerInfo, 0, len(resp.GetContainers()))
+	for _, ct := range resp.GetContainers() {
+		out = append(out, ContainerInfo{
+			ID: ct.GetId(), Name: ct.GetName(), Image: ct.GetImage(),
+			State: ct.GetState(), Type: ct.GetType(), Service: ct.GetService(),
+			Ports: ct.GetPorts(),
+		})
+	}
+	return out, nil
+}
+
 // ListNodes 获取集群节点列表。
 // ListNodes 获取集群节点列表。启用缓存时先返回缓存快照（避免页面白屏），
 // 后台刷新并更新缓存。

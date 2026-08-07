@@ -48,6 +48,10 @@ type Client interface {
 	// Logs / containers / stats
 	ServiceLogs(ctx context.Context, serviceID string, opts LogsOptions) (io.ReadCloser, error)
 	ListContainers(ctx context.Context, f Filter) ([]Container, error)
+	// ListAllContainers lists ALL containers on the node (running and exited),
+	// including standalone `docker run` containers — the node container view
+	// (r-nacos, grafana, nginxwebui, ...) is built from this.
+	ListAllContainers(ctx context.Context) ([]Container, error)
 	ContainerStats(ctx context.Context, containerID string) (Stats, error)
 	ContainerInspect(ctx context.Context, containerID string) (ContainerInspect, error)
 	ContainerExecCreate(ctx context.Context, containerID string, cmd []string) (string, error)

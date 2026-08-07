@@ -284,9 +284,19 @@ type ManagerStatus struct {
 type Container struct {
 	ID     string            `json:"Id"`
 	Names  []string          `json:"Names,omitempty"`
+	Image  string            `json:"Image,omitempty"`
 	Labels map[string]string `json:"Labels,omitempty"`
 	State  string            `json:"State,omitempty"`
 	Status string            `json:"Status,omitempty"`
+	Ports  []ContainerPort   `json:"Ports,omitempty"`
+}
+
+// ContainerPort is one host-published port mapping from /containers/json.
+type ContainerPort struct {
+	IP          string `json:"IP,omitempty"`
+	PrivatePort uint16 `json:"PrivatePort"`
+	PublicPort  uint16 `json:"PublicPort,omitempty"`
+	Type        string `json:"Type"` // tcp | udp
 }
 
 // ContainerInspect is the subset of /containers/{id}/json Worker uses, mainly

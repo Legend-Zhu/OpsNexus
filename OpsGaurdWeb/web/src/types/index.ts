@@ -73,6 +73,17 @@ export interface ProcessInfo {
   cpuPercent: number
 }
 
+/** 节点上的容器（swarm 任务 + standalone docker run，如 r-nacos） */
+export interface ContainerInfo {
+  id: string
+  name: string
+  image: string
+  state: string
+  type: 'service' | 'standalone'
+  service?: string
+  ports?: string
+}
+
 /** SSO 状态（公开端点 /api/v1/auth/sso/status） */
 export interface SSOStatus {
   local: boolean

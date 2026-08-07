@@ -117,6 +117,7 @@ func New(h *api.Handlers) *gin.Engine {
 		clusters.GET("/:name/metrics", h.ClusterMetrics)
 		clusters.GET("/:name/nodes", h.ListNodes)
 		clusters.GET("/:name/nodes/:id/processes", h.NodeProcesses)
+		clusters.GET("/:name/nodes/:id/containers", h.NodeContainers)
 
 		// 告警中心
 		alerts := v1.Group("/alerts")

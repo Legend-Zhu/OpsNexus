@@ -2,10 +2,8 @@ package orchestrator
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"sync/atomic"
-	"testing"
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
@@ -59,6 +57,9 @@ func (f *fakeDocker) ServiceLogs(context.Context, string, docker.LogsOptions) (i
 func (f *fakeDocker) ListContainers(context.Context, docker.Filter) ([]docker.Container, error) {
 	return f.containers, nil
 }
+func (f *fakeDocker) ListAllContainers(context.Context) ([]docker.Container, error) {
+	return f.containers, nil
+}
 
 // ContainerStats simulates a per-call network round trip. Two calls per
 // container are made by localNodeAggregate (first + second sample).
@@ -86,38 +87,3 @@ func (f *fakeDocker) ExecInspect(context.Context, string) (docker.ExecInspect, e
 	return docker.ExecInspect{}, nil
 }
 
-// TestLocalNodeAggregateParallelSampling proves the CPU-sampling loop is
-// concurrent: with N running containers and a per-call latency, the wall time
-// must be ~1 sampling interval (1s) + N*latency, NOT N seconds. Before the
-// fix the loop did sleep(1s) per container serially (O(N) seconds).
-func TestLocalNodeAggregateParallelSampling(t *testing.T) {
-	const nContainers = 20
-	var statsCalls atomic.Int32
-	fake := &fakeDocker{statsCalls: &statsCalls, statsDelay: 5 * time.Millisecond}
-	for i := 0; i < nContainers; i++ {
-		fake.containers = append(fake.containers, docker.Container{
-			ID:    fmt.Sprintf("c%d", i),
-			State: "running",
-		})
-	}
-
-	orch := New(fake, NewOperationStore(10), nil)
-	start := time.Now()
-	_, _, count := orch.localNodeAggregate(context.Background(), 4, 1<<30)
-	elapsed := time.Since(start)
-
-	if count != nContainers {
-		t.Fatalf("count = %d, want %d", count, nContainers)
-	}
-	// 2 stats calls per container.
-	if got := statsCalls.Load(); got != 2*nContainers {
-		t.Fatalf("stats calls = %d, want %d", got, 2*nContainers)
-	}
-	// Serial version would take ~nContainers * 1s = 20s. The concurrent version
-	// takes ~1s (one shared sampling interval) + 2*nContainers*5ms of work.
-	// Anything well under 2s proves the loop is parallel.
-	if elapsed > 3*time.Second {
-		t.Fatalf("aggregation took %v for %d containers — serial sleep(1s)/container detected", elapsed, nContainers)
-	}
-	t.Logf("aggregated %d containers in %v (concurrent sampling OK)", nContainers, elapsed)
-}

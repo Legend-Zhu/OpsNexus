@@ -49,6 +49,7 @@ const (
 	ManagementService_ListNodes_FullMethodName       = "/opsguard.v1.ManagementService/ListNodes"
 	ManagementService_NodeStats_FullMethodName       = "/opsguard.v1.ManagementService/NodeStats"
 	ManagementService_NodeProcesses_FullMethodName   = "/opsguard.v1.ManagementService/NodeProcesses"
+	ManagementService_NodeContainers_FullMethodName  = "/opsguard.v1.ManagementService/NodeContainers"
 	ManagementService_CheckPort_FullMethodName       = "/opsguard.v1.ManagementService/CheckPort"
 	ManagementService_CheckHTTP_FullMethodName       = "/opsguard.v1.ManagementService/CheckHTTP"
 	ManagementService_CheckFlow_FullMethodName       = "/opsguard.v1.ManagementService/CheckFlow"
@@ -87,6 +88,7 @@ type ManagementServiceClient interface {
 	ListNodes(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ListNodesResponse, error)
 	NodeStats(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*NodeStatsResponse, error)
 	NodeProcesses(ctx context.Context, in *NodeProcessesRequest, opts ...grpc.CallOption) (*ProcessesResponse, error)
+	NodeContainers(ctx context.Context, in *NodeContainersRequest, opts ...grpc.CallOption) (*NodeContainersResponse, error)
 	// ---- connectivity / HTTP probes ----
 	CheckPort(ctx context.Context, in *CheckPortRequest, opts ...grpc.CallOption) (*PortCheckResult, error)
 	CheckHTTP(ctx context.Context, in *CheckHTTPRequest, opts ...grpc.CallOption) (*HTTPCheckResult, error)
@@ -252,6 +254,16 @@ func (c *managementServiceClient) NodeProcesses(ctx context.Context, in *NodePro
 	return out, nil
 }
 
+func (c *managementServiceClient) NodeContainers(ctx context.Context, in *NodeContainersRequest, opts ...grpc.CallOption) (*NodeContainersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NodeContainersResponse)
+	err := c.cc.Invoke(ctx, ManagementService_NodeContainers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *managementServiceClient) CheckPort(ctx context.Context, in *CheckPortRequest, opts ...grpc.CallOption) (*PortCheckResult, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PortCheckResult)
@@ -387,6 +399,7 @@ type ManagementServiceServer interface {
 	ListNodes(context.Context, *Empty) (*ListNodesResponse, error)
 	NodeStats(context.Context, *Empty) (*NodeStatsResponse, error)
 	NodeProcesses(context.Context, *NodeProcessesRequest) (*ProcessesResponse, error)
+	NodeContainers(context.Context, *NodeContainersRequest) (*NodeContainersResponse, error)
 	// ---- connectivity / HTTP probes ----
 	CheckPort(context.Context, *CheckPortRequest) (*PortCheckResult, error)
 	CheckHTTP(context.Context, *CheckHTTPRequest) (*HTTPCheckResult, error)
@@ -460,6 +473,9 @@ func (UnimplementedManagementServiceServer) NodeStats(context.Context, *Empty) (
 }
 func (UnimplementedManagementServiceServer) NodeProcesses(context.Context, *NodeProcessesRequest) (*ProcessesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NodeProcesses not implemented")
+}
+func (UnimplementedManagementServiceServer) NodeContainers(context.Context, *NodeContainersRequest) (*NodeContainersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method NodeContainers not implemented")
 }
 func (UnimplementedManagementServiceServer) CheckPort(context.Context, *CheckPortRequest) (*PortCheckResult, error) {
 	return nil, status.Error(codes.Unimplemented, "method CheckPort not implemented")
@@ -743,6 +759,24 @@ func _ManagementService_NodeProcesses_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ManagementService_NodeContainers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NodeContainersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ManagementServiceServer).NodeContainers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ManagementService_NodeContainers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ManagementServiceServer).NodeContainers(ctx, req.(*NodeContainersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ManagementService_CheckPort_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CheckPortRequest)
 	if err := dec(in); err != nil {
@@ -923,6 +957,10 @@ var ManagementService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "NodeProcesses",
 			Handler:    _ManagementService_NodeProcesses_Handler,
+		},
+		{
+			MethodName: "NodeContainers",
+			Handler:    _ManagementService_NodeContainers_Handler,
 		},
 		{
 			MethodName: "CheckPort",

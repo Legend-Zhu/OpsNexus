@@ -343,6 +343,41 @@ func (s *Server) NodeStats(ctx context.Context, _ *pb.Empty) (*pb.NodeStatsRespo
 			MemLimit:    c.MemLimit,
 		})
 	}
+	// Host-level (宿主机) usage — the node card / monitor tab read these.
+	resp.HostCpuPercent = stats.HostCPUPercent
+	resp.HostMemPercent = stats.HostMemPercent
+	resp.HostMemTotal = stats.HostMemTotal
+	resp.HostMemUsed = stats.HostMemUsed
+	resp.HostCpuCores = int32(stats.HostCPUCores)
+	return resp, nil
+}
+
+// NodeContainers lists every container on the target node (swarm tasks +
+// standalone docker run containers, e.g. r-nacos/grafana/nginxwebui).
+func (s *Server) NodeContainers(ctx context.Context, req *pb.NodeContainersRequest) (*pb.NodeContainersResponse, error) {
+	addr, err := s.orch.ResolveNodeAddr(ctx, req.GetNodeId())
+	if err != nil {
+		if orchestrator.NodeNotFound(err) {
+			return nil, status.Error(codes.NotFound, err.Error())
+		}
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	cs, err := s.orch.NodeClientByAddr(addr).Containers(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	resp := &pb.NodeContainersResponse{Containers: make([]*pb.ContainerInfo, 0, len(cs))}
+	for _, c := range cs {
+		resp.Containers = append(resp.Containers, &pb.ContainerInfo{
+			Id:      c.ID,
+			Name:    c.Name,
+			Image:   c.Image,
+			State:   c.State,
+			Type:    c.Type,
+			Service: c.Service,
+			Ports:   c.Ports,
+		})
+	}
 	return resp, nil
 }
 

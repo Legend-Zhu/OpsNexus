@@ -1043,11 +1043,19 @@ func (x *Node) GetContainerCount() int32 {
 }
 
 type NodeStatsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Node          string                 `protobuf:"bytes,1,opt,name=node,proto3" json:"node,omitempty"`
-	Containers    []*ContainerStat       `protobuf:"bytes,2,rep,name=containers,proto3" json:"containers,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Node       string                 `protobuf:"bytes,1,opt,name=node,proto3" json:"node,omitempty"`
+	Containers []*ContainerStat       `protobuf:"bytes,2,rep,name=containers,proto3" json:"containers,omitempty"`
+	// Host-level (宿主机) resource usage, read from the node's /proc/stat and
+	// /proc/meminfo — the node card / monitor tab show these, not the swarm
+	// container aggregate.
+	HostCpuPercent float64 `protobuf:"fixed64,3,opt,name=host_cpu_percent,json=hostCpuPercent,proto3" json:"host_cpu_percent,omitempty"`
+	HostMemPercent float64 `protobuf:"fixed64,4,opt,name=host_mem_percent,json=hostMemPercent,proto3" json:"host_mem_percent,omitempty"`
+	HostMemTotal   uint64  `protobuf:"varint,5,opt,name=host_mem_total,json=hostMemTotal,proto3" json:"host_mem_total,omitempty"`
+	HostMemUsed    uint64  `protobuf:"varint,6,opt,name=host_mem_used,json=hostMemUsed,proto3" json:"host_mem_used,omitempty"`
+	HostCpuCores   int32   `protobuf:"varint,7,opt,name=host_cpu_cores,json=hostCpuCores,proto3" json:"host_cpu_cores,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *NodeStatsResponse) Reset() {
@@ -1092,6 +1100,41 @@ func (x *NodeStatsResponse) GetContainers() []*ContainerStat {
 		return x.Containers
 	}
 	return nil
+}
+
+func (x *NodeStatsResponse) GetHostCpuPercent() float64 {
+	if x != nil {
+		return x.HostCpuPercent
+	}
+	return 0
+}
+
+func (x *NodeStatsResponse) GetHostMemPercent() float64 {
+	if x != nil {
+		return x.HostMemPercent
+	}
+	return 0
+}
+
+func (x *NodeStatsResponse) GetHostMemTotal() uint64 {
+	if x != nil {
+		return x.HostMemTotal
+	}
+	return 0
+}
+
+func (x *NodeStatsResponse) GetHostMemUsed() uint64 {
+	if x != nil {
+		return x.HostMemUsed
+	}
+	return 0
+}
+
+func (x *NodeStatsResponse) GetHostCpuCores() int32 {
+	if x != nil {
+		return x.HostCpuCores
+	}
+	return 0
 }
 
 type ContainerStat struct {
@@ -1254,6 +1297,197 @@ func (x *NodeProcessesRequest) GetFilter() string {
 	return ""
 }
 
+// NodeContainers lists ALL containers on a node (swarm service tasks AND
+// standalone docker run containers such as r-nacos/grafana/nginxwebui), so
+// host-deployed middleware is visible from the management UI.
+type NodeContainersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NodeContainersRequest) Reset() {
+	*x = NodeContainersRequest{}
+	mi := &file_opsguard_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NodeContainersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NodeContainersRequest) ProtoMessage() {}
+
+func (x *NodeContainersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_opsguard_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NodeContainersRequest.ProtoReflect.Descriptor instead.
+func (*NodeContainersRequest) Descriptor() ([]byte, []int) {
+	return file_opsguard_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *NodeContainersRequest) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+type NodeContainersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Node          string                 `protobuf:"bytes,1,opt,name=node,proto3" json:"node,omitempty"`
+	Containers    []*ContainerInfo       `protobuf:"bytes,2,rep,name=containers,proto3" json:"containers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NodeContainersResponse) Reset() {
+	*x = NodeContainersResponse{}
+	mi := &file_opsguard_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NodeContainersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NodeContainersResponse) ProtoMessage() {}
+
+func (x *NodeContainersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_opsguard_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NodeContainersResponse.ProtoReflect.Descriptor instead.
+func (*NodeContainersResponse) Descriptor() ([]byte, []int) {
+	return file_opsguard_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *NodeContainersResponse) GetNode() string {
+	if x != nil {
+		return x.Node
+	}
+	return ""
+}
+
+func (x *NodeContainersResponse) GetContainers() []*ContainerInfo {
+	if x != nil {
+		return x.Containers
+	}
+	return nil
+}
+
+type ContainerInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Image         string                 `protobuf:"bytes,3,opt,name=image,proto3" json:"image,omitempty"`
+	State         string                 `protobuf:"bytes,4,opt,name=state,proto3" json:"state,omitempty"`     // running | exited | ...
+	Type          string                 `protobuf:"bytes,5,opt,name=type,proto3" json:"type,omitempty"`       // service | standalone
+	Service       string                 `protobuf:"bytes,6,opt,name=service,proto3" json:"service,omitempty"` // swarm service name, when type=service
+	Ports         string                 `protobuf:"bytes,7,opt,name=ports,proto3" json:"ports,omitempty"`     // "80->8080/tcp, 443->8443/tcp" (host published)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ContainerInfo) Reset() {
+	*x = ContainerInfo{}
+	mi := &file_opsguard_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContainerInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContainerInfo) ProtoMessage() {}
+
+func (x *ContainerInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_opsguard_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContainerInfo.ProtoReflect.Descriptor instead.
+func (*ContainerInfo) Descriptor() ([]byte, []int) {
+	return file_opsguard_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ContainerInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ContainerInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ContainerInfo) GetImage() string {
+	if x != nil {
+		return x.Image
+	}
+	return ""
+}
+
+func (x *ContainerInfo) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *ContainerInfo) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *ContainerInfo) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+func (x *ContainerInfo) GetPorts() string {
+	if x != nil {
+		return x.Ports
+	}
+	return ""
+}
+
 type ProcessesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Node          string                 `protobuf:"bytes,1,opt,name=node,proto3" json:"node,omitempty"`
@@ -1265,7 +1499,7 @@ type ProcessesResponse struct {
 
 func (x *ProcessesResponse) Reset() {
 	*x = ProcessesResponse{}
-	mi := &file_opsguard_proto_msgTypes[19]
+	mi := &file_opsguard_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1277,7 +1511,7 @@ func (x *ProcessesResponse) String() string {
 func (*ProcessesResponse) ProtoMessage() {}
 
 func (x *ProcessesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[19]
+	mi := &file_opsguard_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1290,7 +1524,7 @@ func (x *ProcessesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessesResponse.ProtoReflect.Descriptor instead.
 func (*ProcessesResponse) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{19}
+	return file_opsguard_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ProcessesResponse) GetNode() string {
@@ -1328,7 +1562,7 @@ type ProcessInfo struct {
 
 func (x *ProcessInfo) Reset() {
 	*x = ProcessInfo{}
-	mi := &file_opsguard_proto_msgTypes[20]
+	mi := &file_opsguard_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1340,7 +1574,7 @@ func (x *ProcessInfo) String() string {
 func (*ProcessInfo) ProtoMessage() {}
 
 func (x *ProcessInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[20]
+	mi := &file_opsguard_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1353,7 +1587,7 @@ func (x *ProcessInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessInfo.ProtoReflect.Descriptor instead.
 func (*ProcessInfo) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{20}
+	return file_opsguard_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ProcessInfo) GetPid() int32 {
@@ -1410,7 +1644,7 @@ type CheckPortRequest struct {
 
 func (x *CheckPortRequest) Reset() {
 	*x = CheckPortRequest{}
-	mi := &file_opsguard_proto_msgTypes[21]
+	mi := &file_opsguard_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1422,7 +1656,7 @@ func (x *CheckPortRequest) String() string {
 func (*CheckPortRequest) ProtoMessage() {}
 
 func (x *CheckPortRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[21]
+	mi := &file_opsguard_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1435,7 +1669,7 @@ func (x *CheckPortRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckPortRequest.ProtoReflect.Descriptor instead.
 func (*CheckPortRequest) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{21}
+	return file_opsguard_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *CheckPortRequest) GetNodeId() string {
@@ -1480,7 +1714,7 @@ type PortCheckResult struct {
 
 func (x *PortCheckResult) Reset() {
 	*x = PortCheckResult{}
-	mi := &file_opsguard_proto_msgTypes[22]
+	mi := &file_opsguard_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1492,7 +1726,7 @@ func (x *PortCheckResult) String() string {
 func (*PortCheckResult) ProtoMessage() {}
 
 func (x *PortCheckResult) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[22]
+	mi := &file_opsguard_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1505,7 +1739,7 @@ func (x *PortCheckResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortCheckResult.ProtoReflect.Descriptor instead.
 func (*PortCheckResult) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{22}
+	return file_opsguard_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *PortCheckResult) GetNode() string {
@@ -1565,7 +1799,7 @@ type CheckHTTPRequest struct {
 
 func (x *CheckHTTPRequest) Reset() {
 	*x = CheckHTTPRequest{}
-	mi := &file_opsguard_proto_msgTypes[23]
+	mi := &file_opsguard_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1577,7 +1811,7 @@ func (x *CheckHTTPRequest) String() string {
 func (*CheckHTTPRequest) ProtoMessage() {}
 
 func (x *CheckHTTPRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[23]
+	mi := &file_opsguard_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1590,7 +1824,7 @@ func (x *CheckHTTPRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckHTTPRequest.ProtoReflect.Descriptor instead.
 func (*CheckHTTPRequest) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{23}
+	return file_opsguard_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *CheckHTTPRequest) GetNodeId() string {
@@ -1656,7 +1890,7 @@ type HTTPCheckResult struct {
 
 func (x *HTTPCheckResult) Reset() {
 	*x = HTTPCheckResult{}
-	mi := &file_opsguard_proto_msgTypes[24]
+	mi := &file_opsguard_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1668,7 +1902,7 @@ func (x *HTTPCheckResult) String() string {
 func (*HTTPCheckResult) ProtoMessage() {}
 
 func (x *HTTPCheckResult) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[24]
+	mi := &file_opsguard_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1681,7 +1915,7 @@ func (x *HTTPCheckResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HTTPCheckResult.ProtoReflect.Descriptor instead.
 func (*HTTPCheckResult) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{24}
+	return file_opsguard_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *HTTPCheckResult) GetNode() string {
@@ -1738,7 +1972,7 @@ type CheckFlowRequest struct {
 
 func (x *CheckFlowRequest) Reset() {
 	*x = CheckFlowRequest{}
-	mi := &file_opsguard_proto_msgTypes[25]
+	mi := &file_opsguard_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1750,7 +1984,7 @@ func (x *CheckFlowRequest) String() string {
 func (*CheckFlowRequest) ProtoMessage() {}
 
 func (x *CheckFlowRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[25]
+	mi := &file_opsguard_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1763,7 +1997,7 @@ func (x *CheckFlowRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckFlowRequest.ProtoReflect.Descriptor instead.
 func (*CheckFlowRequest) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{25}
+	return file_opsguard_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *CheckFlowRequest) GetNodeId() string {
@@ -1810,7 +2044,7 @@ type FlowStep struct {
 
 func (x *FlowStep) Reset() {
 	*x = FlowStep{}
-	mi := &file_opsguard_proto_msgTypes[26]
+	mi := &file_opsguard_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1822,7 +2056,7 @@ func (x *FlowStep) String() string {
 func (*FlowStep) ProtoMessage() {}
 
 func (x *FlowStep) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[26]
+	mi := &file_opsguard_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1835,7 +2069,7 @@ func (x *FlowStep) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FlowStep.ProtoReflect.Descriptor instead.
 func (*FlowStep) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{26}
+	return file_opsguard_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *FlowStep) GetName() string {
@@ -1908,7 +2142,7 @@ type FlowCheckResult struct {
 
 func (x *FlowCheckResult) Reset() {
 	*x = FlowCheckResult{}
-	mi := &file_opsguard_proto_msgTypes[27]
+	mi := &file_opsguard_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1920,7 +2154,7 @@ func (x *FlowCheckResult) String() string {
 func (*FlowCheckResult) ProtoMessage() {}
 
 func (x *FlowCheckResult) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[27]
+	mi := &file_opsguard_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1933,7 +2167,7 @@ func (x *FlowCheckResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FlowCheckResult.ProtoReflect.Descriptor instead.
 func (*FlowCheckResult) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{27}
+	return file_opsguard_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *FlowCheckResult) GetNode() string {
@@ -1992,7 +2226,7 @@ type FlowStepResult struct {
 
 func (x *FlowStepResult) Reset() {
 	*x = FlowStepResult{}
-	mi := &file_opsguard_proto_msgTypes[28]
+	mi := &file_opsguard_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2004,7 +2238,7 @@ func (x *FlowStepResult) String() string {
 func (*FlowStepResult) ProtoMessage() {}
 
 func (x *FlowStepResult) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[28]
+	mi := &file_opsguard_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2017,7 +2251,7 @@ func (x *FlowStepResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FlowStepResult.ProtoReflect.Descriptor instead.
 func (*FlowStepResult) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{28}
+	return file_opsguard_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *FlowStepResult) GetName() string {
@@ -2073,7 +2307,7 @@ type ListEventsRequest struct {
 
 func (x *ListEventsRequest) Reset() {
 	*x = ListEventsRequest{}
-	mi := &file_opsguard_proto_msgTypes[29]
+	mi := &file_opsguard_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2085,7 +2319,7 @@ func (x *ListEventsRequest) String() string {
 func (*ListEventsRequest) ProtoMessage() {}
 
 func (x *ListEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[29]
+	mi := &file_opsguard_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2098,7 +2332,7 @@ func (x *ListEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEventsRequest.ProtoReflect.Descriptor instead.
 func (*ListEventsRequest) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{29}
+	return file_opsguard_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ListEventsRequest) GetService() string {
@@ -2133,7 +2367,7 @@ type ListEventsResponse struct {
 
 func (x *ListEventsResponse) Reset() {
 	*x = ListEventsResponse{}
-	mi := &file_opsguard_proto_msgTypes[30]
+	mi := &file_opsguard_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2145,7 +2379,7 @@ func (x *ListEventsResponse) String() string {
 func (*ListEventsResponse) ProtoMessage() {}
 
 func (x *ListEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[30]
+	mi := &file_opsguard_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2158,7 +2392,7 @@ func (x *ListEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEventsResponse.ProtoReflect.Descriptor instead.
 func (*ListEventsResponse) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{30}
+	return file_opsguard_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ListEventsResponse) GetEventsJson() []byte {
@@ -2178,7 +2412,7 @@ type ListAuditRequest struct {
 
 func (x *ListAuditRequest) Reset() {
 	*x = ListAuditRequest{}
-	mi := &file_opsguard_proto_msgTypes[31]
+	mi := &file_opsguard_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2190,7 +2424,7 @@ func (x *ListAuditRequest) String() string {
 func (*ListAuditRequest) ProtoMessage() {}
 
 func (x *ListAuditRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[31]
+	mi := &file_opsguard_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2203,7 +2437,7 @@ func (x *ListAuditRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAuditRequest.ProtoReflect.Descriptor instead.
 func (*ListAuditRequest) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{31}
+	return file_opsguard_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ListAuditRequest) GetAction() string {
@@ -2229,7 +2463,7 @@ type ListAuditResponse struct {
 
 func (x *ListAuditResponse) Reset() {
 	*x = ListAuditResponse{}
-	mi := &file_opsguard_proto_msgTypes[32]
+	mi := &file_opsguard_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2241,7 +2475,7 @@ func (x *ListAuditResponse) String() string {
 func (*ListAuditResponse) ProtoMessage() {}
 
 func (x *ListAuditResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[32]
+	mi := &file_opsguard_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2254,7 +2488,7 @@ func (x *ListAuditResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAuditResponse.ProtoReflect.Descriptor instead.
 func (*ListAuditResponse) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{32}
+	return file_opsguard_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ListAuditResponse) GetEntriesJson() []byte {
@@ -2276,7 +2510,7 @@ type StreamLogsRequest struct {
 
 func (x *StreamLogsRequest) Reset() {
 	*x = StreamLogsRequest{}
-	mi := &file_opsguard_proto_msgTypes[33]
+	mi := &file_opsguard_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2288,7 +2522,7 @@ func (x *StreamLogsRequest) String() string {
 func (*StreamLogsRequest) ProtoMessage() {}
 
 func (x *StreamLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[33]
+	mi := &file_opsguard_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2301,7 +2535,7 @@ func (x *StreamLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamLogsRequest.ProtoReflect.Descriptor instead.
 func (*StreamLogsRequest) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{33}
+	return file_opsguard_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *StreamLogsRequest) GetService() string {
@@ -2343,7 +2577,7 @@ type LogLine struct {
 
 func (x *LogLine) Reset() {
 	*x = LogLine{}
-	mi := &file_opsguard_proto_msgTypes[34]
+	mi := &file_opsguard_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2355,7 +2589,7 @@ func (x *LogLine) String() string {
 func (*LogLine) ProtoMessage() {}
 
 func (x *LogLine) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[34]
+	mi := &file_opsguard_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2368,7 +2602,7 @@ func (x *LogLine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogLine.ProtoReflect.Descriptor instead.
 func (*LogLine) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{34}
+	return file_opsguard_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *LogLine) GetTs() string {
@@ -2406,7 +2640,7 @@ type SubscribeRequest struct {
 
 func (x *SubscribeRequest) Reset() {
 	*x = SubscribeRequest{}
-	mi := &file_opsguard_proto_msgTypes[35]
+	mi := &file_opsguard_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2418,7 +2652,7 @@ func (x *SubscribeRequest) String() string {
 func (*SubscribeRequest) ProtoMessage() {}
 
 func (x *SubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[35]
+	mi := &file_opsguard_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2431,7 +2665,7 @@ func (x *SubscribeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeRequest.ProtoReflect.Descriptor instead.
 func (*SubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{35}
+	return file_opsguard_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *SubscribeRequest) GetAfterSeq() int64 {
@@ -2465,7 +2699,7 @@ type MonitorEvent struct {
 
 func (x *MonitorEvent) Reset() {
 	*x = MonitorEvent{}
-	mi := &file_opsguard_proto_msgTypes[36]
+	mi := &file_opsguard_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2477,7 +2711,7 @@ func (x *MonitorEvent) String() string {
 func (*MonitorEvent) ProtoMessage() {}
 
 func (x *MonitorEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[36]
+	mi := &file_opsguard_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2490,7 +2724,7 @@ func (x *MonitorEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MonitorEvent.ProtoReflect.Descriptor instead.
 func (*MonitorEvent) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{36}
+	return file_opsguard_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *MonitorEvent) GetSeq() int64 {
@@ -2568,7 +2802,7 @@ type AuditEntry struct {
 
 func (x *AuditEntry) Reset() {
 	*x = AuditEntry{}
-	mi := &file_opsguard_proto_msgTypes[37]
+	mi := &file_opsguard_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2580,7 +2814,7 @@ func (x *AuditEntry) String() string {
 func (*AuditEntry) ProtoMessage() {}
 
 func (x *AuditEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[37]
+	mi := &file_opsguard_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2593,7 +2827,7 @@ func (x *AuditEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditEntry.ProtoReflect.Descriptor instead.
 func (*AuditEntry) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{37}
+	return file_opsguard_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *AuditEntry) GetSeq() int64 {
@@ -2687,7 +2921,7 @@ type TunnelFrame struct {
 
 func (x *TunnelFrame) Reset() {
 	*x = TunnelFrame{}
-	mi := &file_opsguard_proto_msgTypes[38]
+	mi := &file_opsguard_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2699,7 +2933,7 @@ func (x *TunnelFrame) String() string {
 func (*TunnelFrame) ProtoMessage() {}
 
 func (x *TunnelFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[38]
+	mi := &file_opsguard_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2712,7 +2946,7 @@ func (x *TunnelFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelFrame.ProtoReflect.Descriptor instead.
 func (*TunnelFrame) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{38}
+	return file_opsguard_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *TunnelFrame) GetId() string {
@@ -2776,7 +3010,7 @@ type TunnelHeader struct {
 
 func (x *TunnelHeader) Reset() {
 	*x = TunnelHeader{}
-	mi := &file_opsguard_proto_msgTypes[39]
+	mi := &file_opsguard_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2788,7 +3022,7 @@ func (x *TunnelHeader) String() string {
 func (*TunnelHeader) ProtoMessage() {}
 
 func (x *TunnelHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_opsguard_proto_msgTypes[39]
+	mi := &file_opsguard_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2801,7 +3035,7 @@ func (x *TunnelHeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelHeader.ProtoReflect.Descriptor instead.
 func (*TunnelHeader) Descriptor() ([]byte, []int) {
-	return file_opsguard_proto_rawDescGZIP(), []int{39}
+	return file_opsguard_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *TunnelHeader) GetKey() string {
@@ -2900,12 +3134,17 @@ const file_opsguard_proto_rawDesc = "" +
 	"cpuPercent\x12\x1f\n" +
 	"\vmem_percent\x18\r \x01(\x01R\n" +
 	"memPercent\x12'\n" +
-	"\x0fcontainer_count\x18\x0e \x01(\x05R\x0econtainerCount\"c\n" +
+	"\x0fcontainer_count\x18\x0e \x01(\x05R\x0econtainerCount\"\xa7\x02\n" +
 	"\x11NodeStatsResponse\x12\x12\n" +
 	"\x04node\x18\x01 \x01(\tR\x04node\x12:\n" +
 	"\n" +
 	"containers\x18\x02 \x03(\v2\x1a.opsguard.v1.ContainerStatR\n" +
-	"containers\"\xe1\x01\n" +
+	"containers\x12(\n" +
+	"\x10host_cpu_percent\x18\x03 \x01(\x01R\x0ehostCpuPercent\x12(\n" +
+	"\x10host_mem_percent\x18\x04 \x01(\x01R\x0ehostMemPercent\x12$\n" +
+	"\x0ehost_mem_total\x18\x05 \x01(\x04R\fhostMemTotal\x12\"\n" +
+	"\rhost_mem_used\x18\x06 \x01(\x04R\vhostMemUsed\x12$\n" +
+	"\x0ehost_cpu_cores\x18\a \x01(\x05R\fhostCpuCores\"\xe1\x01\n" +
 	"\rContainerStat\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x17\n" +
@@ -2920,7 +3159,22 @@ const file_opsguard_proto_rawDesc = "" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x10\n" +
 	"\x03top\x18\x02 \x01(\tR\x03top\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12\x16\n" +
-	"\x06filter\x18\x04 \x01(\tR\x06filter\"u\n" +
+	"\x06filter\x18\x04 \x01(\tR\x06filter\"0\n" +
+	"\x15NodeContainersRequest\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"h\n" +
+	"\x16NodeContainersResponse\x12\x12\n" +
+	"\x04node\x18\x01 \x01(\tR\x04node\x12:\n" +
+	"\n" +
+	"containers\x18\x02 \x03(\v2\x1a.opsguard.v1.ContainerInfoR\n" +
+	"containers\"\xa3\x01\n" +
+	"\rContainerInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
+	"\x05image\x18\x03 \x01(\tR\x05image\x12\x14\n" +
+	"\x05state\x18\x04 \x01(\tR\x05state\x12\x12\n" +
+	"\x04type\x18\x05 \x01(\tR\x04type\x12\x18\n" +
+	"\aservice\x18\x06 \x01(\tR\aservice\x12\x14\n" +
+	"\x05ports\x18\a \x01(\tR\x05ports\"u\n" +
 	"\x11ProcessesResponse\x12\x12\n" +
 	"\x04node\x18\x01 \x01(\tR\x04node\x12\x14\n" +
 	"\x05total\x18\x02 \x01(\x05R\x05total\x126\n" +
@@ -3062,7 +3316,7 @@ const file_opsguard_proto_rawDesc = "" +
 	"\x05error\x18\a \x01(\tR\x05error\"6\n" +
 	"\fTunnelHeader\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value2\x8a\f\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value2\xe5\f\n" +
 	"\x11ManagementService\x12-\n" +
 	"\x04Ping\x12\x12.opsguard.v1.Empty\x1a\x11.opsguard.v1.Pong\x121\n" +
 	"\x04Self\x12\x12.opsguard.v1.Empty\x1a\x15.opsguard.v1.SelfInfo\x12S\n" +
@@ -3077,7 +3331,8 @@ const file_opsguard_proto_rawDesc = "" +
 	"\fGetOperation\x12 .opsguard.v1.GetOperationRequest\x1a\x16.opsguard.v1.Operation\x12?\n" +
 	"\tListNodes\x12\x12.opsguard.v1.Empty\x1a\x1e.opsguard.v1.ListNodesResponse\x12?\n" +
 	"\tNodeStats\x12\x12.opsguard.v1.Empty\x1a\x1e.opsguard.v1.NodeStatsResponse\x12R\n" +
-	"\rNodeProcesses\x12!.opsguard.v1.NodeProcessesRequest\x1a\x1e.opsguard.v1.ProcessesResponse\x12H\n" +
+	"\rNodeProcesses\x12!.opsguard.v1.NodeProcessesRequest\x1a\x1e.opsguard.v1.ProcessesResponse\x12Y\n" +
+	"\x0eNodeContainers\x12\".opsguard.v1.NodeContainersRequest\x1a#.opsguard.v1.NodeContainersResponse\x12H\n" +
 	"\tCheckPort\x12\x1d.opsguard.v1.CheckPortRequest\x1a\x1c.opsguard.v1.PortCheckResult\x12H\n" +
 	"\tCheckHTTP\x12\x1d.opsguard.v1.CheckHTTPRequest\x1a\x1c.opsguard.v1.HTTPCheckResult\x12H\n" +
 	"\tCheckFlow\x12\x1d.opsguard.v1.CheckFlowRequest\x1a\x1c.opsguard.v1.FlowCheckResult\x12M\n" +
@@ -3102,116 +3357,122 @@ func file_opsguard_proto_rawDescGZIP() []byte {
 	return file_opsguard_proto_rawDescData
 }
 
-var file_opsguard_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
+var file_opsguard_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_opsguard_proto_goTypes = []any{
-	(*Empty)(nil),                 // 0: opsguard.v1.Empty
-	(*Pong)(nil),                  // 1: opsguard.v1.Pong
-	(*SelfInfo)(nil),              // 2: opsguard.v1.SelfInfo
-	(*ListServicesRequest)(nil),   // 3: opsguard.v1.ListServicesRequest
-	(*ListServicesResponse)(nil),  // 4: opsguard.v1.ListServicesResponse
-	(*GetServiceRequest)(nil),     // 5: opsguard.v1.GetServiceRequest
-	(*ServiceDetail)(nil),         // 6: opsguard.v1.ServiceDetail
-	(*DeployRequest)(nil),         // 7: opsguard.v1.DeployRequest
-	(*UpdateRequest)(nil),         // 8: opsguard.v1.UpdateRequest
-	(*ScaleRequest)(nil),          // 9: opsguard.v1.ScaleRequest
-	(*RestartRequest)(nil),        // 10: opsguard.v1.RestartRequest
-	(*RemoveRequest)(nil),         // 11: opsguard.v1.RemoveRequest
-	(*GetOperationRequest)(nil),   // 12: opsguard.v1.GetOperationRequest
-	(*Operation)(nil),             // 13: opsguard.v1.Operation
-	(*ListNodesResponse)(nil),     // 14: opsguard.v1.ListNodesResponse
-	(*Node)(nil),                  // 15: opsguard.v1.Node
-	(*NodeStatsResponse)(nil),     // 16: opsguard.v1.NodeStatsResponse
-	(*ContainerStat)(nil),         // 17: opsguard.v1.ContainerStat
-	(*NodeProcessesRequest)(nil),  // 18: opsguard.v1.NodeProcessesRequest
-	(*ProcessesResponse)(nil),     // 19: opsguard.v1.ProcessesResponse
-	(*ProcessInfo)(nil),           // 20: opsguard.v1.ProcessInfo
-	(*CheckPortRequest)(nil),      // 21: opsguard.v1.CheckPortRequest
-	(*PortCheckResult)(nil),       // 22: opsguard.v1.PortCheckResult
-	(*CheckHTTPRequest)(nil),      // 23: opsguard.v1.CheckHTTPRequest
-	(*HTTPCheckResult)(nil),       // 24: opsguard.v1.HTTPCheckResult
-	(*CheckFlowRequest)(nil),      // 25: opsguard.v1.CheckFlowRequest
-	(*FlowStep)(nil),              // 26: opsguard.v1.FlowStep
-	(*FlowCheckResult)(nil),       // 27: opsguard.v1.FlowCheckResult
-	(*FlowStepResult)(nil),        // 28: opsguard.v1.FlowStepResult
-	(*ListEventsRequest)(nil),     // 29: opsguard.v1.ListEventsRequest
-	(*ListEventsResponse)(nil),    // 30: opsguard.v1.ListEventsResponse
-	(*ListAuditRequest)(nil),      // 31: opsguard.v1.ListAuditRequest
-	(*ListAuditResponse)(nil),     // 32: opsguard.v1.ListAuditResponse
-	(*StreamLogsRequest)(nil),     // 33: opsguard.v1.StreamLogsRequest
-	(*LogLine)(nil),               // 34: opsguard.v1.LogLine
-	(*SubscribeRequest)(nil),      // 35: opsguard.v1.SubscribeRequest
-	(*MonitorEvent)(nil),          // 36: opsguard.v1.MonitorEvent
-	(*AuditEntry)(nil),            // 37: opsguard.v1.AuditEntry
-	(*TunnelFrame)(nil),           // 38: opsguard.v1.TunnelFrame
-	(*TunnelHeader)(nil),          // 39: opsguard.v1.TunnelHeader
-	nil,                           // 40: opsguard.v1.CheckHTTPRequest.HeadersEntry
-	nil,                           // 41: opsguard.v1.CheckFlowRequest.VarsEntry
-	nil,                           // 42: opsguard.v1.FlowStep.HeadersEntry
-	nil,                           // 43: opsguard.v1.FlowStep.ExtractEntry
-	(*timestamppb.Timestamp)(nil), // 44: google.protobuf.Timestamp
+	(*Empty)(nil),                  // 0: opsguard.v1.Empty
+	(*Pong)(nil),                   // 1: opsguard.v1.Pong
+	(*SelfInfo)(nil),               // 2: opsguard.v1.SelfInfo
+	(*ListServicesRequest)(nil),    // 3: opsguard.v1.ListServicesRequest
+	(*ListServicesResponse)(nil),   // 4: opsguard.v1.ListServicesResponse
+	(*GetServiceRequest)(nil),      // 5: opsguard.v1.GetServiceRequest
+	(*ServiceDetail)(nil),          // 6: opsguard.v1.ServiceDetail
+	(*DeployRequest)(nil),          // 7: opsguard.v1.DeployRequest
+	(*UpdateRequest)(nil),          // 8: opsguard.v1.UpdateRequest
+	(*ScaleRequest)(nil),           // 9: opsguard.v1.ScaleRequest
+	(*RestartRequest)(nil),         // 10: opsguard.v1.RestartRequest
+	(*RemoveRequest)(nil),          // 11: opsguard.v1.RemoveRequest
+	(*GetOperationRequest)(nil),    // 12: opsguard.v1.GetOperationRequest
+	(*Operation)(nil),              // 13: opsguard.v1.Operation
+	(*ListNodesResponse)(nil),      // 14: opsguard.v1.ListNodesResponse
+	(*Node)(nil),                   // 15: opsguard.v1.Node
+	(*NodeStatsResponse)(nil),      // 16: opsguard.v1.NodeStatsResponse
+	(*ContainerStat)(nil),          // 17: opsguard.v1.ContainerStat
+	(*NodeProcessesRequest)(nil),   // 18: opsguard.v1.NodeProcessesRequest
+	(*NodeContainersRequest)(nil),  // 19: opsguard.v1.NodeContainersRequest
+	(*NodeContainersResponse)(nil), // 20: opsguard.v1.NodeContainersResponse
+	(*ContainerInfo)(nil),          // 21: opsguard.v1.ContainerInfo
+	(*ProcessesResponse)(nil),      // 22: opsguard.v1.ProcessesResponse
+	(*ProcessInfo)(nil),            // 23: opsguard.v1.ProcessInfo
+	(*CheckPortRequest)(nil),       // 24: opsguard.v1.CheckPortRequest
+	(*PortCheckResult)(nil),        // 25: opsguard.v1.PortCheckResult
+	(*CheckHTTPRequest)(nil),       // 26: opsguard.v1.CheckHTTPRequest
+	(*HTTPCheckResult)(nil),        // 27: opsguard.v1.HTTPCheckResult
+	(*CheckFlowRequest)(nil),       // 28: opsguard.v1.CheckFlowRequest
+	(*FlowStep)(nil),               // 29: opsguard.v1.FlowStep
+	(*FlowCheckResult)(nil),        // 30: opsguard.v1.FlowCheckResult
+	(*FlowStepResult)(nil),         // 31: opsguard.v1.FlowStepResult
+	(*ListEventsRequest)(nil),      // 32: opsguard.v1.ListEventsRequest
+	(*ListEventsResponse)(nil),     // 33: opsguard.v1.ListEventsResponse
+	(*ListAuditRequest)(nil),       // 34: opsguard.v1.ListAuditRequest
+	(*ListAuditResponse)(nil),      // 35: opsguard.v1.ListAuditResponse
+	(*StreamLogsRequest)(nil),      // 36: opsguard.v1.StreamLogsRequest
+	(*LogLine)(nil),                // 37: opsguard.v1.LogLine
+	(*SubscribeRequest)(nil),       // 38: opsguard.v1.SubscribeRequest
+	(*MonitorEvent)(nil),           // 39: opsguard.v1.MonitorEvent
+	(*AuditEntry)(nil),             // 40: opsguard.v1.AuditEntry
+	(*TunnelFrame)(nil),            // 41: opsguard.v1.TunnelFrame
+	(*TunnelHeader)(nil),           // 42: opsguard.v1.TunnelHeader
+	nil,                            // 43: opsguard.v1.CheckHTTPRequest.HeadersEntry
+	nil,                            // 44: opsguard.v1.CheckFlowRequest.VarsEntry
+	nil,                            // 45: opsguard.v1.FlowStep.HeadersEntry
+	nil,                            // 46: opsguard.v1.FlowStep.ExtractEntry
+	(*timestamppb.Timestamp)(nil),  // 47: google.protobuf.Timestamp
 }
 var file_opsguard_proto_depIdxs = []int32{
 	15, // 0: opsguard.v1.ListNodesResponse.nodes:type_name -> opsguard.v1.Node
 	17, // 1: opsguard.v1.NodeStatsResponse.containers:type_name -> opsguard.v1.ContainerStat
-	20, // 2: opsguard.v1.ProcessesResponse.processes:type_name -> opsguard.v1.ProcessInfo
-	40, // 3: opsguard.v1.CheckHTTPRequest.headers:type_name -> opsguard.v1.CheckHTTPRequest.HeadersEntry
-	26, // 4: opsguard.v1.CheckFlowRequest.steps:type_name -> opsguard.v1.FlowStep
-	41, // 5: opsguard.v1.CheckFlowRequest.vars:type_name -> opsguard.v1.CheckFlowRequest.VarsEntry
-	42, // 6: opsguard.v1.FlowStep.headers:type_name -> opsguard.v1.FlowStep.HeadersEntry
-	43, // 7: opsguard.v1.FlowStep.extract:type_name -> opsguard.v1.FlowStep.ExtractEntry
-	28, // 8: opsguard.v1.FlowCheckResult.steps:type_name -> opsguard.v1.FlowStepResult
-	44, // 9: opsguard.v1.MonitorEvent.ts:type_name -> google.protobuf.Timestamp
-	44, // 10: opsguard.v1.AuditEntry.ts:type_name -> google.protobuf.Timestamp
-	39, // 11: opsguard.v1.TunnelFrame.headers:type_name -> opsguard.v1.TunnelHeader
-	0,  // 12: opsguard.v1.ManagementService.Ping:input_type -> opsguard.v1.Empty
-	0,  // 13: opsguard.v1.ManagementService.Self:input_type -> opsguard.v1.Empty
-	3,  // 14: opsguard.v1.ManagementService.ListServices:input_type -> opsguard.v1.ListServicesRequest
-	5,  // 15: opsguard.v1.ManagementService.GetService:input_type -> opsguard.v1.GetServiceRequest
-	7,  // 16: opsguard.v1.ManagementService.Deploy:input_type -> opsguard.v1.DeployRequest
-	8,  // 17: opsguard.v1.ManagementService.Update:input_type -> opsguard.v1.UpdateRequest
-	9,  // 18: opsguard.v1.ManagementService.Scale:input_type -> opsguard.v1.ScaleRequest
-	10, // 19: opsguard.v1.ManagementService.Restart:input_type -> opsguard.v1.RestartRequest
-	11, // 20: opsguard.v1.ManagementService.Remove:input_type -> opsguard.v1.RemoveRequest
-	12, // 21: opsguard.v1.ManagementService.GetOperation:input_type -> opsguard.v1.GetOperationRequest
-	0,  // 22: opsguard.v1.ManagementService.ListNodes:input_type -> opsguard.v1.Empty
-	0,  // 23: opsguard.v1.ManagementService.NodeStats:input_type -> opsguard.v1.Empty
-	18, // 24: opsguard.v1.ManagementService.NodeProcesses:input_type -> opsguard.v1.NodeProcessesRequest
-	21, // 25: opsguard.v1.ManagementService.CheckPort:input_type -> opsguard.v1.CheckPortRequest
-	23, // 26: opsguard.v1.ManagementService.CheckHTTP:input_type -> opsguard.v1.CheckHTTPRequest
-	25, // 27: opsguard.v1.ManagementService.CheckFlow:input_type -> opsguard.v1.CheckFlowRequest
-	29, // 28: opsguard.v1.ManagementService.ListEvents:input_type -> opsguard.v1.ListEventsRequest
-	31, // 29: opsguard.v1.ManagementService.ListAudit:input_type -> opsguard.v1.ListAuditRequest
-	33, // 30: opsguard.v1.ManagementService.StreamLogs:input_type -> opsguard.v1.StreamLogsRequest
-	35, // 31: opsguard.v1.ManagementService.SubscribeEvents:input_type -> opsguard.v1.SubscribeRequest
-	35, // 32: opsguard.v1.ManagementService.SubscribeAudit:input_type -> opsguard.v1.SubscribeRequest
-	38, // 33: opsguard.v1.ManagementService.Tunnel:input_type -> opsguard.v1.TunnelFrame
-	1,  // 34: opsguard.v1.ManagementService.Ping:output_type -> opsguard.v1.Pong
-	2,  // 35: opsguard.v1.ManagementService.Self:output_type -> opsguard.v1.SelfInfo
-	4,  // 36: opsguard.v1.ManagementService.ListServices:output_type -> opsguard.v1.ListServicesResponse
-	6,  // 37: opsguard.v1.ManagementService.GetService:output_type -> opsguard.v1.ServiceDetail
-	13, // 38: opsguard.v1.ManagementService.Deploy:output_type -> opsguard.v1.Operation
-	13, // 39: opsguard.v1.ManagementService.Update:output_type -> opsguard.v1.Operation
-	13, // 40: opsguard.v1.ManagementService.Scale:output_type -> opsguard.v1.Operation
-	13, // 41: opsguard.v1.ManagementService.Restart:output_type -> opsguard.v1.Operation
-	13, // 42: opsguard.v1.ManagementService.Remove:output_type -> opsguard.v1.Operation
-	13, // 43: opsguard.v1.ManagementService.GetOperation:output_type -> opsguard.v1.Operation
-	14, // 44: opsguard.v1.ManagementService.ListNodes:output_type -> opsguard.v1.ListNodesResponse
-	16, // 45: opsguard.v1.ManagementService.NodeStats:output_type -> opsguard.v1.NodeStatsResponse
-	19, // 46: opsguard.v1.ManagementService.NodeProcesses:output_type -> opsguard.v1.ProcessesResponse
-	22, // 47: opsguard.v1.ManagementService.CheckPort:output_type -> opsguard.v1.PortCheckResult
-	24, // 48: opsguard.v1.ManagementService.CheckHTTP:output_type -> opsguard.v1.HTTPCheckResult
-	27, // 49: opsguard.v1.ManagementService.CheckFlow:output_type -> opsguard.v1.FlowCheckResult
-	30, // 50: opsguard.v1.ManagementService.ListEvents:output_type -> opsguard.v1.ListEventsResponse
-	32, // 51: opsguard.v1.ManagementService.ListAudit:output_type -> opsguard.v1.ListAuditResponse
-	34, // 52: opsguard.v1.ManagementService.StreamLogs:output_type -> opsguard.v1.LogLine
-	36, // 53: opsguard.v1.ManagementService.SubscribeEvents:output_type -> opsguard.v1.MonitorEvent
-	37, // 54: opsguard.v1.ManagementService.SubscribeAudit:output_type -> opsguard.v1.AuditEntry
-	38, // 55: opsguard.v1.ManagementService.Tunnel:output_type -> opsguard.v1.TunnelFrame
-	34, // [34:56] is the sub-list for method output_type
-	12, // [12:34] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	21, // 2: opsguard.v1.NodeContainersResponse.containers:type_name -> opsguard.v1.ContainerInfo
+	23, // 3: opsguard.v1.ProcessesResponse.processes:type_name -> opsguard.v1.ProcessInfo
+	43, // 4: opsguard.v1.CheckHTTPRequest.headers:type_name -> opsguard.v1.CheckHTTPRequest.HeadersEntry
+	29, // 5: opsguard.v1.CheckFlowRequest.steps:type_name -> opsguard.v1.FlowStep
+	44, // 6: opsguard.v1.CheckFlowRequest.vars:type_name -> opsguard.v1.CheckFlowRequest.VarsEntry
+	45, // 7: opsguard.v1.FlowStep.headers:type_name -> opsguard.v1.FlowStep.HeadersEntry
+	46, // 8: opsguard.v1.FlowStep.extract:type_name -> opsguard.v1.FlowStep.ExtractEntry
+	31, // 9: opsguard.v1.FlowCheckResult.steps:type_name -> opsguard.v1.FlowStepResult
+	47, // 10: opsguard.v1.MonitorEvent.ts:type_name -> google.protobuf.Timestamp
+	47, // 11: opsguard.v1.AuditEntry.ts:type_name -> google.protobuf.Timestamp
+	42, // 12: opsguard.v1.TunnelFrame.headers:type_name -> opsguard.v1.TunnelHeader
+	0,  // 13: opsguard.v1.ManagementService.Ping:input_type -> opsguard.v1.Empty
+	0,  // 14: opsguard.v1.ManagementService.Self:input_type -> opsguard.v1.Empty
+	3,  // 15: opsguard.v1.ManagementService.ListServices:input_type -> opsguard.v1.ListServicesRequest
+	5,  // 16: opsguard.v1.ManagementService.GetService:input_type -> opsguard.v1.GetServiceRequest
+	7,  // 17: opsguard.v1.ManagementService.Deploy:input_type -> opsguard.v1.DeployRequest
+	8,  // 18: opsguard.v1.ManagementService.Update:input_type -> opsguard.v1.UpdateRequest
+	9,  // 19: opsguard.v1.ManagementService.Scale:input_type -> opsguard.v1.ScaleRequest
+	10, // 20: opsguard.v1.ManagementService.Restart:input_type -> opsguard.v1.RestartRequest
+	11, // 21: opsguard.v1.ManagementService.Remove:input_type -> opsguard.v1.RemoveRequest
+	12, // 22: opsguard.v1.ManagementService.GetOperation:input_type -> opsguard.v1.GetOperationRequest
+	0,  // 23: opsguard.v1.ManagementService.ListNodes:input_type -> opsguard.v1.Empty
+	0,  // 24: opsguard.v1.ManagementService.NodeStats:input_type -> opsguard.v1.Empty
+	18, // 25: opsguard.v1.ManagementService.NodeProcesses:input_type -> opsguard.v1.NodeProcessesRequest
+	19, // 26: opsguard.v1.ManagementService.NodeContainers:input_type -> opsguard.v1.NodeContainersRequest
+	24, // 27: opsguard.v1.ManagementService.CheckPort:input_type -> opsguard.v1.CheckPortRequest
+	26, // 28: opsguard.v1.ManagementService.CheckHTTP:input_type -> opsguard.v1.CheckHTTPRequest
+	28, // 29: opsguard.v1.ManagementService.CheckFlow:input_type -> opsguard.v1.CheckFlowRequest
+	32, // 30: opsguard.v1.ManagementService.ListEvents:input_type -> opsguard.v1.ListEventsRequest
+	34, // 31: opsguard.v1.ManagementService.ListAudit:input_type -> opsguard.v1.ListAuditRequest
+	36, // 32: opsguard.v1.ManagementService.StreamLogs:input_type -> opsguard.v1.StreamLogsRequest
+	38, // 33: opsguard.v1.ManagementService.SubscribeEvents:input_type -> opsguard.v1.SubscribeRequest
+	38, // 34: opsguard.v1.ManagementService.SubscribeAudit:input_type -> opsguard.v1.SubscribeRequest
+	41, // 35: opsguard.v1.ManagementService.Tunnel:input_type -> opsguard.v1.TunnelFrame
+	1,  // 36: opsguard.v1.ManagementService.Ping:output_type -> opsguard.v1.Pong
+	2,  // 37: opsguard.v1.ManagementService.Self:output_type -> opsguard.v1.SelfInfo
+	4,  // 38: opsguard.v1.ManagementService.ListServices:output_type -> opsguard.v1.ListServicesResponse
+	6,  // 39: opsguard.v1.ManagementService.GetService:output_type -> opsguard.v1.ServiceDetail
+	13, // 40: opsguard.v1.ManagementService.Deploy:output_type -> opsguard.v1.Operation
+	13, // 41: opsguard.v1.ManagementService.Update:output_type -> opsguard.v1.Operation
+	13, // 42: opsguard.v1.ManagementService.Scale:output_type -> opsguard.v1.Operation
+	13, // 43: opsguard.v1.ManagementService.Restart:output_type -> opsguard.v1.Operation
+	13, // 44: opsguard.v1.ManagementService.Remove:output_type -> opsguard.v1.Operation
+	13, // 45: opsguard.v1.ManagementService.GetOperation:output_type -> opsguard.v1.Operation
+	14, // 46: opsguard.v1.ManagementService.ListNodes:output_type -> opsguard.v1.ListNodesResponse
+	16, // 47: opsguard.v1.ManagementService.NodeStats:output_type -> opsguard.v1.NodeStatsResponse
+	22, // 48: opsguard.v1.ManagementService.NodeProcesses:output_type -> opsguard.v1.ProcessesResponse
+	20, // 49: opsguard.v1.ManagementService.NodeContainers:output_type -> opsguard.v1.NodeContainersResponse
+	25, // 50: opsguard.v1.ManagementService.CheckPort:output_type -> opsguard.v1.PortCheckResult
+	27, // 51: opsguard.v1.ManagementService.CheckHTTP:output_type -> opsguard.v1.HTTPCheckResult
+	30, // 52: opsguard.v1.ManagementService.CheckFlow:output_type -> opsguard.v1.FlowCheckResult
+	33, // 53: opsguard.v1.ManagementService.ListEvents:output_type -> opsguard.v1.ListEventsResponse
+	35, // 54: opsguard.v1.ManagementService.ListAudit:output_type -> opsguard.v1.ListAuditResponse
+	37, // 55: opsguard.v1.ManagementService.StreamLogs:output_type -> opsguard.v1.LogLine
+	39, // 56: opsguard.v1.ManagementService.SubscribeEvents:output_type -> opsguard.v1.MonitorEvent
+	40, // 57: opsguard.v1.ManagementService.SubscribeAudit:output_type -> opsguard.v1.AuditEntry
+	41, // 58: opsguard.v1.ManagementService.Tunnel:output_type -> opsguard.v1.TunnelFrame
+	36, // [36:59] is the sub-list for method output_type
+	13, // [13:36] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_opsguard_proto_init() }
@@ -3225,7 +3486,7 @@ func file_opsguard_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_opsguard_proto_rawDesc), len(file_opsguard_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   44,
+			NumMessages:   47,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

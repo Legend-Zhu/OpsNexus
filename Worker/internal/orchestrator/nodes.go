@@ -9,7 +9,6 @@ package orchestrator
 import (
 	"context"
 	"sync"
-	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
 )
@@ -32,7 +31,8 @@ type NodeView struct {
 	ContainerCount int     `json:"containerCount"`
 }
 
-// ListNodesView aggregates the swarm node table with per-node container stats.
+// ListNodesView aggregates the swarm node table with per-node HOST resource
+// usage (宿主机 CPU/内存，读节点 /proc/stat + /proc/meminfo，而非 swarm 容器聚合).
 // The local node's stats come from this daemon directly; remote nodes via their
 // node-role worker's /api/v1/local/stats. Failures of individual remote stats
 // are non-fatal (the node is marked unreachable).
@@ -72,16 +72,23 @@ func (o *Orchestrator) ListNodesView(ctx context.Context) ([]NodeView, error) {
 		wg.Add(1)
 		go func(i int, n docker.Node) {
 			defer wg.Done()
+			// 本机也走统一的 local stats 端点（含宿主采样），保持两路逻辑一致。
+			addr, ok := addrs[n.ID]
 			if n.ID == selfID {
-				views[i].Reachable = true // 本 daemon 直读
-				views[i].CPUPercent, views[i].MemPercent, views[i].ContainerCount = o.localNodeAggregate(ctx, views[i].CPUCores, views[i].MemBytes)
-			} else if addr, ok := addrs[n.ID]; ok {
-				stats, err := o.NodeClientByAddr(addr).Stats(ctx)
-				if err == nil {
-					views[i].Reachable = true
-					views[i].CPUPercent, views[i].MemPercent, views[i].ContainerCount = aggregateStats(stats.Containers, views[i].CPUCores, views[i].MemBytes)
-				}
+				addr = n.Status.Addr
+				ok = addr != ""
 			}
+			if !ok {
+				return
+			}
+			stats, err := o.NodeClientByAddr(addr).Stats(ctx)
+			if err != nil {
+				return
+			}
+			views[i].Reachable = true
+			views[i].CPUPercent = stats.HostCPUPercent
+			views[i].MemPercent = stats.HostMemPercent
+			views[i].ContainerCount = stats.ContainerCount
 		}(i, n)
 	}
 	wg.Wait()
@@ -113,108 +120,6 @@ func NodeNotFound(err error) bool {
 	return ok
 }
 
-// localNodeAggregate reads this daemon's running swarm-service containers and
-// aggregates CPU/memory percent against the node's total resources.
-//
-// CPU sampling needs two snapshots 1s apart per container. To keep this O(1s)
-// regardless of container count, we take all first samples concurrently, sleep
-// once, then take all second samples concurrently — instead of the previous
-// per-container serial sleep(1s) which made the call O(N seconds).
-func (o *Orchestrator) localNodeAggregate(ctx context.Context, cores float64, memBytes uint64) (cpuPct, memPct float64, count int) {
-	cs, err := o.cli.ListContainers(ctx, docker.Filter{"label": {"com.docker.swarm.service.id"}})
-	if err != nil {
-		return 0, 0, 0
-	}
-	// Filter to running containers first.
-	running := make([]docker.Container, 0, len(cs))
-	for _, c := range cs {
-		if c.State == "running" {
-			running = append(running, c)
-		}
-	}
-	if len(running) == 0 {
-		return 0, 0, 0
-	}
-
-	// First snapshot: one goroutine per container.
-	first := make([]docker.Stats, len(running))
-	okFirst := make([]bool, len(running))
-	var wg sync.WaitGroup
-	for i, c := range running {
-		wg.Add(1)
-		go func(i int, id string) {
-			defer wg.Done()
-			if s, err := o.cli.ContainerStats(ctx, id); err == nil {
-				first[i] = s
-				okFirst[i] = true
-			}
-		}(i, c.ID)
-	}
-	wg.Wait()
-
-	// Single sampling interval for all containers.
-	select {
-	case <-ctx.Done():
-		return 0, 0, 0
-	case <-time.After(time.Second):
-	}
-
-	// Second snapshot: concurrent again.
-	second := make([]docker.Stats, len(running))
-	okSecond := make([]bool, len(running))
-	for i, c := range running {
-		if !okFirst[i] {
-			continue
-		}
-		wg.Add(1)
-		go func(i int, id string) {
-			defer wg.Done()
-			if s, err := o.cli.ContainerStats(ctx, id); err == nil {
-				second[i] = s
-				okSecond[i] = true
-			}
-		}(i, c.ID)
-	}
-	wg.Wait()
-
-	var sumCPU float64
-	var sumMem uint64
-	for i := range running {
-		if !okFirst[i] || !okSecond[i] {
-			continue
-		}
-		sumCPU += cpuDeltaPercent(first[i], second[i])
-		sumMem += memUsageOf(second[i])
-		count++
-	}
-	if cores > 0 {
-		cpuPct = round2(sumCPU / cores)
-	}
-	if memBytes > 0 {
-		memPct = round2(float64(sumMem) / float64(memBytes) * 100)
-	}
-	return cpuPct, memPct, count
-}
-
-// aggregateStats sums per-container stats from a node worker's local stats.
-func aggregateStats(containers []NodeContainerStat, cores float64, memBytes uint64) (cpuPct, memPct float64, count int) {
-	var sumCPU float64
-	var sumMem uint64
-	for _, c := range containers {
-		sumCPU += c.CPUPercent
-		// memPercent 已排除 page cache；换算回有效使用字节
-		sumMem += uint64(c.MemPercent / 100 * float64(c.MemLimit))
-		count++
-	}
-	if cores > 0 {
-		cpuPct = round2(sumCPU / cores)
-	}
-	if memBytes > 0 {
-		memPct = round2(float64(sumMem) / float64(memBytes) * 100)
-	}
-	return cpuPct, memPct, count
-}
-
 func coresOf(n docker.Node) float64 {
 	return float64(n.Description.Resources.NanoCPUs) / 1e9
 }
@@ -226,35 +131,6 @@ func memBytesOf(n docker.Node) uint64 {
 	return uint64(n.Description.Resources.MemoryBytes)
 }
 
-// memUsageOf 容器内存有效使用（排除 page cache）。
-func memUsageOf(st docker.Stats) uint64 {
-	usage := st.MemoryStats.Usage
-	if v, ok := st.MemoryStats.Stats["inactive_file"]; ok && usage > v {
-		usage -= v
-	}
-	return usage
-}
-
-// cpuDeltaPercent computes the CPU usage percentage between two stats
-// snapshots (docker stats algorithm, normalized by core count).
-func cpuDeltaPercent(prev, cur docker.Stats) float64 {
-	dt := cur.CPUStats.SystemCPUUsage - prev.CPUStats.SystemCPUUsage
-	if dt == 0 {
-		return 0
-	}
-	dtCPU := cur.CPUStats.CPUUsage.TotalUsage - prev.CPUStats.CPUUsage.TotalUsage
-	pct := float64(dtCPU) / float64(dt) * 100
-	cores := float64(cur.CPUStats.OnlineCPUs)
-	if cores > 0 {
-		pct *= cores
-	}
-	return pct
-}
-
-// round2 保留两位小数。
-func round2(f float64) float64 {
-	return float64(int64(f*100+0.5)) / 100
-}
 
 // simpleErr is a lightweight sentinel error used by ResolveNodeAddr for
 // not-found cases (NodeNotFound distinguishes them from docker failures).

@@ -47,6 +47,7 @@ service ManagementService {
   rpc ListNodes(Empty) returns (ListNodesResponse);
   rpc NodeStats(Empty) returns (NodeStatsResponse);
   rpc NodeProcesses(NodeProcessesRequest) returns (ProcessesResponse);
+  rpc NodeContainers(NodeContainersRequest) returns (NodeContainersResponse);
 
   // ---- connectivity / HTTP probes ----
   rpc CheckPort(CheckPortRequest) returns (PortCheckResult);
@@ -200,6 +201,14 @@ message Node {
 message NodeStatsResponse {
   string node = 1;
   repeated ContainerStat containers = 2;
+  // Host-level (宿主机) resource usage, read from the node's /proc/stat and
+  // /proc/meminfo — the node card / monitor tab show these, not the swarm
+  // container aggregate.
+  double host_cpu_percent = 3;
+  double host_mem_percent = 4;
+  uint64 host_mem_total = 5;
+  uint64 host_mem_used = 6;
+  int32 host_cpu_cores = 7;
 }
 
 message ContainerStat {
@@ -217,6 +226,28 @@ message NodeProcessesRequest {
   string top = 2;    // cpu|mem
   int32 limit = 3;
   string filter = 4;
+}
+
+// NodeContainers lists ALL containers on a node (swarm service tasks AND
+// standalone docker run containers such as r-nacos/grafana/nginxwebui), so
+// host-deployed middleware is visible from the management UI.
+message NodeContainersRequest {
+  string node_id = 1;
+}
+
+message NodeContainersResponse {
+  string node = 1;
+  repeated ContainerInfo containers = 2;
+}
+
+message ContainerInfo {
+  string id = 1;
+  string name = 2;
+  string image = 3;
+  string state = 4;   // running | exited | ...
+  string type = 5;    // service | standalone
+  string service = 6; // swarm service name, when type=service
+  string ports = 7;   // "80->8080/tcp, 443->8443/tcp" (host published)
 }
 
 message ProcessesResponse {

@@ -39,3 +39,18 @@ func (h *Handlers) NodeProcesses(c *gin.Context) {
 	}
 	ok(c, http.StatusOK, procs)
 }
+
+// NodeContainers godoc: GET /api/v1/clusters/:name/nodes/:id/containers
+// 节点上的全部容器（swarm 任务容器 + standalone docker run 容器，如 r-nacos）。
+func (h *Handlers) NodeContainers(c *gin.Context) {
+	cli, got := h.workerClient(c)
+	if !got {
+		return
+	}
+	cs, err := cli.NodeContainers(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		proxyErr(c, "list node containers", err)
+		return
+	}
+	ok(c, http.StatusOK, gin.H{"items": cs})
+}

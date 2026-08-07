@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/agent"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
@@ -35,6 +34,7 @@ func (a *API) Routes() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
 		"GET /api/v1/local/stats":       a.stats,
 		"GET /api/v1/local/processes":   a.processes,
+		"GET /api/v1/local/containers":  a.containers,
 		"POST /api/v1/local/exec":       a.exec,
 		"POST /api/v1/local/host":       a.host,
 		"GET /api/v1/local/logs":        a.logs,
@@ -42,72 +42,6 @@ func (a *API) Routes() map[string]http.HandlerFunc {
 		"POST /api/v1/local/check/http": a.checkHTTP,
 		"POST /api/v1/local/check/flow": a.checkFlow,
 	}
-}
-
-// ---- stats ----
-
-// ContainerStat is a single container's resource usage snapshot. Exported so
-// the gRPC management service can return the same shape without duplicating
-// the collection logic.
-type ContainerStat struct {
-	ContainerID string  `json:"containerId"`
-	Service     string  `json:"service,omitempty"`
-	TaskID      string  `json:"taskId,omitempty"`
-	CPUPercent  float64 `json:"cpuPercent"`
-	MemPercent  float64 `json:"memPercent"`
-	MemUsage    uint64  `json:"memUsageBytes"`
-	MemLimit    uint64  `json:"memLimitBytes"`
-}
-
-// StatsResp is the local-node container-stats response, shared by the HTTP
-// /api/v1/local/stats handler and the gRPC NodeStats RPC.
-type StatsResp struct {
-	Node       string          `json:"node"`
-	Containers []ContainerStat `json:"containers"`
-}
-
-// LocalStats collects this node's running swarm-service container stats. Shared
-// by the HTTP handler and the gRPC server so the collection logic lives once.
-func (a *API) LocalStats(ctx context.Context) (StatsResp, error) {
-	host, _ := hostname()
-	cs, err := a.cli.ListContainers(ctx, docker.Filter{"label": {"com.docker.swarm.service.id"}})
-	if err != nil {
-		return StatsResp{}, err
-	}
-	resp := StatsResp{Node: host, Containers: make([]ContainerStat, 0, len(cs))}
-	for _, c := range cs {
-		if c.State != "running" {
-			continue
-		}
-		first, err := a.cli.ContainerStats(ctx, c.ID)
-		if err != nil {
-			continue
-		}
-		time.Sleep(time.Second)
-		second, err := a.cli.ContainerStats(ctx, c.ID)
-		if err != nil {
-			continue
-		}
-		resp.Containers = append(resp.Containers, ContainerStat{
-			ContainerID: c.ID,
-			Service:     c.Labels["com.docker.swarm.service.name"],
-			TaskID:      c.Labels["com.docker.swarm.task.id"],
-			CPUPercent:  round2(cpuDeltaPercent(first, second)),
-			MemPercent:  round2(memPercentOf(second)),
-			MemUsage:    second.MemoryStats.Usage,
-			MemLimit:    second.MemoryStats.Limit,
-		})
-	}
-	return resp, nil
-}
-
-func (a *API) stats(w http.ResponseWriter, r *http.Request) {
-	resp, err := a.LocalStats(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, resp)
 }
 
 // ---- exec (container) ----

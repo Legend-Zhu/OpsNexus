@@ -50,42 +50,75 @@
           <el-empty v-if="!nodesLoading && !nodes.length" description="暂无节点（Worker 不可达或无 swarm 节点）" />
         </div>
 
-        <!-- 节点抽屉：进程 -->
-        <el-drawer v-model="nodeVisible" :title="`${currentNode?.hostname ?? ''} · 进程`" size="55%">
+        <!-- 节点抽屉：进程 + 容器 -->
+        <el-drawer v-model="nodeVisible" :title="`${currentNode?.hostname ?? ''} · 节点详情`" size="60%">
           <template v-if="currentNode">
-            <el-descriptions :column="2" border size="small">
+            <el-descriptions :column="3" border size="small" class="drawer-desc">
               <el-descriptions-item label="角色">
                 {{ currentNode.role }}{{ currentNode.leader ? ' · leader' : '' }}
               </el-descriptions-item>
               <el-descriptions-item label="状态">{{ currentNode.state }} / {{ currentNode.availability }}</el-descriptions-item>
               <el-descriptions-item label="CPU 核数">{{ currentNode.cpuCores ?? '—' }}</el-descriptions-item>
               <el-descriptions-item label="内存总量">{{ fmtBytes(currentNode.memBytes) }}</el-descriptions-item>
+              <el-descriptions-item label="容器数">{{ currentNode.containerCount ?? '—' }}</el-descriptions-item>
+              <el-descriptions-item label="地址">{{ currentNode.addr }}</el-descriptions-item>
             </el-descriptions>
 
-            <div class="drawer-toolbar">
-              <span class="og-dim">宿主机进程（Top N，按 CPU）</span>
-              <el-input
-                v-model="procFilter"
-                size="small"
-                clearable
-                placeholder="过滤名称/命令行，如 java、redis-server"
-                style="width: 230px; margin-left: auto; margin-right: 8px"
-                @keyup.enter="loadProcesses('cpu')"
-                @clear="loadProcesses('cpu')"
-              />
-              <el-button size="small" :icon="Refresh" @click="loadProcesses('cpu')">刷新</el-button>
-            </div>
-            <el-table :data="processes" size="small" v-loading="procsLoading" max-height="480">
-              <el-table-column prop="pid" label="PID" width="80" />
-              <el-table-column prop="name" label="进程" min-width="140" show-overflow-tooltip />
-              <el-table-column prop="cmdline" label="命令行" min-width="220" show-overflow-tooltip class-name="mono" />
-              <el-table-column label="CPU %" width="90" align="right">
-                <template #default="{ row }">{{ row.cpuPercent?.toFixed(1) }}</template>
-              </el-table-column>
-              <el-table-column label="内存" width="100" align="right">
-                <template #default="{ row }">{{ fmtKB(row.memKb) }}</template>
-              </el-table-column>
-            </el-table>
+            <el-tabs v-model="nodeDrawerTab" class="drawer-tabs">
+              <!-- 宿主机进程 -->
+              <el-tab-pane label="宿主机进程" name="procs">
+                <div class="drawer-toolbar">
+                  <span class="og-dim">宿主机进程（Top N，按 CPU）</span>
+                  <el-input
+                    v-model="procFilter"
+                    size="small"
+                    clearable
+                    placeholder="过滤名称/命令行，如 java、redis-server"
+                    style="width: 230px; margin-left: auto; margin-right: 8px"
+                    @keyup.enter="loadProcesses('cpu')"
+                    @clear="loadProcesses('cpu')"
+                  />
+                  <el-button size="small" :icon="Refresh" @click="loadProcesses('cpu')">刷新</el-button>
+                </div>
+                <el-table :data="processes" size="small" v-loading="procsLoading" max-height="440">
+                  <el-table-column prop="pid" label="PID" width="80" />
+                  <el-table-column prop="name" label="进程" min-width="140" show-overflow-tooltip />
+                  <el-table-column prop="cmdline" label="命令行" min-width="220" show-overflow-tooltip class-name="mono" />
+                  <el-table-column label="CPU %" width="90" align="right">
+                    <template #default="{ row }">{{ row.cpuPercent?.toFixed(1) }}</template>
+                  </el-table-column>
+                  <el-table-column label="内存" width="100" align="right">
+                    <template #default="{ row }">{{ fmtKB(row.memKb) }}</template>
+                  </el-table-column>
+                </el-table>
+              </el-tab-pane>
+
+              <!-- 节点全部容器（含 standalone，如 r-nacos） -->
+              <el-tab-pane :label="`容器 (${containers.length})`" name="containers">
+                <div class="drawer-toolbar">
+                  <span class="og-dim">节点上的全部容器（swarm 任务 + 直接 docker run 的 standalone）</span>
+                  <el-button size="small" :icon="Refresh" @click="loadContainers">刷新</el-button>
+                </div>
+                <el-table :data="containers" size="small" v-loading="containersLoading" max-height="440">
+                  <el-table-column label="名称" min-width="200" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span class="mono">{{ row.name }}</span>
+                      <el-tag v-if="row.type === 'standalone'" size="small" type="warning" effect="plain" class="ct-tag">standalone</el-tag>
+                      <el-tag v-else size="small" type="info" effect="plain" class="ct-tag">{{ row.service }}</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="镜像" prop="image" min-width="200" show-overflow-tooltip class-name="mono" />
+                  <el-table-column label="状态" width="100">
+                    <template #default="{ row }">
+                      <el-tag size="small" :type="row.state === 'running' ? 'success' : 'info'">{{ row.state }}</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="端口" prop="ports" min-width="160" show-overflow-tooltip class-name="mono">
+                    <template #default="{ row }">{{ row.ports || '—' }}</template>
+                  </el-table-column>
+                </el-table>
+              </el-tab-pane>
+            </el-tabs>
           </template>
         </el-drawer>
       </el-tab-pane>
@@ -361,7 +394,7 @@ import { useRoute } from 'vue-router'
 import { Back, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { clusterApi, eventApi, nodeApi, workloadApi } from '@/api'
-import type { ClusterNode, ClusterSummary, EventItem, LogLine, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
+import type { ClusterNode, ClusterSummary, ContainerInfo, EventItem, LogLine, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
 
 const route = useRoute()
 const clusterName = computed(() => route.params.name as string)
@@ -409,8 +442,11 @@ const nodesLoading = ref(false)
 const nodes = ref<ClusterNode[]>([])
 const nodeVisible = ref(false)
 const currentNode = ref<ClusterNode | null>(null)
+const nodeDrawerTab = ref('procs')
 const processes = ref<ProcessInfo[]>([])
 const procFilter = ref('')
+const containers = ref<ContainerInfo[]>([])
+const containersLoading = ref(false)
 const procsLoading = ref(false)
 
 // 工作负载 / 中间件
@@ -509,8 +545,24 @@ function openNode(n: ClusterNode) {
   currentNode.value = n
   processes.value = []
   procFilter.value = ''
+  containers.value = []
+  nodeDrawerTab.value = 'procs'
   nodeVisible.value = true
   void loadProcesses('cpu')
+  void loadContainers()
+}
+
+async function loadContainers() {
+  if (!currentNode.value) return
+  containersLoading.value = true
+  try {
+    const resp = await nodeApi.containers(clusterName.value, currentNode.value.id)
+    containers.value = resp.items ?? []
+  } catch {
+    containers.value = []
+  } finally {
+    containersLoading.value = false
+  }
 }
 
 async function loadProcesses(top: string) {
