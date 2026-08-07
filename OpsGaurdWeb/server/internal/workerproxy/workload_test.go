@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -275,6 +276,45 @@ func TestStreamLogsEarlyExit(t *testing.T) {
 	}
 	if count != 3 {
 		t.Fatalf("expected early exit at 3, got %d", count)
+	}
+}
+
+// streamLogsAuthServer rejects the stream unless a valid bearer token is
+// present in the request metadata (mimics an auth-enabled worker).
+type streamLogsAuthServer struct {
+	pb.UnimplementedManagementServiceServer
+	want string
+}
+
+func (s *streamLogsAuthServer) StreamLogs(_ *pb.StreamLogsRequest, stream grpc.ServerStreamingServer[pb.LogLine]) error {
+	md, ok := metadata.FromIncomingContext(stream.Context())
+	if !ok {
+		return status.Error(codes.Unauthenticated, "missing metadata")
+	}
+	vals := md.Get("authorization")
+	if len(vals) == 0 || vals[0] != "Bearer "+s.want {
+		return status.Error(codes.Unauthenticated, "missing or invalid bearer token")
+	}
+	_ = stream.Send(&pb.LogLine{Ts: "t1", Stream: "stdout", Line: "ok"})
+	return nil
+}
+
+// TestStreamLogsAuth 带 token 的 server-streaming 调用必须把 bearer 注入到
+// 流的 metadata（与 SubscribeEvents/Tunnel 同模式），否则被鉴权 worker 以 401 拒绝。
+func TestStreamLogsAuth(t *testing.T) {
+	srv := &streamLogsAuthServer{want: "s3cr3t"}
+	cli := startBufconnServer(t, srv, "s3cr3t")
+
+	var got []LogLine
+	err := cli.StreamLogs(context.Background(), "web", false, 0, "", func(ll LogLine) bool {
+		got = append(got, ll)
+		return true
+	})
+	if err != nil {
+		t.Fatalf("stream with token: %v", err)
+	}
+	if len(got) != 1 || got[0].Line != "ok" {
+		t.Fatalf("unexpected lines: %+v", got)
 	}
 }
 

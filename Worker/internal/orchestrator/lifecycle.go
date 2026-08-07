@@ -25,6 +25,7 @@ type Orchestrator struct {
 	audit        *audit.Store     // optional audit log; nil disables
 	workerPort   string           // node-worker HTTP proxy port (default WorkerPort)
 	grpcPort     string           // management gRPC port (default "9080"); leader write-forwarding targets it
+	authToken    string           // bearer token forwarded to node-worker HTTP API (when auth enabled)
 }
 
 // MonitorRegistrar is the P2 monitoring hook implemented by monitor.Manager.
@@ -108,6 +109,15 @@ func (o *Orchestrator) SetGRPCPort(port string) {
 	if port != "" {
 		o.grpcPort = port
 	}
+}
+
+// SetAuthToken configures the bearer token forwarded to node-worker HTTP APIs
+// when auth is enabled (every worker shares the same token set). The manager
+// uses this to authenticate the local-API proxy calls it makes to other nodes'
+// /api/v1/local/* endpoints (processes, stats, exec, logs host, ...). Empty =
+// no token sent (auth-disabled clusters).
+func (o *Orchestrator) SetAuthToken(token string) {
+	o.authToken = token
 }
 
 // grpcPortOf returns the effective management gRPC port.

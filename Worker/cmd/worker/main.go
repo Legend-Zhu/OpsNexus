@@ -167,6 +167,15 @@ func main() {
 		if _, p, err := net.SplitHostPort(addr); err == nil && p != "" {
 			orch.SetWorkerPort(p)
 		}
+		// Forward a bearer token when proxying to other nodes' local HTTP API
+		// (processes/stats/exec/logs-host). Every worker shares the same token
+		// set, so any configured secret authenticates; pick the first one.
+		if agCfg.Auth.Enabled && len(agCfg.Auth.Tokens) > 0 {
+			for _, secret := range agCfg.Auth.Tokens {
+				orch.SetAuthToken(secret)
+				break
+			}
+		}
 		// Leader write-forwarding targets the management gRPC port; every
 		// worker shares the same gRPC port.
 		if _, p, err := net.SplitHostPort(grpcAddr); err == nil && p != "" {

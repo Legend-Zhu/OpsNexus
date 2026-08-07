@@ -318,6 +318,12 @@ type LogLine struct {
 func (c *Client) StreamLogs(ctx context.Context, service string, follow bool, tail int, since string, handler func(LogLine) bool) error {
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Attach bearer token to the stream context (server-streaming RPCs read
+	// metadata from the context passed to the open call; unary RPCs use callCtx,
+	// streams do not — without this an auth-enabled worker rejects with 401).
+	if c.token != "" {
+		cctx = metadata.AppendToOutgoingContext(cctx, "authorization", "Bearer "+c.token)
+	}
 	stream, err := c.stub.StreamLogs(cctx, &pb.StreamLogsRequest{
 		Service: service, Follow: follow, Tail: int32(tail), Since: since,
 	})

@@ -20,14 +20,17 @@ const WorkerPort = "8080"
 
 // NodeClient talks to a node-role worker's local API over HTTP.
 type NodeClient struct {
-	base string
-	hc   *http.Client
+	base  string
+	hc    *http.Client
+	token string // bearer token sent on every request when the node worker enforces auth
 }
 
 // NewNodeClient builds a client for a node worker at the given address
 // (host or IP; the port is added if absent — the optional port argument
-// overrides the default WorkerPort).
-func NewNodeClient(addr string, port ...string) *NodeClient {
+// overrides the default WorkerPort). token is forwarded as
+// "Authorization: Bearer <token>" on each call; pass "" for auth-disabled
+// clusters.
+func NewNodeClient(addr, token string, port ...string) *NodeClient {
 	base := addr
 	if !hasPort(base) {
 		p := WorkerPort
@@ -40,8 +43,16 @@ func NewNodeClient(addr string, port ...string) *NodeClient {
 		base = "http://" + base
 	}
 	return &NodeClient{
-		base: base,
-		hc:   &http.Client{Timeout: 15 * time.Second},
+		base:  base,
+		hc:    &http.Client{Timeout: 15 * time.Second},
+		token: token,
+	}
+}
+
+// withAuth sets the bearer header on a request when a token is configured.
+func (n *NodeClient) withAuth(req *http.Request) {
+	if n.token != "" {
+		req.Header.Set("Authorization", "Bearer "+n.token)
 	}
 }
 
@@ -260,6 +271,7 @@ func (n *NodeClient) Proxy(method, path string, body []byte) (int, []byte, error
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	n.withAuth(req)
 	resp, err := n.hc.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -276,6 +288,7 @@ func (n *NodeClient) getJSON(ctx context.Context, path string, out any) error {
 	if err != nil {
 		return err
 	}
+	n.withAuth(req)
 	resp, err := n.hc.Do(req)
 	if err != nil {
 		return err
@@ -298,6 +311,7 @@ func (n *NodeClient) postJSON(ctx context.Context, path string, body any, out an
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	n.withAuth(req)
 	resp, err := n.hc.Do(req)
 	if err != nil {
 		return err
@@ -354,7 +368,7 @@ func (o *Orchestrator) NodeAddrs(ctx context.Context) (map[string]string, error)
 
 // NodeClientByAddr builds a client for a node worker at the given address.
 func (o *Orchestrator) NodeClientByAddr(addr string) *NodeClient {
-	return NewNodeClient(addr, o.nodePort())
+	return NewNodeClient(addr, o.authToken, o.nodePort())
 }
 
 // SelfNodeID returns this daemon's swarm node ID.
@@ -379,5 +393,5 @@ func (o *Orchestrator) nodeClientForTask(ctx context.Context, task docker.Task) 
 	if !ok {
 		return nil, fmt.Errorf("no address for node %s", task.NodeID)
 	}
-	return NewNodeClient(addr, o.nodePort()), nil
+	return NewNodeClient(addr, o.authToken, o.nodePort()), nil
 }
