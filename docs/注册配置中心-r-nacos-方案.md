@@ -183,6 +183,18 @@ docker run -d --name rnacos --restart=always \
 
 端口约定（v0.8.6 启动日志确认）：`8848` OpenAPI、`10848` 控制台、`9848` Nacos2 gRPC、`7848` Raft。健康检查：`curl http://localhost:8848/nacos/v1/ns/operator/metrics` 返回 200。
 
+**配置外置（配置变更免重建容器）**：r-nacos 应用层配置（基础 + OAuth2）外置到宿主机 `/opt/rnacos/rnacos.env`，容器以 `--env-file /opt/rnacos.env` 只读挂载。改任意配置（OAuth2 回调、端口、密钥等）只需：
+```bash
+vim /opt/rnacos/rnacos.env        # 改配置
+docker restart rnacos             # 生效，无需重建
+```
+启动脚本固定为 `/opt/rnacos/run-rnacos.sh`（含 seccomp、卷、端口映射、`--env-file`）。只有改 **docker 端口映射**（`-p`）才需重跑该脚本重建容器。
+
+**改控制台端口（如 10848 → 新端口）的操作**：涉及三处，必须同步改：
+1. docker 端口映射：改 `/opt/rnacos/run-rnacos.sh` 里的 `-p 10848:10848`（改 published 端口，宿主侧）→ 重跑脚本重建容器。
+2. r-nacos OAuth2 回调：改 `/opt/rnacos/rnacos.env` 的 `RNACOS_OAUTH2_REDIRECT_URI`（端口部分）→ `docker restart rnacos`。
+3. OpsGaurd IdP client 白名单：管理台「系统设置 → 身份提供者」编辑 `rnacos-console` 的 redirect_uri 端口（或 API `PUT /api/v1/idp/clients/<id>`）。redirect_uri 须与 REDIRECT_URI 精确一致，否则 authorize 报 `invalid redirect_uri`。
+
 > 原 OpsGaurd `config.Service` 部署模板（含 healthcheck/monitoring/resources）见下，**但需先在 config.Service 增加 securityOpt 字段支持**（待实现），否则 r-nacos 会 panic：
 
 compose → OpsGaurd 字段对照（避免踩坑）：
