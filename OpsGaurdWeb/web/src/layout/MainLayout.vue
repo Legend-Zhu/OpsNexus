@@ -9,9 +9,6 @@
         :default-active="activeMenu"
         router
         class="nav"
-        background-color="transparent"
-        text-color="rgba(230,237,243,0.62)"
-        active-text-color="#2dd4bf"
       >
         <el-menu-item index="/dashboard">
           <el-icon><Odometer /></el-icon>
@@ -57,6 +54,24 @@
         <span class="title">{{ $route.meta.title ?? 'OpsGaurd' }}</span>
         <el-space :size="16">
           <el-tag size="small" effect="plain" class="env-tag">管理面</el-tag>
+          <el-dropdown trigger="click" @command="onTheme">
+            <span class="theme-btn" title="切换主题">
+              <el-icon><Brush /></el-icon>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  v-for="t in THEMES"
+                  :key="t.key"
+                  :command="t.key"
+                >
+                  <span class="theme-dot" :style="{ background: t.swatch }" />
+                  <span class="theme-label">{{ t.label }}</span>
+                  <el-icon v-if="t.key === currentTheme" class="theme-check"><Check /></el-icon>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-dropdown trigger="click" @command="onCommand">
             <span class="user">
               <span class="avatar">{{ avatarChar }}</span>
@@ -91,6 +106,7 @@ import {
 } from '@element-plus/icons-vue'
 import { authApi } from '@/api'
 import { clearToken } from '@/api/http'
+import { THEMES, applyTheme, currentTheme } from '@/theme'
 import type { Me } from '@/types'
 
 const route = useRoute()
@@ -120,6 +136,10 @@ function onCommand(cmd: string) {
   }
 }
 
+function onTheme(key: string) {
+  applyTheme(key)
+}
+
 onMounted(loadMe)
 </script>
 
@@ -130,7 +150,7 @@ onMounted(loadMe)
 .aside {
   display: flex;
   flex-direction: column;
-  background: #0d1117;
+  background: var(--og-bg-sidebar);
   border-right: 1px solid var(--el-border-color-lighter);
 }
 .logo {
@@ -147,13 +167,13 @@ onMounted(loadMe)
   width: 32px;
   height: 32px;
   border-radius: 9px;
-  background: linear-gradient(135deg, var(--og-accent), #0e7490);
-  color: #04120f;
+  background: linear-gradient(135deg, var(--og-accent), var(--og-accent-deep));
+  color: var(--og-on-accent);
   font-weight: 800;
   font-size: 13px;
 }
 .logo-name {
-  color: #e6edf3;
+  color: var(--el-text-color-primary);
   font-size: 17px;
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -163,6 +183,9 @@ onMounted(loadMe)
   border-right: none;
   padding: 6px 8px;
   --el-menu-item-height: 44px;
+  --el-menu-text-color: var(--og-menu-text);
+  --el-menu-active-color: var(--og-accent-strong);
+  --el-menu-hover-text-color: var(--el-text-color-primary);
 }
 .nav :deep(.el-menu-item) {
   border-radius: 8px;
@@ -185,6 +208,36 @@ onMounted(loadMe)
 }
 .env-tag {
   color: var(--og-text-dim);
+}
+.theme-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--el-text-color-secondary);
+  transition: background 0.15s, color 0.15s;
+}
+.theme-btn:hover {
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
+}
+.theme-dot {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--el-border-color);
+  vertical-align: -2px;
+}
+.theme-label {
+  font-size: 13px;
+}
+.theme-check {
+  margin-left: 12px;
+  color: var(--og-accent);
 }
 .user {
   display: flex;

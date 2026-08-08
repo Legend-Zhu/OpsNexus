@@ -8,10 +8,11 @@ import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 
 import App from './App.vue'
 import router from './router'
+import { initTheme } from '@/theme'
 import '@/styles/theme.css'
 
-// 暗色运维台主题
-document.documentElement.classList.add('dark')
+// 主题初始化（读取 localStorage 持久化选择，挂载前同步应用，避免闪烁）
+initTheme()
 
 const app = createApp(App)
 

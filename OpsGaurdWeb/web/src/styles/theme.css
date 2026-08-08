@@ -1,21 +1,39 @@
 /*
- * OpsGaurd 管理台设计系统 —— 暗色运维台主题
- * 单一强调色（teal）、近黑表面层次、系统字体 + 等宽字体（日志/YAML）。
- * Element Plus dark 变量在此覆写；业务组件直接消费 --el-* 变量。
+ * OpsGaurd 管理台设计系统 —— 多主题
+ * 默认「墨玉青」暗色运维台（html.dark 基座）；其余主题通过 html.theme-xxx 类切换：
+ *   theme-cyan    极夜青（暗色，冷科技）
+ *   theme-indigo  石墨靛（暗色，AI 智能运维）
+ *   theme-amber   钨丝橙（暗色，工业告警，状态色族同调）
+ *   theme-fog     晨雾（浅色，不带 .dark，EP 浅色变量生效）
+ * 组件一律消费 --og-* / --el-* 变量，禁止写死色值。
+ * 暗色主题的 text/border 灰阶通用，在 html.dark 基座统一定义；各主题只覆写强调色与表面层次。
  */
 :root {
-  --og-accent: #14b8a6;            /* 主强调：teal */
-  --og-accent-strong: #2dd4bf;
+  --og-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Cascadia Mono", monospace;
+
+  /* ===== 默认主题 token（墨玉青 / teal） ===== */
+  --og-accent: #14b8a6;            /* 主强调 */
+  --og-accent-strong: #2dd4bf;     /* 高亮/hover */
+  --og-accent-deep: #0e7490;       /* 渐变终点 */
+  --og-on-accent: #04120f;         /* 强调渐变上的文字 */
   --og-accent-soft: rgba(20, 184, 166, 0.14);
+  --og-glow: rgba(20, 184, 166, 0.12);        /* 登录页光晕 */
+  --og-glow-soft: rgba(20, 184, 166, 0.08);   /* 登录页环境光 */
+  --og-grid-line: rgba(148, 163, 184, 0.07);  /* 登录页网格 */
   --og-bg-base: #0b0e14;           /* 画布底 */
+  --og-bg-page: #0b0e14;           /* 内容区底 */
   --og-bg-surface: #12161f;        /* 面板 */
   --og-bg-raised: #1a2029;         /* 悬浮/输入 */
-  --og-border: rgba(148, 163, 184, 0.16);
+  --og-bg-sidebar: #0d1117;        /* 侧栏 */
+  --og-bg-code: #0d1117;           /* 日志/YAML/终端 */
+  --og-text-code: #e6edf3;
+  --og-panel-glass: rgba(18, 22, 31, 0.86);   /* 登录面板 */
+  --og-menu-text: rgba(230, 237, 243, 0.62);  /* 侧栏菜单文字 */
   --og-text-dim: #8b949e;
-  --og-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Cascadia Mono", monospace;
+  --og-scrollbar: rgba(148, 163, 184, 0.28);
 }
 
-/* Element Plus dark 变量覆写（html.dark 由 main.ts 置位） */
+/* Element Plus dark 变量覆写（html.dark 由 theme 模块置位；默认主题即此基座） */
 html.dark {
   color-scheme: dark;
 
@@ -51,6 +69,254 @@ html.dark {
   --el-box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
 }
 
+/* ===== 主题：极夜青（冷科技，深墨 + 天青） ===== */
+html.dark.theme-cyan {
+  --og-accent: #38bdf8;
+  --og-accent-strong: #7dd3fc;
+  --og-accent-deep: #0284c7;
+  --og-on-accent: #06212f;
+  --og-accent-soft: rgba(56, 189, 248, 0.14);
+  --og-glow: rgba(56, 189, 248, 0.12);
+  --og-glow-soft: rgba(56, 189, 248, 0.08);
+  --og-bg-base: #080b12;
+  --og-bg-page: #080b12;
+  --og-bg-surface: #10151f;
+  --og-bg-raised: #171e2b;
+  --og-bg-sidebar: #0a0e17;
+  --og-bg-code: #0a0e17;
+  --og-panel-glass: rgba(14, 19, 29, 0.86);
+
+  --el-color-primary: #38bdf8;
+  --el-color-primary-light-3: #56c7f9;
+  --el-color-primary-light-5: #4b92b6;
+  --el-color-primary-light-7: #14394e;
+  --el-color-primary-light-8: #112b3b;
+  --el-color-primary-light-9: #0e202e;
+  --el-color-primary-dark-2: #31a6da;
+
+  --el-bg-color: #10151f;
+  --el-bg-color-page: #080b12;
+  --el-bg-color-overlay: #171e2b;
+  --el-fill-color: #171e2b;
+  --el-fill-color-light: #141a25;
+  --el-fill-color-lighter: #111720;
+  --el-fill-color-blank: #10151f;
+}
+
+/* ===== 主题：石墨靛（AI 智能运维，微紫近黑 + 靛蓝） ===== */
+html.dark.theme-indigo {
+  --og-accent: #818cf8;
+  --og-accent-strong: #a5b4fc;
+  --og-accent-deep: #4f46e5;
+  --og-on-accent: #0a0a18;
+  --og-accent-soft: rgba(129, 140, 248, 0.14);
+  --og-glow: rgba(129, 140, 248, 0.12);
+  --og-glow-soft: rgba(129, 140, 248, 0.08);
+  --og-bg-base: #0c0c12;
+  --og-bg-page: #0c0c12;
+  --og-bg-surface: #13131b;
+  --og-bg-raised: #1b1b25;
+  --og-bg-sidebar: #0e0e16;
+  --og-bg-code: #0e0e16;
+  --og-panel-glass: rgba(16, 16, 24, 0.86);
+
+  --el-color-primary: #818cf8;
+  --el-color-primary-light-3: #949df9;
+  --el-color-primary-light-5: #6f79b6;
+  --el-color-primary-light-7: #2a2d4e;
+  --el-color-primary-light-8: #21233b;
+  --el-color-primary-light-9: #1a1b2e;
+  --el-color-primary-dark-2: #727bda;
+
+  --el-bg-color: #13131b;
+  --el-bg-color-page: #0c0c12;
+  --el-bg-color-overlay: #1b1b25;
+  --el-fill-color: #1b1b25;
+  --el-fill-color-light: #181822;
+  --el-fill-color-lighter: #15151e;
+  --el-fill-color-blank: #13131b;
+}
+
+/* ===== 主题：钨丝橙（工业告警，暖墨黑 + 橙；状态色族同调避免撞色） ===== */
+html.dark.theme-amber {
+  --og-accent: #f97316;
+  --og-accent-strong: #fb923c;
+  --og-accent-deep: #9a3412;
+  --og-on-accent: #1a0b02;
+  --og-accent-soft: rgba(249, 115, 22, 0.14);
+  --og-glow: rgba(249, 115, 22, 0.12);
+  --og-glow-soft: rgba(249, 115, 22, 0.08);
+  --og-bg-base: #0e0d0b;
+  --og-bg-page: #0e0d0b;
+  --og-bg-surface: #151412;
+  --og-bg-raised: #1d1b18;
+  --og-bg-sidebar: #100f0d;
+  --og-bg-code: #100f0d;
+  --og-panel-glass: rgba(19, 18, 15, 0.86);
+
+  --el-color-primary: #f97316;
+  --el-color-primary-light-3: #fa8839;
+  --el-color-primary-light-5: #ab6d45;
+  --el-color-primary-light-7: #4b280e;
+  --el-color-primary-light-8: #381f0d;
+  --el-color-primary-light-9: #2a190c;
+  --el-color-primary-dark-2: #db6513;
+
+  --el-bg-color: #151412;
+  --el-bg-color-page: #0e0d0b;
+  --el-bg-color-overlay: #1d1b18;
+  --el-fill-color: #1d1b18;
+  --el-fill-color-light: #1a1815;
+  --el-fill-color-lighter: #171513;
+  --el-fill-color-blank: #151412;
+
+  /* 状态色：与钨丝橙拉开色相，避免「告警=主键」误读 */
+  --el-color-success: #22c55e;
+  --el-color-success-light-3: #43ce76;
+  --el-color-success-light-5: #409669;
+  --el-color-success-light-7: #133d21;
+  --el-color-success-light-8: #122e1a;
+  --el-color-success-light-9: #102315;
+  --el-color-success-dark-2: #1ead53;
+
+  --el-color-warning: #eab308;
+  --el-color-warning-light-3: #edbe2d;
+  --el-color-warning-light-5: #a48d3e;
+  --el-color-warning-light-7: #47380a;
+  --el-color-warning-light-8: #362b0a;
+  --el-color-warning-light-9: #28210b;
+  --el-color-warning-dark-2: #ce9e07;
+
+  --el-color-danger: #ef4444;
+  --el-color-danger-light-3: #f16060;
+  --el-color-danger-light-5: #a6555c;
+  --el-color-danger-light-7: #491b1a;
+  --el-color-danger-light-8: #361715;
+  --el-color-danger-light-9: #291412;
+  --el-color-danger-dark-2: #d23c3c;
+
+  --el-color-error: #ef4444;
+  --el-color-error-light-3: #f16060;
+  --el-color-error-light-5: #a6555c;
+  --el-color-error-light-7: #491b1a;
+  --el-color-error-light-8: #361715;
+  --el-color-error-light-9: #291412;
+  --el-color-error-dark-2: #d23c3c;
+}
+
+/* ===== 浅色主题共有：主色/状态色族/文字/边框/阴影（不带 .dark → EP 浅色默认变量起效） ===== */
+html.theme-fog,
+html.theme-smoke {
+  color-scheme: light;
+
+  --og-accent: #0d9488;
+  --og-accent-strong: #0f766e;
+  --og-accent-deep: #0f766e;
+  --og-on-accent: #ffffff;
+  --og-accent-soft: rgba(13, 148, 136, 0.1);
+  --og-glow: rgba(13, 148, 136, 0.1);
+  --og-glow-soft: rgba(13, 148, 136, 0.06);
+  --og-grid-line: rgba(15, 23, 42, 0.06);
+  --og-text-code: #1f2937;
+  --og-panel-glass: rgba(255, 255, 255, 0.85);
+  --og-menu-text: rgba(31, 41, 55, 0.72);
+  --og-scrollbar: rgba(15, 23, 42, 0.22);
+
+  --el-color-primary: #0d9488;
+  --el-color-primary-light-3: #56b4ac;
+  --el-color-primary-light-5: #86cac4;
+  --el-color-primary-light-7: #b6dfdb;
+  --el-color-primary-light-8: #cfeae7;
+  --el-color-primary-light-9: #e7f4f3;
+  --el-color-primary-dark-2: #0a766d;
+
+  --el-bg-color-overlay: #ffffff;
+
+  --el-text-color-primary: #1f2937;
+  --el-text-color-regular: #475569;
+  --el-text-color-placeholder: #94a3b8;
+
+  --el-border-color: rgba(15, 23, 42, 0.12);
+  --el-border-color-light: rgba(15, 23, 42, 0.1);
+  --el-border-color-lighter: rgba(15, 23, 42, 0.08);
+  --el-border-color-extra-light: rgba(15, 23, 42, 0.06);
+
+  --el-mask-color: rgba(15, 23, 42, 0.4);
+
+  --el-box-shadow: 0 8px 28px rgba(15, 23, 42, 0.1);
+
+  /* 状态色族（浅底加深一档，EP 官方 mix 公式） */
+  --el-color-success: #16a34a;
+  --el-color-success-light-3: #5cbf80;
+  --el-color-success-light-5: #8bd1a5;
+  --el-color-success-light-7: #b9e3c9;
+  --el-color-success-light-8: #d0eddb;
+  --el-color-success-light-9: #e8f6ed;
+  --el-color-success-dark-2: #12823b;
+
+  --el-color-warning: #d97706;
+  --el-color-warning-light-3: #e4a051;
+  --el-color-warning-light-5: #ecbb83;
+  --el-color-warning-light-7: #f4d6b4;
+  --el-color-warning-light-8: #f7e4cd;
+  --el-color-warning-light-9: #fbf1e6;
+  --el-color-warning-dark-2: #ae5f05;
+
+  --el-color-danger: #dc2626;
+  --el-color-danger-light-3: #e76767;
+  --el-color-danger-light-5: #ee9393;
+  --el-color-danger-light-7: #f5bebe;
+  --el-color-danger-light-8: #f8d4d4;
+  --el-color-danger-light-9: #fce9e9;
+  --el-color-danger-dark-2: #b01e1e;
+
+  --el-color-error: #dc2626;
+  --el-color-error-light-3: #e76767;
+  --el-color-error-light-5: #ee9393;
+  --el-color-error-light-7: #f5bebe;
+  --el-color-error-light-8: #f8d4d4;
+  --el-color-error-light-9: #fce9e9;
+  --el-color-error-dark-2: #b01e1e;
+}
+
+/* 晨雾：冷白灰（日间浅色） */
+html.theme-fog {
+  --og-bg-base: #f4f6f8;
+  --og-bg-page: #f4f6f8;
+  --og-bg-surface: #ffffff;
+  --og-bg-raised: #eef1f4;
+  --og-bg-sidebar: #ffffff;
+  --og-bg-code: #eef1f4;
+  --og-text-dim: #64748b;
+
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #f4f6f8;
+  --el-fill-color: #eef1f4;
+  --el-fill-color-light: #f2f4f7;
+  --el-fill-color-lighter: #f7f8fa;
+  --el-fill-color-blank: #ffffff;
+  --el-text-color-secondary: #64748b;
+}
+
+/* 烟灰：中灰日间（介于黑白之间，中性无彩） */
+html.theme-smoke {
+  --og-bg-base: #e8ebee;
+  --og-bg-page: #e8ebee;
+  --og-bg-surface: #ffffff;
+  --og-bg-raised: #dfe3e8;
+  --og-bg-sidebar: #ffffff;
+  --og-bg-code: #dfe3e8;
+  --og-text-dim: #6b7280;
+
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #e8ebee;
+  --el-fill-color: #dfe3e8;
+  --el-fill-color-light: #e6e9ed;
+  --el-fill-color-lighter: #eef0f3;
+  --el-fill-color-blank: #ffffff;
+  --el-text-color-secondary: #6b7280;
+}
+
 html,
 body {
   height: 100%;
@@ -65,17 +331,17 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* 全局滚动条：细、低对比，贴合暗色表面 */
+/* 全局滚动条：细、低对比，随主题表面变化 */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.28) transparent;
+  scrollbar-color: var(--og-scrollbar) transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.28);
+  background: var(--og-scrollbar);
   border-radius: 4px;
 }
 *::-webkit-scrollbar-track {
@@ -116,7 +382,7 @@ body {
   --el-table-tr-bg-color: transparent;
   --el-table-header-bg-color: rgba(148, 163, 184, 0.06);
   --el-table-border-color: var(--el-border-color-lighter);
-  --el-table-row-hover-bg-color: rgba(20, 184, 166, 0.06);
+  --el-table-row-hover-bg-color: color-mix(in srgb, var(--og-accent) 6%, transparent);
 }
 
 /* KPI 数字（总览） */

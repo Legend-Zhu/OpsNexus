@@ -360,8 +360,8 @@ onBeforeUnmount(stopPoll)
   font-size: 13px;
 }
 .code {
-  background: #0d1117;
-  color: #e6edf3;
+  background: var(--og-bg-code);
+  color: var(--og-text-code);
   border-radius: 6px;
   padding: 10px 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -396,8 +396,8 @@ onBeforeUnmount(stopPoll)
 .log-box {
   height: 240px;
   overflow: auto;
-  background: #0d1117;
-  color: #e6edf3;
+  background: var(--og-bg-code);
+  color: var(--og-text-code);
   border-radius: 6px;
   padding: 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

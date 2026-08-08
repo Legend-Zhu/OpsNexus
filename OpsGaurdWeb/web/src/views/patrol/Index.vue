@@ -466,8 +466,8 @@ onMounted(async () => {
   margin-top: 4px;
 }
 .yaml-box {
-  background: #0d1117;
-  color: #e6edf3;
+  background: var(--og-bg-code);
+  color: var(--og-text-code);
   border-radius: 6px;
   padding: 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -476,6 +476,7 @@ onMounted(async () => {
   overflow: auto;
   white-space: pre-wrap;
 }
+/* 报告区刻意保持纸张质感（浅底），各主题下均作为文档展示 */
 .report-box {
   background: #f6f8fa;
   border: 1px solid var(--el-border-color-lighter);

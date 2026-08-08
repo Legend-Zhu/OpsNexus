@@ -120,15 +120,15 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background: radial-gradient(1200px 600px at 70% 20%, rgba(20, 184, 166, 0.08), transparent 60%),
+  background: radial-gradient(1200px 600px at 70% 20%, var(--og-glow-soft), transparent 60%),
     var(--og-bg-base);
 }
 
 .bg-grid {
   position: absolute;
   inset: 0;
-  background-image: linear-gradient(rgba(148, 163, 184, 0.07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.07) 1px, transparent 1px);
+  background-image: linear-gradient(var(--og-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--og-grid-line) 1px, transparent 1px);
   background-size: 44px 44px;
   mask-image: radial-gradient(ellipse at center, #000 30%, transparent 75%);
 }
@@ -139,7 +139,7 @@ onMounted(() => {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  background: radial-gradient(circle, rgba(20, 184, 166, 0.12), transparent 65%);
+  background: radial-gradient(circle, var(--og-glow), transparent 65%);
   filter: blur(40px);
 }
 
@@ -147,7 +147,7 @@ onMounted(() => {
   position: relative;
   width: 380px;
   padding: 40px 36px 32px;
-  background: rgba(18, 22, 31, 0.86);
+  background: var(--og-panel-glass);
   border: 1px solid var(--el-border-color-light);
   border-radius: 16px;
   backdrop-filter: blur(14px);
@@ -178,8 +178,8 @@ onMounted(() => {
   width: 46px;
   height: 46px;
   border-radius: 12px;
-  background: linear-gradient(135deg, var(--og-accent), #0e7490);
-  color: #04120f;
+  background: linear-gradient(135deg, var(--og-accent), var(--og-accent-deep));
+  color: var(--og-on-accent);
   font-weight: 800;
   font-size: 17px;
   letter-spacing: 0.02em;

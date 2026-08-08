@@ -475,8 +475,8 @@ onBeforeUnmount(() => abort?.abort())
   display: inline-block;
 }
 .msg.assistant .msg-content {
-  background: #0d1117;
-  color: #e6edf3;
+  background: var(--og-bg-code);
+  color: var(--og-text-code);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .tool-list {
