@@ -26,11 +26,15 @@
               <el-option label="host-service（宿主机端口服务）" value="host-service" />
             </el-select>
           </el-form-item>
-          <el-form-item label="ref" required :error="itemErrors[i]?.ref">
+          <el-form-item
+            :label="it.type === 'host-service' ? 'IP 地址' : '容器名'"
+            required
+            :error="itemErrors[i]?.ref"
+          >
             <el-input
               v-model="it.ref"
               size="small"
-              :placeholder="it.type === 'host-service' ? '如 10.0.0.10:3000' : '容器名，如 r-nacos'"
+              :placeholder="it.type === 'host-service' ? '如 10.0.0.10' : '容器名，如 r-nacos'"
             />
           </el-form-item>
           <el-form-item
@@ -77,7 +81,7 @@
         <div v-if="it.type === 'standalone-container'" class="inv-tip">
           standalone-container 需同时填写容器所在节点的 hostname（node），用于定位并查询该容器
         </div>
-        <div v-else class="inv-tip">host-service 的 ref 为 "host:port"，探活从 node 节点（留空 = 从 manager）发起</div>
+        <div v-else class="inv-tip">host-service 填 IP 地址 + 端口（可多个），探活从 node 节点（留空 = 从 manager）发起</div>
       </div>
       <el-empty v-if="!items.length" description="尚未声明任何纳管对象，点「添加条目」或「插入示例」开始" :image-size="60" />
     </template>
@@ -222,7 +226,7 @@ function validateItems(list: InventoryItem[]): string | null {
     if (!it.ref?.trim()) {
       errs.ref = '必填'
     } else if (it.type === 'host-service' && !it.ref.includes(':') && !(it.ports ?? []).length) {
-      errs.ref = 'host-service 需配至少一个端口（ref 里带或填「端口」）'
+      errs.ref = 'host-service 需填 IP 并在「端口」里至少配一个端口'
     }
     if (it.type === 'standalone-container' && !it.node?.trim()) errs.node = 'standalone 容器必填 node'
     // 端口格式：数字 1-65535

@@ -384,8 +384,8 @@ monitoring:
     <el-dialog v-model="invConfigVisible" title="纳管配置" width="720px" :close-on-click-modal="false">
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
         声明集群纳管的外部对象（非 OpsGaurd 部署的 swarm service）：standalone-container
-        （docker run 容器，ref=容器名、node=所在节点 hostname）或 host-service
-        （宿主机端口探活，ref=host:port）。保存会整体替换当前清单。
+        （docker run 容器，容器名 + 所在节点 hostname + 端口）或 host-service
+        （宿主机服务，IP 地址 + 端口探活）。保存会整体替换当前清单。
       </el-alert>
       <!-- key 每次打开递增 → 组件重建，表单始终反映当前已保存的清单（杜绝草稿残留/引用不变不刷新的问题） -->
       <InventoryEditor ref="invEditorRef" :key="invEditorKey" :config="invConfigSnapshot" @save="saveInvConfig" />
