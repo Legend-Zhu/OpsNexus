@@ -1123,8 +1123,8 @@ onBeforeUnmount(() => logAbort?.abort())
 .log-box {
   height: 320px;
   overflow: auto;
-  background: #0d1117;
-  color: #e6edf3;
+  background: var(--og-bg-code);
+  color: var(--og-text-code);
   border-radius: 6px;
   padding: 10px;
   font-family: var(--og-mono);
@@ -1135,7 +1135,7 @@ onBeforeUnmount(() => logAbort?.abort())
   color: #ff7b72;
 }
 .log-ts {
-  color: #8b949e;
+  color: var(--og-text-dim);
   margin-right: 8px;
 }
 .cfg-doc {
