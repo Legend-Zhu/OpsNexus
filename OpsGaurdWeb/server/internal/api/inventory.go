@@ -138,9 +138,11 @@ func (h *Handlers) UpsertInventory(c *gin.Context) {
 }
 
 // probeInventoryItem 按 item.Type 分发查询，返回带实时状态的 InventoryView。
-//   - standalone-container: 在 item.Node（hostname）上查 NodeContainers，按 ref 匹配容器名
-//   - host-service: 解析 ref 为 host:port，从 item.Node（或 manager，node 为空时）
-//     探活——worker 的 ResolveNodeAddr 空 id 即本机
+//   - standalone-container: 在 item.Node（hostname）上查 NodeContainers，按 ref 匹配容器名；
+//     声明了 Ports 时用声明端口展示，未声明取容器实况端口
+//   - host-service: ref 为 host（可带默认端口），探活端口 = ref 端口 + 声明 Ports 去重合并，
+//     逐个并发探活后聚合状态（全通 ok / 部分通 "n/N" / 全不通 down）；
+//     发起节点为 item.Node（hostname）或空串 = manager 本机
 func probeInventoryItem(
 	ctx context.Context,
 	cli *workerproxy.Client,
@@ -171,7 +173,11 @@ func probeInventoryItem(
 			if ctName == item.Ref || ct.Name == item.Ref {
 				v.Status = ct.State
 				v.Image = ct.Image
-				v.Ports = ct.Ports
+				if len(item.Ports) > 0 {
+					v.Ports = strings.Join(item.Ports, ", ")
+				} else {
+					v.Ports = ct.Ports
+				}
 				found = true
 				break
 			}
@@ -181,21 +187,54 @@ func probeInventoryItem(
 		}
 
 	case store.InvHostService:
-		host, portStr, pErr := parseHostPort(item.Ref)
-		if pErr != nil {
+		host, refPort := parseHostPort(item.Ref)
+		if host == "" {
 			v.Status = "invalid-ref"
 			break
 		}
-		port, _ := strconv.Atoi(portStr)
-		// 探活发起节点：item.Node（hostname）或空串 = manager 本机
-		result, pErr := cli.CheckPort(ctx, item.Node, host, port, "2s")
-		if pErr != nil {
-			v.Status = "unreachable"
+		// 探活端口列表：ref 端口 + 声明 Ports（去重保序）
+		var ports []string
+		seen := map[string]bool{}
+		if refPort != "" && !seen[refPort] {
+			ports = append(ports, refPort)
+			seen[refPort] = true
+		}
+		for _, p := range item.Ports {
+			if !seen[p] {
+				ports = append(ports, p)
+				seen[p] = true
+			}
+		}
+		if len(ports) == 0 {
+			v.Status = "invalid-ref"
 			break
 		}
-		if result.OK {
+		// 并发探活（每个 2s 超时；串行会 N×2s 线性变慢）
+		results := make([]bool, len(ports))
+		var wg sync.WaitGroup
+		for i, p := range ports {
+			wg.Add(1)
+			go func(i int, p string) {
+				defer wg.Done()
+				port, _ := strconv.Atoi(p)
+				r, pErr := cli.CheckPort(ctx, item.Node, host, port, "2s")
+				results[i] = pErr == nil && r.OK
+			}(i, p)
+		}
+		wg.Wait()
+		okCount := 0
+		for _, ok := range results {
+			if ok {
+				okCount++
+			}
+		}
+		v.Ports = strings.Join(ports, ", ")
+		switch {
+		case okCount == len(ports):
 			v.Status = "ok"
-		} else {
+		case okCount > 0:
+			v.Status = fmt.Sprintf("%d/%d", okCount, len(ports))
+		default:
 			v.Status = "down"
 		}
 	}
@@ -203,11 +242,15 @@ func probeInventoryItem(
 	return v
 }
 
-// parseHostPort 解析 "host:port" 或 "ip:port" 为 host 和 port。
-func parseHostPort(ref string) (host, port string, err error) {
+// parseHostPort 解析 "host" 或 "host:port"（IPv4 域）；无端口时 port 返回 ""。
+func parseHostPort(ref string) (host, port string) {
 	idx := strings.LastIndex(ref, ":")
 	if idx < 0 {
-		return "", "", fmt.Errorf("invalid host:port %q", ref)
+		return ref, ""
 	}
-	return ref[:idx], ref[idx+1:], nil
+	// 形如 "host:" 或 ":" 结尾视为纯 host（冒号是分隔符但无端口值）
+	if idx == len(ref)-1 {
+		return ref[:idx], ""
+	}
+	return ref[:idx], ref[idx+1:]
 }

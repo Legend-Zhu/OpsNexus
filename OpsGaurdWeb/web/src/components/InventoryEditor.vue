@@ -40,6 +40,20 @@
           >
             <el-input v-model="it.node" size="small" placeholder="节点 hostname（如 node-01）" />
           </el-form-item>
+          <el-form-item label="端口" :error="itemErrors[i]?.ports">
+            <el-select
+              v-model="it.ports"
+              size="small"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              placeholder="如 8848、9848、9849（可多端口）"
+              style="width: 100%"
+            >
+              <el-option v-for="p in it.ports ?? []" :key="p" :label="p" :value="p" />
+            </el-select>
+          </el-form-item>
           <el-form-item label="分类" :error="itemErrors[i]?.category">
             <el-select
               v-model="it.category"
@@ -75,7 +89,7 @@
         type="textarea"
         :rows="14"
         class="mono"
-        placeholder="items:&#10;  - name: r-nacos&#10;    type: standalone-container&#10;    ref: r-nacos&#10;    node: node-01&#10;    category: middleware"
+        placeholder="items:&#10;  - name: r-nacos&#10;    type: standalone-container&#10;    ref: r-nacos&#10;    node: node-01&#10;    ports: [8848, 9848, 9849]&#10;    category: middleware"
         @blur="syncYamlToForm"
       />
       <div class="inv-tip">YAML 结构：items 数组，每项含 name / type / ref / node（standalone 必填）/ category / desc；切换回表单时会解析并校验</div>
@@ -132,7 +146,13 @@ function cloneItems(list: InventoryItem[]): InventoryItem[] {
 }
 
 function dumpItems(list: InventoryItem[]): string {
-  return yamlDump({ items: list }, { indent: 2, lineWidth: 120 })
+  // 空 ports 数组不落 YAML（避免无意义的 `ports: []`）
+  const clean = list.map((it) => {
+    const copy = { ...it }
+    if (!copy.ports?.length) delete copy.ports
+    return copy
+  })
+  return yamlDump({ items: clean }, { indent: 2, lineWidth: 120 })
 }
 
 function addItem() {
@@ -141,6 +161,7 @@ function addItem() {
     type: 'standalone-container',
     ref: '',
     node: '',
+    ports: [],
     category: '',
     desc: '',
   })
@@ -151,20 +172,22 @@ function removeItem(i: number) {
   delete itemErrors.value[i]
 }
 
-// 示例模板：一个 standalone 容器（r-nacos）+ 一个宿主机端口服务
+// 示例模板：一个 standalone 容器（r-nacos，多端口）+ 一个宿主机端口服务
 const SAMPLE: InventoryItem[] = [
   {
     name: 'r-nacos',
     type: 'standalone-container',
     ref: 'r-nacos',
     node: 'node-01',
+    ports: ['8848', '9848', '9849'],
     category: 'middleware',
     desc: '注册中心（docker run 部署）',
   },
   {
     name: 'grafana',
     type: 'host-service',
-    ref: '10.0.0.10:3000',
+    ref: '10.0.0.10',
+    ports: ['3000'],
     node: '',
     category: 'middleware',
     desc: '监控面板（宿主机端口探活）',
@@ -198,10 +221,13 @@ function validateItems(list: InventoryItem[]): string | null {
     if (!VALID_TYPES.has(it.type)) errs.type = '类型非法'
     if (!it.ref?.trim()) {
       errs.ref = '必填'
-    } else if (it.type === 'host-service' && !it.ref.includes(':')) {
-      errs.ref = 'host-service 需为 host:port'
+    } else if (it.type === 'host-service' && !it.ref.includes(':') && !(it.ports ?? []).length) {
+      errs.ref = 'host-service 需配至少一个端口（ref 里带或填「端口」）'
     }
     if (it.type === 'standalone-container' && !it.node?.trim()) errs.node = 'standalone 容器必填 node'
+    // 端口格式：数字 1-65535
+    const badPort = (it.ports ?? []).find((p) => !/^\d{1,5}$/.test(p) || Number(p) < 1 || Number(p) > 65535)
+    if (badPort) errs.ports = `端口 ${badPort} 非法（1-65535）`
     if (Object.keys(errs).length) itemErrors.value[i] = errs
     else delete itemErrors.value[i]
   }
@@ -224,6 +250,7 @@ function parseYamlList(): InventoryItem[] | null {
       type: String(it.type ?? '') as InventoryItem['type'],
       ref: String(it.ref ?? ''),
       node: String(it.node ?? ''),
+      ports: normalizePorts(it.ports),
       category: String(it.category ?? ''),
       desc: String(it.desc ?? ''),
     }))
@@ -231,6 +258,20 @@ function parseYamlList(): InventoryItem[] | null {
     ElMessage.error('YAML 解析失败: ' + (e?.message ?? String(e)))
     return null
   }
+}
+
+// 端口字段归一化：接受 string[]、逗号分隔串或单端口数字
+function normalizePorts(ports: unknown): string[] {
+  if (Array.isArray(ports)) {
+    return ports.map((p) => String(p).trim()).filter(Boolean)
+  }
+  if (typeof ports === 'string' || typeof ports === 'number') {
+    return String(ports)
+      .split(/[,，\s]+/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+  }
+  return []
 }
 
 function syncYamlToForm() {

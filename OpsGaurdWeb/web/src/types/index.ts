@@ -398,8 +398,11 @@ export interface AlertRule {
 export interface InventoryItem {
   name: string
   type: 'standalone-container' | 'host-service'
+  /** standalone → 容器名；host-service → host 或 host:port（旧格式兼容，端口并入 ports 探测） */
   ref: string
   node?: string
+  /** 显式声明的端口列表（如 r-nacos 的 8848/9848/9849）；host-service 探活与展示用 */
+  ports?: string[]
   category: string
   desc?: string
   monitoring?: Monitoring
