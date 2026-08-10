@@ -438,11 +438,11 @@ RNACOS_OAUTH2_AUTHORIZATION_URL=http://172.28.50.176:8080/api/v1/idp/authorize
 RNACOS_OAUTH2_TOKEN_URL=http://10.60.171.232:6060/idp-proxy/api/v1/idp/token
 RNACOS_OAUTH2_USERINFO_URL=http://10.60.171.232:6060/idp-proxy/api/v1/idp/userinfo
 RNACOS_OAUTH2_REDIRECT_URI=http://172.28.49.151:20005/rnacos/p/login   # ← 必须指前端登录页
-RNACOS_OAUTH2_SCOPES=openid profile email   # ← 空格分隔（IdP 部署逗号兼容版后可改回逗号拿全 email）
+RNACOS_OAUTH2_SCOPES=openid,profile,email
 RNACOS_OAUTH2_USERNAME_CLAIM_NAME=username
 RNACOS_OAUTH2_USER_DEFAULT_ROLE=1
 ```
 
 - IdP client `redirect_uris` 白名单：`http://172.28.49.151:20005/oauth2/login` + `http://172.28.49.151:20005/rnacos/p/login`（两条并存）。
-- 已知影响：空格配置下 r-nacos 实际只请求 `openid profile`（email scope 被它丢弃），id_token 里 email 为空——r-nacos 只用 `username` claim，无功能影响；待 IdP 新版（splitScopes 逗号兼容）部署后可改回 `openid,profile,email`。
+- **server 1.2.4 已部署（2026-08-10）**：`splitScopes` 兼容逗号分隔生效后，r-nacos 恢复逗号格式 `openid,profile,email`，id_token 三 scope 全带（email 是否为空取决于 OpsGaurd 用户档案是否填了 email，与 scope 无关）。
 - 20005 为外层 nginx/防火墙映射（非 232 本机监听），改端口时需同步调整映射与 IdP 白名单。
