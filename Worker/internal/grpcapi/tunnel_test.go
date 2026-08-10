@@ -1,6 +1,7 @@
 package grpcapi
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -30,7 +31,7 @@ func newFakeTunnelStream() *fakeTunnelStream {
 		ctx:    ctx,
 		cancel: cancel,
 		respCh: make(chan *pb.TunnelFrame, 64),
-		reqs:   make(chan *pb.TunnelFrame, 16),
+		reqs:   make(chan *pb.TunnelFrame, 256),
 	}
 }
 
@@ -263,4 +264,88 @@ func TestRoundTripStreamStreamLoss(t *testing.T) {
 		t.Fatal("expected read error after stream loss")
 	}
 	body.Close()
+}
+
+// TestConcurrentChunkedRequestsSerialized verifies that concurrent chunked
+// request bodies never interleave frames on the shared stream: each request's
+// frames (identified by id) must arrive contiguously. Without sendMu the
+// server-side synchronous collector would see mixed frames and stall.
+func TestConcurrentChunkedRequestsSerialized(t *testing.T) {
+	f := newFakeTunnelStream()
+	m := startTunnel(t, f)
+
+	const nReq = 6
+	const chunksPerReq = 3
+	// Body must exceed requestChunkSize so it is split into multiple frames.
+	bodySize := chunksPerReq*requestChunkSize + 5
+	done := make(chan error, nReq)
+	for i := 0; i < nReq; i++ {
+		go func(i int) {
+			body := bytes.NewReader(bytes.Repeat([]byte{byte('a' + i)}, bodySize))
+			_, _, rc, err := m.RoundTripStream(context.Background(), "PATCH", "/v2/x/blobs/uploads/u", nil, body)
+			if rc != nil {
+				io.Copy(io.Discard, rc)
+				rc.Close()
+			}
+			done <- err
+		}(i)
+	}
+	// Collect all request frames (from all goroutines) off the fake stream.
+	// Each request sends up to chunksPerReq+2 frames: chunksPerReq full chunks
+	// + 1 remainder (+1 terminating frame when data and EOF arrive in separate
+	// Reads). Collect the upper bound so every request's frames are captured.
+	var seq []*pb.TunnelFrame
+	for len(seq) < nReq*(chunksPerReq+2) {
+		select {
+		case fr := <-f.reqs:
+			seq = append(seq, fr)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out after %d frames", len(seq))
+		}
+	}
+	// The fake stream doesn't answer responses, so RoundTripStream blocks on
+	// first response — nothing to join there; send-side is what we assert.
+
+	// Assert: frames are contiguous per request, and every request's last
+	// frame carries chunk_eof=true.
+	groups := map[string][]*pb.TunnelFrame{}
+	for _, fr := range seq {
+		groups[fr.Id] = append(groups[fr.Id], fr)
+	}
+	for id, frames := range groups {
+		if len(frames) < 2 {
+			t.Fatalf("request %q only sent %d frames", id, len(frames))
+		}
+		for i := 1; i < len(frames); i++ {
+			if frames[i].ChunkSeq != int32(i) {
+				t.Fatalf("request %q chunk_seq not contiguous: frame %d = %d", id, i, frames[i].ChunkSeq)
+			}
+		}
+		if !frames[len(frames)-1].ChunkEof {
+			t.Fatalf("request %q last frame missing chunk_eof (sent %d frames)", id, len(frames))
+		}
+	}
+	// The stream must not interleave: consecutive frames of different ids are
+	// allowed only at request boundaries (previous id's last frame was eof).
+	for i := 1; i < len(seq); i++ {
+		if seq[i].Id == seq[i-1].Id {
+			continue
+		}
+		if !seq[i-1].ChunkEof {
+			t.Fatalf("frame %d switched id %q -> %q without chunk_eof", i, seq[i-1].Id, seq[i].Id)
+		}
+	}
+	// Every chunked frame must carry the request metadata on seq 0.
+	seenFirst := map[string]bool{}
+	for _, fr := range seq {
+		if fr.ChunkSeq == 0 {
+			seenFirst[fr.Id] = true
+			if fr.Method == "" || fr.Path == "" {
+				t.Fatalf("first frame missing method/path: %+v", fr)
+			}
+		}
+	}
+	if len(seenFirst) != nReq {
+		t.Fatalf("expected %d first frames, got %d", nReq, len(seenFirst))
+	}
 }

@@ -45,6 +45,14 @@ type TunnelManager struct {
 	// streams: streaming waiters — frame id -> waiter receiving one frame at a
 	// time until chunk_eof (consumed by RoundTripStream).
 	streams map[string]*streamWaiter
+	// sendMu serializes request-frame sending across concurrent round trips.
+	// The server reassembles a chunked request body synchronously (collecting
+	// the frames of ONE request before proxying), so frames of different
+	// requests must never interleave on the shared bidi stream — otherwise the
+	// server's collector swallows/drops frames belonging to other requests and
+	// that request stalls forever. Every RoundTrip/RoundTripStream holds
+	// sendMu for the whole duration of its frame-send phase.
+	sendMu sync.Mutex
 }
 
 // streamWaiter is one in-flight streaming round trip. ch carries response
@@ -169,7 +177,10 @@ func (m *TunnelManager) RoundTrip(method, path string, headers http.Header, body
 		Headers: headerToPB(headers),
 		Body:    body,
 	}
-	if err := stream.Send(reqFrame); err != nil {
+	m.sendMu.Lock()
+	err := stream.Send(reqFrame)
+	m.sendMu.Unlock()
+	if err != nil {
 		return nil, fmt.Errorf("tunnel send: %w", err)
 	}
 
@@ -220,56 +231,13 @@ func (m *TunnelManager) RoundTripStream(ctx context.Context, method, path string
 	// sets chunk_eof=true. A body that fits in one chunk (or is nil) becomes a
 	// single frame with chunk_eof=true. Every frame marks ReqChunked=true so the
 	// server distinguishes new-worker chunked requests from legacy single-frame
-	// ones (old workers never set it).
-	if body == nil {
-		body = bytes.NewReader(nil)
-	}
-	buf := make([]byte, requestChunkSize)
-	seq := int32(0)
-	first := true
-	for {
-		n, rErr := body.Read(buf)
-		if n > 0 {
-			frame := &pb.TunnelFrame{
-				Id:         id,
-				Body:       buf[:n],
-				ChunkSeq:   seq,
-				ChunkEof:   rErr == io.EOF,
-				ReqChunked: true,
-			}
-			if first {
-				frame.Method = method
-				frame.Path = path
-				frame.Headers = headerToPB(headers)
-				first = false
-			}
-			seq++
-			if err := stream.Send(frame); err != nil {
-				m.removeStream(id)
-				return 0, nil, nil, fmt.Errorf("tunnel send: %w", err)
-			}
-		}
-		if rErr == io.EOF {
-			if first {
-				// Empty body: still emit one frame carrying method/path/headers.
-				frame := &pb.TunnelFrame{
-					Id: id, Method: method, Path: path, Headers: headerToPB(headers), ChunkEof: true, ReqChunked: true,
-				}
-				if err := stream.Send(frame); err != nil {
-					m.removeStream(id)
-					return 0, nil, nil, fmt.Errorf("tunnel send: %w", err)
-				}
-			}
-			break
-		}
-		if rErr != nil {
-			m.removeStream(id)
-			return 0, nil, nil, fmt.Errorf("tunnel request body read: %w", rErr)
-		}
-		if n == 0 {
-			// (0, nil) — transient; loop again.
-			continue
-		}
+	// ones (old workers never set it). The send loop holds sendMu ONLY while
+	// frames are being written (released before waiting for the response) so
+	// concurrent round trips never interleave frames on the shared stream, yet
+	// waiting for a response never blocks other senders.
+	if err := m.sendFrames(stream, id, method, path, headers, body); err != nil {
+		m.removeStream(id)
+		return 0, nil, nil, fmt.Errorf("tunnel send: %w", err)
 	}
 
 	// First response frame carries status/headers; subsequent frames only body.
@@ -300,6 +268,68 @@ func (m *TunnelManager) RoundTripStream(ctx context.Context, method, path string
 		buf:      respFirst.Body,
 	}
 	return status, respHeader, r, nil
+}
+
+// sendFrames streams one request's body as chunked frames over the tunnel,
+// holding sendMu for the duration so frames of concurrent requests never
+// interleave on the shared stream (the server reassembles one request's frames
+// synchronously). The lock is released when the frames are all written, before
+// the caller waits for the response.
+func (m *TunnelManager) sendFrames(stream pb.ManagementService_TunnelServer, id, method, path string, headers http.Header, body io.Reader) error {
+	m.sendMu.Lock()
+	defer m.sendMu.Unlock()
+
+	if body == nil {
+		body = bytes.NewReader(nil)
+	}
+	buf := make([]byte, requestChunkSize)
+	seq := int32(0)
+	first := true
+	lastEof := false // whether the last emitted frame carried chunk_eof
+	for {
+		n, rErr := body.Read(buf)
+		if n > 0 {
+			lastEof = rErr == io.EOF // data and EOF can arrive in the same Read
+			frame := &pb.TunnelFrame{
+				Id:         id,
+				Body:       buf[:n],
+				ChunkSeq:   seq,
+				ChunkEof:   lastEof,
+				ReqChunked: true,
+			}
+			if first {
+				frame.Method = method
+				frame.Path = path
+				frame.Headers = headerToPB(headers)
+				first = false
+			}
+			seq++
+			if err := stream.Send(frame); err != nil {
+				return err
+			}
+		}
+		if rErr == io.EOF {
+			if first {
+				// Empty body: still emit one frame carrying method/path/headers.
+				return stream.Send(&pb.TunnelFrame{
+					Id: id, Method: method, Path: path, Headers: headerToPB(headers), ChunkEof: true, ReqChunked: true,
+				})
+			}
+			if !lastEof {
+				// Data and EOF arrived in separate Reads: append an empty
+				// terminating frame so the server's collector sees chunk_eof.
+				return stream.Send(&pb.TunnelFrame{Id: id, ChunkSeq: seq, ChunkEof: true, ReqChunked: true})
+			}
+			return nil
+		}
+		if rErr != nil {
+			return fmt.Errorf("request body read: %w", rErr)
+		}
+		if n == 0 {
+			// (0, nil) — transient; loop again.
+			continue
+		}
+	}
 }
 
 // contentLengthOf returns the integer Content-Length of h, or -1 if absent.
