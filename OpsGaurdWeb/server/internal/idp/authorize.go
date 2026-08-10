@@ -197,12 +197,16 @@ func containsExact(list []string, v string) bool {
 	return false
 }
 
-// splitScopes 把空格分隔的 scope 串拆成切片。
+// splitScopes 把空格或逗号分隔的 scope 串拆成切片。
+// OAuth 2.1 规定 scope 以空格分隔（RFC 6749 §3.3），但部分 OIDC 客户端
+// （如 r-nacos）以逗号分隔发送，此处兼容两种写法。
 func splitScopes(s string) []string {
 	if s == "" {
 		return nil
 	}
-	return strings.Fields(s)
+	return strings.FieldsFunc(s, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == ','
+	})
 }
 
 // scopesAllowed 判断 requested 是否为 allowed 的子集（allowed 含 openid/profile/email）。

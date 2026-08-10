@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -493,4 +494,34 @@ func obtainCode(t *testing.T, svc *Service, user *store.User, clientID, redirect
 
 func decodeJSON(r io.Reader, v any) error {
 	return json.NewDecoder(r).Decode(v)
+}
+
+func TestSplitScopes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"", nil},
+		{"openid", []string{"openid"}},
+		{"openid profile email", []string{"openid", "profile", "email"}},
+		{"openid,profile,email", []string{"openid", "profile", "email"}}, // r-nacos 逗号分隔
+		{"openid profile,email", []string{"openid", "profile", "email"}},
+		{"  openid\tprofile , email ", []string{"openid", "profile", "email"}},
+	}
+	for _, c := range cases {
+		got := splitScopes(c.in)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("splitScopes(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestScopesAllowedComma(t *testing.T) {
+	allowed := []string{"openid", "profile", "email"}
+	if !scopesAllowed(allowed, splitScopes("openid,profile,email")) {
+		t.Error("comma-separated scope should be allowed as subset")
+	}
+	if scopesAllowed(allowed, splitScopes("openid,admin")) {
+		t.Error("scope outside allowance must be rejected")
+	}
 }

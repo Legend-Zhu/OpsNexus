@@ -257,7 +257,7 @@ RNACOS_OAUTH2_AUTHORIZATION_URL=http://172.28.50.176:8080/api/v1/idp/authorize
 RNACOS_OAUTH2_TOKEN_URL=http://10.60.171.232:6060/idp-proxy/api/v1/idp/token
 RNACOS_OAUTH2_USERINFO_URL=http://10.60.171.232:6060/idp-proxy/api/v1/idp/userinfo
 # 回调地址：r-nacos 控制台的政务外网映射地址
-RNACOS_OAUTH2_REDIRECT_URI=http://172.28.49.151:10848/oauth2/login
+RNACOS_OAUTH2_REDIRECT_URI=http://172.28.49.151:20005/oauth2/login
 RNACOS_OAUTH2_SCOPES=openid,profile,email
 RNACOS_OAUTH2_USERNAME_CLAIM_NAME=username
 RNACOS_OAUTH2_USER_DEFAULT_ROLE=1
@@ -288,7 +288,7 @@ docker run -d --name rnacos --restart=always \
 | `RNACOS_OAUTH2_CLIENT_SECRET` | `389d2...5a28` | 同上（一次性明文，轮换在管理台 rotate-secret） |
 | `RNACOS_OAUTH2_AUTHORIZATION_URL` | `http://172.28.50.176:8080/...` | OpsGaurd 政务外网映射（189.6→172.28.50.176） |
 | `RNACOS_OAUTH2_TOKEN_URL` | `http://10.60.171.232:6060/idp-proxy/...` | worker http 端口（disaster 是 6060）+ 隧道前缀 |
-| `RNACOS_OAUTH2_REDIRECT_URI` | `http://172.28.49.151:10848/oauth2/login` | r-nacos 政务外网映射（232→172.28.49.151）+ 回调路径 |
+| `RNACOS_OAUTH2_REDIRECT_URI` | `http://172.28.49.151:20005/oauth2/login` | r-nacos 政务外网映射（232→172.28.49.151）+ 回调路径 |
 | `RNACOS_OAUTH2_USERNAME_CLAIM_NAME` | `username` | OpsGaurd ID token 里的 username claim |
 | `RNACOS_OAUTH2_USER_DEFAULT_ROLE` | `1` | r-nacos 内置角色 ID（1=管理员） |
 
@@ -394,3 +394,55 @@ docker stop nacos-server-dm8    # 实测 Exited 137，业务无感（253:20011 �
 docker start nacos-server-dm8
 ```
 老 nacos 数据（达梦8）原样保留，配置与切换前一致；业务 SDK 自动重连回老 nacos。
+
+---
+
+## 附录 C：控制台 OAuth2 SSO 对接实战排障（2026-08-10）
+
+> 场景：r-nacos 控制台（v0.8.6，232）OAuth2 登录对接 OpsGaurd IdP（189.6），经 worker gRPC 隧道（232:6060 → 189.6）交换 token。两个坑叠加导致"反复登录失败"，逐个拆解记录如下。
+
+### C.1 坑一：scope 分隔符不兼容 → `invalid_scope / requested scope exceeds client allowance`
+
+- **现象**：点击 OAuth2 登录，IdP 直接回跳错误。
+- **根因**：r-nacos 生成授权 URL 时用**逗号**分隔 scope（`scope=openid,profile,email`）；而 OAuth 2.1 标准是**空格**分隔（RFC 6749 §3.3）。OpsGaurd IdP 按空白拆分后把整个 `"openid,profile,email"` 当成一个 scope，白名单内当然没有 → 拒绝。
+- **修复**（双管齐下）：
+  1. **r-nacos 侧（立即生效）**：`rnacos.env` 里 `RNACOS_OAUTH2_SCOPES=openid profile email`（空格）。
+  2. **IdP 侧（根治，防御其他 RP）**：`splitScopes` 兼容逗号（`strings.FieldsFunc` 同时切空白与逗号），已合入代码并补单测。
+- **验证手法**：189.6 本机 curl 打 authorize，对比空格/逗号两种 scope 的 302 去向：
+  ```bash
+  # 空格 → 302 到 /login?return_to=...（通过校验）
+  # 逗号 → 302 回 redirect_uri 带 error=invalid_scope
+  ```
+
+### C.2 坑二：redirect_uri 指后端回调端点 → code 被藏进 redirect_url，前端永不触发
+
+- **现象**：scope 修好、code 能签发，但回调后页面停在 `login?redirect_url=%2Foauth2%2Flogin%3Fcode%3D...` 不动。
+- **根因**：r-nacos 0.8.6 **前端**只从**当前路由 query 的 `code`** 解析回调（`handleOAuth2Callback` 读 `n.query.code`），随后 POST `/rnacos/api/console/v2/login/oauth2/login` 换 token。若 `redirect_uri` 指向后端端点 `/oauth2/login`，后端未处理 code 直接 302 到登录页并把 code **编码进 `redirect_url` 参数** → 前端读不到 query.code → 永不触发。
+- **修复**：`redirect_uri` 改为**前端登录页** `http://172.28.49.151:20005/rnacos/p/login`，code 直接落在 query → 前端自动接管。**IdP 侧 client 的 redirect_uris 白名单必须同步加入该地址**（PUT `/api/v1/idp/clients/:id`，注意经公网映射有 WAF 拦 PUT，用 189.6 本机 API 改）。
+- **验证手法（关键一步）**：手动 POST `/rnacos/api/console/v2/login/oauth2/login`（body `{code, state}`）返回 `{"data":{"token":"..."},"success":true}` → 证明 r-nacos 后端与隧道全通，问题只在前端触发条件。
+
+### C.3 链路验证速查（隧道方向）
+
+| 步骤 | 命令（232 上执行） | 期望 |
+|---|---|---|
+| 隧道通 | `curl -s -X POST http://10.60.171.232:6060/idp-proxy/api/v1/idp/token -H "Content-Type: application/x-www-form-urlencoded" -d "grant_type=authorization_code&client_id=<id>&client_secret=<secret>&code=deadbeef&redirect_uri=<uri>"` | `{"error":"invalid_grant","error_description":"unknown authorization code"}`（假 code 被 IdP 正确拒绝 = 隧道通） |
+| worker 隧道状态 | `docker logs <worker容器> \| grep "idp tunnel"` | 周期性 `attached`（detached 说明断过） |
+
+### C.4 最终生效配置（232：`/opt/rnacos/rnacos.env`，bind mount 只读）
+
+```bash
+RNACOS_OAUTH2_ENABLE=true
+RNACOS_OAUTH2_CLIENT_ID=cli-36c97ea0d5839614
+RNACOS_OAUTH2_CLIENT_SECRET=<admin 台 rotate-secret>
+RNACOS_OAUTH2_AUTHORIZATION_URL=http://172.28.50.176:8080/api/v1/idp/authorize
+RNACOS_OAUTH2_TOKEN_URL=http://10.60.171.232:6060/idp-proxy/api/v1/idp/token
+RNACOS_OAUTH2_USERINFO_URL=http://10.60.171.232:6060/idp-proxy/api/v1/idp/userinfo
+RNACOS_OAUTH2_REDIRECT_URI=http://172.28.49.151:20005/rnacos/p/login   # ← 必须指前端登录页
+RNACOS_OAUTH2_SCOPES=openid profile email   # ← 空格分隔（IdP 部署逗号兼容版后可改回逗号拿全 email）
+RNACOS_OAUTH2_USERNAME_CLAIM_NAME=username
+RNACOS_OAUTH2_USER_DEFAULT_ROLE=1
+```
+
+- IdP client `redirect_uris` 白名单：`http://172.28.49.151:20005/oauth2/login` + `http://172.28.49.151:20005/rnacos/p/login`（两条并存）。
+- 已知影响：空格配置下 r-nacos 实际只请求 `openid profile`（email scope 被它丢弃），id_token 里 email 为空——r-nacos 只用 `username` claim，无功能影响；待 IdP 新版（splitScopes 逗号兼容）部署后可改回 `openid,profile,email`。
+- 20005 为外层 nginx/防火墙映射（非 232 本机监听），改端口时需同步调整映射与 IdP 白名单。
