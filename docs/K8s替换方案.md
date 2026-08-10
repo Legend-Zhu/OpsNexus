@@ -15,13 +15,15 @@
                         │                                                                        │
   用户/运维             │   b-1(232)★Leader   b-2(230)      b-3(249)      YJ-4(253)   YJ-5(231)  │
   172.28.49.151 ───────►│   nginxwebui        ★K8s控制面     ★K8s控制面     Harbor      ★etcd单点  │
-  (232 的外网映射)       │   grafana/loki      业务Pod×9      业务Pod×5      nacos-dm8   AI服务     │
-                        │   rnacos/map-server                pr-micaps等    ES/mongo..  (未核查)   │
+  (232 的外网映射)       │   grafana/loki      业务Pod×9      业务Pod×5      nacos-dm8    AI服务     │
+                        │   rnacos/map-server                pr-micaps等   (已弃迁,流   (未核查)   │
+                        │   ★r-nacos: 8848/9848        （注册中心已由253→232，见 §1.2 注）        │
                         └────────────────────────────────────────────────────────────────────────┘
 
   ★ = RKE K8s 组件：kube-apiserver/scheduler/controller-manager/kubelet/kube-proxy 在 b-1/b-2/b-3；
       etcd 单独在 231（--etcd-servers=https://10.60.171.231:2379，apiserver 启动参数实测）；
       Rancher v2.5.17 在 253（容器 rancher_v2517-rancher_server-1_old）。
+      253 的 nacos-server-dm8 已停用：注册/配置中心 8-07 迁到 232 r-nacos，253 仅剩 DNAT 过渡桥。
 ```
 
 ### 1.2 K8s 里的业务负载（default 命名空间，全部实测）
@@ -53,6 +55,8 @@ springdoc.api-docs.enabled=false
 → 服务发现与配置**全部走 nacos，不依赖 K8s DNS/Service**。这是平移能做到"应用零改动"的关键。
 
 > 2026-08-07 更新：注册/配置中心已从 253 的 nacos-server-dm8 迁到 **232 的 r-nacos**（`10.60.171.232:8848`，详见《注册配置中心-r-nacos-方案.md》附录 B）。当前业务经 253 的 DNAT 桥转发到 232（过渡态）；**Swarm 迁移时 env 应直写 `NACOS_ADDR=10.60.171.232:8848`**，不再走 253，迁移完成后拆除 DNAT 桥。下文示例已按此更新。
+>
+> 2026-08-10 更新：r-nacos 控制台（`http://172.28.49.151:20005/rnacos/`）OAuth2 登录已对接 OpsGaurd IdP 打通（排障记录见《注册配置中心-r-nacos-方案.md》附录 C）——§五 SOP 中"控制台确认实例数"的操作面从旧 nacos（253:20011，已废）改到 r-nacos 控制台；8848 老控制台默认关闭，勿再访问 253:20011/nacos。
 
 ### 1.3 流量链路（北门）
 
@@ -84,9 +88,9 @@ springdoc.api-docs.enabled=false
 
 | 层 | 手法 | 效果 |
 |---|---|---|
-| **应用零改动** | Swarm 服务用**同一镜像（digest 钉版）+ 同 5 个 env** | 照常注册到 nacos(253:20011, ns=test)、照常拉同一份配置 |
+| **应用零改动** | Swarm 服务用**同一镜像（digest 钉版）+ 同 5 个 env** | 照常注册到 r-nacos(232:8848, ns=test)、照常拉同一份配置 |
 | **前门零改动** | Swarm 服务 published 端口 = **现 NodePort 同端口**（30000-30009） | nginxwebui upstream 不动、用户访问入口不动 |
-| **注册零改动** | nacos（253 nacos-server-dm8）原样保留 | 消费方无感；后续迁 r-nacos 是独立项目（见《注册配置中心-r-nacos-方案.md》） |
+| **注册零改动** | 注册/配置中心已就位：**232 r-nacos**（8-07 迁入完成，业务当前经 253 DNAT 过渡）；Swarm 新实例 env **直写 232:8848**，与老 K8s Pod（走 DNAT）同中心、无感知 | 消费方无感、双实例并存期 ns=test 同一中心内互相可见；最后一个服务迁完后拆除 253 的 DNAT 桥 |
 
 **切换模式**：K8s NodePort 与 Swarm 发布端口在同一节点上不能共存（iptables 都会抢），所以每个服务按「**先无端口预热 → 停 K8s → 删 Service 释放端口 → Swarm 加端口**」四步切换，单服务中断窗口约 1~2 分钟，逐服务灰度，可回退。
 
@@ -114,7 +118,8 @@ docker pull 10.60.171.253:20005/library/data-server@sha256:5688ab340c47b94bb5c8e
 # P5. plan-server / prdl-external-online-server 已 0 副本——与业务确认是弃用还是停用；
 #     弃用则不迁，K8s 拆除时一并清掉 Service。
 
-# P6. Swarm overlay 网络（若还没有）：在 232 执行
+# P6. Swarm overlay 网络：232 上已存在 `opsguard_default`（worker 部署时创建，8-08）；
+#     业务服务直接复用该网络；若想独立命名再建 ops-net：
 docker network create -d overlay ops-net
 ```
 
@@ -185,7 +190,8 @@ monitoring:
 
 ```text
 1. OpsGaurd 部署 swarm 服务（无 ports）→ 等健康检查通过
-2. nacos 控制台（http://10.60.171.253:20011/nacos，ns=test）确认：
+2. r-nacos 控制台（http://172.28.49.151:20005/rnacos/，OAuth2→OpsGaurd 统一认证 或 本地账号登录；
+   旧 nacos 253:20011 控制台已废，8848 老控制台默认关闭）→ 服务管理 → ns=test：
    data-server 实例数从 2 → 4（2 老 K8s Pod + 2 新 swarm 容器）✔ 说明注册/配置拉取正常
 3. 【中断开始】Rancher UI（http://10.60.171.253，admin）→ 集群 → default →
    Workload：data-server scale 到 0（等 2 个 Pod 消失）
@@ -199,7 +205,7 @@ monitoring:
 6. 验证：
    - curl http://10.60.171.230:30000/<健康路径> 通
    - nginxwebui 对应入口（200xx 端口）功能正常
-   - nacos 实例数回落到 2（新的两个）
+   - r-nacos 控制台实例数回落到 2（新的两个）
 7. 观察 ≥30 分钟无异常 → 迁移下一个服务
 ```
 
@@ -246,7 +252,7 @@ K8s 没了 Rancher 即失业。建议先 `docker stop rancher_v2517-rancher_serv
 
 ### 6.5 80/443 释放后的用途规划
 
-- r-nacos 控制台可改用 80（改三处：run-rnacos.sh 端口映射、rnacos.env 的 REDIRECT_URI、OpsGaurd IdP client 白名单——见《注册配置中心-r-nacos-方案.md》§6.5）；
+- r-nacos 控制台可改用 80（改三处：run-rnacos.sh 端口映射、rnacos.env 的 REDIRECT_URI、OpsGaurd IdP client 白名单——见《注册配置中心-r-nacos-方案.md》附录 C：REDIRECT_URI 必须指前端登录页路径 `/rnacos/p/login`，改端口时同步改 OpsGaurd IdP 白名单）；
 - 或规划统一门户。此为可选项，不在本方案强制范围。
 
 ---
@@ -263,11 +269,11 @@ K8s 没了 Rancher 即失业。建议先 `docker stop rancher_v2517-rancher_serv
 | R6 | 231 混跑 | etcd 与 AI 等裸服务同机 | 迁移期不动 231；拆 etcd 只删 etcd 容器与 /var/lib/etcd |
 | R7 | 镜像拉取鉴权 | swarm 服务拉 Harbor 需凭据 | 各节点 /root/.docker/config.json 已有凭据；**预拉取 + imagePullPolicy: missing** 彻底绕开 |
 | R8 | 双编排并存期资源 | b-1/2/3 同时跑两套控制面 | 迁移期短暂并存无碍（业务 Pod 此消彼长）；全部迁完立即拆 K8s 释放 |
-| R9 | nacos 命名空间混用 | 新老实例同 ns=test 短暂并存 | 预热阶段消费方可能打到新实例——新实例同镜像同配置，行为一致；这也是预热验证的一部分 |
+| R9 | 命名空间混用 | 新老实例同 ns=test、同在 r-nacos 一个中心，短暂并存 | 预热阶段消费方可能打到新实例——新实例同镜像同配置，行为一致；这也是预热验证的一部分 |
 
 ## 八、验收清单
 
-- [ ] 8 个业务服务全部跑在 Swarm，nacos(ns=test) 实例数与各服务副本数一致
+- [ ] 8 个业务服务全部跑在 Swarm，**r-nacos 控制台**（151:20005/rnacos/，ns=test）实例数与各服务副本数一致
 - [ ] nginxwebui 各 200xx 入口功能回归通过（重点：20004/20014/20017 业务主入口、30003/ws 长连接）
 - [ ] OpsGaurd 管理台可见全部新服务，监控/审计数据正常采集
 - [ ] b-1/2/3 上无 k8s_/kubelet/kube-proxy/kube-apiserver 容器，ss 无 6443/10250/10257/10259
