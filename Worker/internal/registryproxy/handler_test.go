@@ -1,6 +1,7 @@
 package registryproxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -19,13 +20,19 @@ type fakeStreamer struct {
 	attach  bool
 	gotPath string
 	gotMeth string
+	gotBody string // request body captured by RoundTripStream
 }
 
 func (f *fakeStreamer) Available() bool { return f.attach }
 
-func (f *fakeStreamer) RoundTripStream(ctx context.Context, method, path string, headers http.Header, body []byte) (int, http.Header, io.ReadCloser, error) {
+func (f *fakeStreamer) RoundTripStream(ctx context.Context, method, path string, headers http.Header, body io.Reader) (int, http.Header, io.ReadCloser, error) {
 	f.gotPath = path
 	f.gotMeth = method
+	if body != nil {
+		if b, err := io.ReadAll(body); err == nil {
+			f.gotBody = string(b)
+		}
+	}
 	if f.bodyErr != nil {
 		return 0, nil, nil, f.bodyErr
 	}
@@ -39,7 +46,13 @@ func doReq(t *testing.T, s TunnelStreamer, method, target string) *httptest.Resp
 
 func doReqCache(t *testing.T, s TunnelStreamer, cache *BlobCache, method, target string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, target, nil)
+	return doReqBody(t, s, cache, method, target, nil)
+}
+
+// doReqBody is doReqCache with an explicit request body (for push methods).
+func doReqBody(t *testing.T, s TunnelStreamer, cache *BlobCache, method, target string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, target, bytes.NewReader(body))
 	rr := httptest.NewRecorder()
 	Handler(s, cache, nil).ServeHTTP(rr, req)
 	return rr
@@ -80,10 +93,27 @@ func TestRegistryProxyHeadNoBody(t *testing.T) {
 	}
 }
 
-func TestRegistryProxyRejectsPush(t *testing.T) {
+func TestRegistryProxyPushForwarded(t *testing.T) {
 	s := &fakeStreamer{attach: true, status: 201, body: ""}
-	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
-		rr := doReq(t, s, m, "http://node/v2/library/x/blobs/uploads/")
+	payload := []byte("blob-chunk")
+	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodPatch} {
+		rr := doReqBody(t, s, nil, m, "http://node/v2/library/x/blobs/uploads/uuid1", payload)
+		if rr.Code != 201 {
+			t.Fatalf("%s status = %d, want 201", m, rr.Code)
+		}
+		if s.gotMeth != m {
+			t.Fatalf("%s forwarded as %q", m, s.gotMeth)
+		}
+		if s.gotBody != string(payload) {
+			t.Fatalf("%s body = %q, want %q", m, s.gotBody, payload)
+		}
+	}
+}
+
+func TestRegistryProxyRejectsOtherMethods(t *testing.T) {
+	s := &fakeStreamer{attach: true, status: 200}
+	for _, m := range []string{http.MethodDelete, http.MethodOptions} {
+		rr := doReqBody(t, s, nil, m, "http://node/v2/library/x/blobs/uploads/uuid1", nil)
 		if rr.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("%s status = %d, want 405", m, rr.Code)
 		}

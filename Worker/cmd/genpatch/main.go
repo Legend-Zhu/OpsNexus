@@ -48,6 +48,7 @@ type fieldIncrement struct {
 	number   int32
 	typ      descriptorpb.FieldDescriptorProto_Type
 	jsonName string // same form protoc derives for camelCase json_name
+	optional bool   // proto3 `optional` field (explicit presence → *bool)
 }
 
 // increments lists the fields added to proto/opsguard.proto on top of what the
@@ -56,6 +57,7 @@ type fieldIncrement struct {
 var increments = []fieldIncrement{
 	{name: "chunk_seq", number: 8, typ: descriptorpb.FieldDescriptorProto_TYPE_INT32, jsonName: "chunkSeq"},
 	{name: "chunk_eof", number: 9, typ: descriptorpb.FieldDescriptorProto_TYPE_BOOL, jsonName: "chunkEof"},
+	{name: "req_chunked", number: 10, typ: descriptorpb.FieldDescriptorProto_TYPE_BOOL, jsonName: "reqChunked"},
 }
 
 func main() {
@@ -114,13 +116,18 @@ func extendedDescriptor() *descriptorpb.FileDescriptorProto {
 		fatal("TunnelFrame not found in descriptor")
 	}
 	for _, inc := range increments {
-		tf.Field = append(tf.Field, &descriptorpb.FieldDescriptorProto{
+		fd := &descriptorpb.FieldDescriptorProto{
 			Name:     proto.String(inc.name),
 			Number:   proto.Int32(inc.number),
 			Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
 			Type:     inc.typ.Enum(),
 			JsonName: proto.String(inc.jsonName),
-		})
+		}
+		if inc.optional {
+			// proto3 `optional` → explicit presence, generated as *bool.
+			fd.Proto3Optional = proto.Bool(true)
+		}
+		tf.Field = append(tf.Field, fd)
 	}
 	return dpb
 }
@@ -222,12 +229,25 @@ func patchFile(path, constBlock, structAdd, getterAdd string) {
 	rest := append([]string{constBlock}, lines[end+1:]...)
 	lines = append(lines[:start], rest...)
 
-	// 2. Insert the struct fields after TunnelFrame.Error.
-	idx := indexOf(lines, func(ln string) bool {
-		return strings.Contains(ln, `protobuf:"bytes,7,opt,name=error,proto3"`)
-	})
+	// 2. Insert the struct fields. Field order in the struct MUST match the
+	// descriptor order (protobuf reflect maps number→position), so new fields
+	// (ascending numbers) go AFTER the last already-present chunk field
+	// (ChunkSeq/ChunkEof/ReqChunked), else after TunnelFrame.Error.
+	idx := -1
+	for i, ln := range lines {
+		for _, probe := range []string{`json:"chunk_seq,omitempty"`, `json:"chunk_eof,omitempty"`, `json:"req_chunked,omitempty"`} {
+			if strings.Contains(ln, probe) {
+				idx = i // keep the LAST match (highest field number)
+			}
+		}
+	}
 	if idx < 0 {
-		fatal("TunnelFrame.Error struct field not found in %s", path)
+		idx = indexOf(lines, func(ln string) bool {
+			return strings.Contains(ln, `protobuf:"bytes,7,opt,name=error,proto3"`)
+		})
+	}
+	if idx < 0 {
+		fatal("TunnelFrame struct insertion anchor not found in %s", path)
 	}
 	body := append([]string{}, lines[idx+1:]...)
 	lines = append(lines[:idx+1], append([]string{structAdd}, body...)...)
@@ -260,24 +280,49 @@ func doPatch() {
 	}
 	fmt.Printf("new descriptor size: %d bytes\n", len(raw))
 
-	structAdd := "\t// 分片流式（镜像中继）：chunk_seq 从 0 递增；chunk_eof=true 标记末帧。\n" +
-		"\tChunkSeq int32 `protobuf:\"varint,8,opt,name=chunk_seq,json=chunkSeq,proto3\" json:\"chunk_seq,omitempty\"`\n" +
-		"\tChunkEof bool  `protobuf:\"varint,9,opt,name=chunk_eof,json=chunkEof,proto3\" json:\"chunk_eof,omitempty\"`\n"
-
-	getterAdd := "func (x *TunnelFrame) GetChunkSeq() int32 {\n" +
-		"\tif x != nil {\n" +
-		"\t\treturn x.ChunkSeq\n" +
-		"\t}\n" +
-		"\treturn 0\n" +
-		"}\n" +
-		"\n" +
-		"func (x *TunnelFrame) GetChunkEof() bool {\n" +
-		"\tif x != nil {\n" +
-		"\t\treturn x.ChunkEof\n" +
-		"\t}\n" +
-		"\treturn false\n" +
-		"}\n" +
-		"\n"
+	// 只插入当前 pb 尚缺的字段（幂等：已存在的字段（如 reset 前的
+	// chunk_seq/chunk_eof）不再重复插入）。
+	present := tfFields()
+	structAdd := ""
+	getterAdd := ""
+	if present["chunk_seq"] == nil {
+		structAdd += "\t// 分片流式（镜像中继）：chunk_seq 从 0 递增；chunk_eof=true 标记末帧。\n" +
+			"\tChunkSeq int32 `protobuf:\"varint,8,opt,name=chunk_seq,json=chunkSeq,proto3\" json:\"chunk_seq,omitempty\"`\n"
+		getterAdd += "func (x *TunnelFrame) GetChunkSeq() int32 {\n" +
+			"\tif x != nil {\n" +
+			"\t\treturn x.ChunkSeq\n" +
+			"\t}\n" +
+			"\treturn 0\n" +
+			"}\n" +
+			"\n"
+	}
+	if present["chunk_eof"] == nil {
+		structAdd += "\tChunkEof bool  `protobuf:\"varint,9,opt,name=chunk_eof,json=chunkEof,proto3\" json:\"chunk_eof,omitempty\"`\n"
+		getterAdd += "func (x *TunnelFrame) GetChunkEof() bool {\n" +
+			"\tif x != nil {\n" +
+			"\t\treturn x.ChunkEof\n" +
+			"\t}\n" +
+			"\treturn false\n" +
+			"}\n" +
+			"\n"
+	}
+	if present["req_chunked"] == nil {
+		structAdd += "\t// 请求方向分片标志：true 时请求体按 chunk_seq/chunk_eof 分帧\n" +
+			"\t// 流式（首帧带 method/path/headers）；false/未设置 = 单帧完整请求\n" +
+			"\t//（旧 worker 兼容）。\n" +
+			"\tReqChunked bool `protobuf:\"varint,10,opt,name=req_chunked,json=reqChunked,proto3\" json:\"req_chunked,omitempty\"`\n"
+		getterAdd += "func (x *TunnelFrame) GetReqChunked() bool {\n" +
+			"\tif x != nil {\n" +
+			"\t\treturn x.ReqChunked\n" +
+			"\t}\n" +
+			"\treturn false\n" +
+			"}\n" +
+			"\n"
+	}
+	if structAdd == "" {
+		fmt.Println("all declared fields already present; nothing to patch")
+		return
+	}
 
 	patchFile(workerPB, quoteRaw(raw), structAdd, getterAdd)
 	if b, err := os.ReadFile(workerPB); err == nil {
@@ -290,7 +335,7 @@ func doPatch() {
 
 func doVerify() {
 	fd := (&pb.TunnelFrame{}).ProtoReflect().Descriptor()
-	for _, name := range []string{"chunk_seq", "chunk_eof"} {
+	for _, name := range []string{"chunk_seq", "chunk_eof", "req_chunked"} {
 		f := fd.Fields().ByName(protoreflect.Name(name))
 		if f == nil {
 			fatal("field %s missing from descriptor", name)
@@ -298,11 +343,9 @@ func doVerify() {
 		fmt.Printf("field %s: number=%d\n", name, f.Number())
 	}
 
-	// Pure-reflection round trip (compiles against both pre- and post-patch pb).
-	in := &pb.TunnelFrame{Id: "x", Status: 200, Body: []byte("hello")}
-	m := in.ProtoReflect()
-	m.Set(fd.Fields().ByName("chunk_seq"), protoreflect.ValueOfInt32(2))
-	m.Set(fd.Fields().ByName("chunk_eof"), protoreflect.ValueOfBool(true))
+	// Round trip via the actual wire path (proto.Marshal/Unmarshal), not
+	// reflection Set — the generated stubs are used this way in production.
+	in := &pb.TunnelFrame{Id: "x", Status: 200, Body: []byte("hello"), ChunkSeq: 2, ChunkEof: true, ReqChunked: true}
 	raw, err := proto.Marshal(in)
 	if err != nil {
 		fatal("marshal: %v", err)
@@ -311,13 +354,10 @@ func doVerify() {
 	if err := proto.Unmarshal(raw, out); err != nil {
 		fatal("unmarshal: %v", err)
 	}
-	om := out.ProtoReflect()
-	if om.Get(fd.Fields().ByName("chunk_seq")).Int() != 2 ||
-		!om.Get(fd.Fields().ByName("chunk_eof")).Bool() ||
-		string(out.GetBody()) != "hello" {
+	if out.GetChunkSeq() != 2 || !out.GetChunkEof() || !out.GetReqChunked() || string(out.GetBody()) != "hello" {
 		fatal("round-trip mismatch: %+v", out)
 	}
-	fmt.Println("round-trip OK: chunk_seq=2 chunk_eof=true body=hello")
+	fmt.Println("round-trip OK: chunk_seq=2 chunk_eof=true req_chunked=true body=hello")
 }
 
 func indexOf(lines []string, f func(string) bool) int {

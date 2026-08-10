@@ -452,7 +452,7 @@ func (a registryProxyAdapter) Available() bool {
 	return a.m.Available()
 }
 
-func (a registryProxyAdapter) RoundTripStream(ctx context.Context, method, path string, headers http.Header, body []byte) (int, http.Header, io.ReadCloser, error) {
+func (a registryProxyAdapter) RoundTripStream(ctx context.Context, method, path string, headers http.Header, body io.Reader) (int, http.Header, io.ReadCloser, error) {
 	if a.m == nil {
 		return 0, nil, nil, fmt.Errorf("registry tunnel disabled")
 	}

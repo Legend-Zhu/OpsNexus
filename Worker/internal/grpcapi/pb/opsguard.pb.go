@@ -3049,6 +3049,11 @@ type TunnelFrame struct {
 	// 分片流式（镜像中继）：chunk_seq 从 0 递增；chunk_eof=true 标记末帧。
 	ChunkSeq int32 `protobuf:"varint,8,opt,name=chunk_seq,json=chunkSeq,proto3" json:"chunk_seq,omitempty"`
 	ChunkEof bool  `protobuf:"varint,9,opt,name=chunk_eof,json=chunkEof,proto3" json:"chunk_eof,omitempty"`
+	// 请求方向分片标志：true 时请求体按 chunk_seq/chunk_eof 分帧
+	// 流式（首帧带 method/path/headers）；false/未设置 = 单帧完整请求
+	//（旧 worker 兼容）。
+	ReqChunked bool `protobuf:"varint,10,opt,name=req_chunked,json=reqChunked,proto3" json:"req_chunked,omitempty"`
+
 
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3183,6 +3188,14 @@ func (x *TunnelFrame) GetChunkSeq() int32 {
 func (x *TunnelFrame) GetChunkEof() bool {
 	if x != nil {
 		return x.ChunkEof
+	}
+	return false
+}
+
+
+func (x *TunnelFrame) GetReqChunked() bool {
+	if x != nil {
+		return x.ReqChunked
 	}
 	return false
 }
@@ -3352,43 +3365,45 @@ const file_opsguard_proto_rawDesc = "" +
 	"\x12\x18\n\aservice\x18\x06 \x01(\tR\aservice\x12\x18\n\acommand\x18\a" +
 	" \x01(\tR\acommand\x12\x16\n\x06target\x18\b \x01(\tR\x06target\x12" +
 	"\x0e\n\x02ok\x18\t \x01(\bR\x02ok\x12\x16\n\x06detail\x18\n \x01(\tR" +
-	"\x06detail\"\xfa\x01\n\vTunnelFrame\x12\x0e\n\x02id\x18\x01 \x01(\tR" +
+	"\x06detail\"\xd5\x02\n\vTunnelFrame\x12\x0e\n\x02id\x18\x01 \x01(\tR" +
 	"\x02id\x12\x16\n\x06method\x18\x02 \x01(\tR\x06method\x12\x12\n\x04pat" +
 	"h\x18\x03 \x01(\tR\x04path\x123\n\aheaders\x18\x04 \x03(\v2\x19.opsgua" +
 	"rd.v1.TunnelHeaderR\aheaders\x12\x12\n\x04body\x18\x05 \x01(\fR\x04bod" +
 	"y\x12\x16\n\x06status\x18\x06 \x01(\x05R\x06status\x12\x14\n\x05error" +
 	"\x18\a \x01(\tR\x05error\x12\x1b\n\tchunk_seq\x18\b \x01(\x05R\bchunkS" +
-	"eq\x12\x1b\n\tchunk_eof\x18\t \x01(\bR\bchunkEof\"6\n\fTunnelHeader" +
-	"\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 " +
-	"\x01(\tR\x05value2\xc2\r\n\x11ManagementService\x12-\n\x04Ping\x12\x12" +
-	".opsguard.v1.Empty\x1a\x11.opsguard.v1.Pong\x121\n\x04Self\x12\x12.ops" +
-	"guard.v1.Empty\x1a\x15.opsguard.v1.SelfInfo\x12S\n\fListServices\x12 ." +
-	"opsguard.v1.ListServicesRequest\x1a!.opsguard.v1.ListServicesResponse" +
-	"\x12H\n\nGetService\x12\x1e.opsguard.v1.GetServiceRequest\x1a\x1a.opsg" +
-	"uard.v1.ServiceDetail\x12<\n\x06Deploy\x12\x1a.opsguard.v1.DeployReque" +
-	"st\x1a\x16.opsguard.v1.Operation\x12<\n\x06Update\x12\x1a.opsguard.v1." +
-	"UpdateRequest\x1a\x16.opsguard.v1.Operation\x12:\n\x05Scale\x12\x19.op" +
-	"sguard.v1.ScaleRequest\x1a\x16.opsguard.v1.Operation\x12>\n\aRestart" +
-	"\x12\x1b.opsguard.v1.RestartRequest\x1a\x16.opsguard.v1.Operation\x12<" +
-	"\n\x06Remove\x12\x1a.opsguard.v1.RemoveRequest\x1a\x16.opsguard.v1.Ope" +
-	"ration\x12H\n\fGetOperation\x12 .opsguard.v1.GetOperationRequest\x1a" +
-	"\x16.opsguard.v1.Operation\x12?\n\tListNodes\x12\x12.opsguard.v1.Empty" +
-	"\x1a\x1e.opsguard.v1.ListNodesResponse\x12?\n\tNodeStats\x12\x12.opsgu" +
-	"ard.v1.Empty\x1a\x1e.opsguard.v1.NodeStatsResponse\x12R\n\rNodeProcess" +
-	"es\x12!.opsguard.v1.NodeProcessesRequest\x1a\x1e.opsguard.v1.Processes" +
-	"Response\x12Y\n\x0eNodeContainers\x12\".opsguard.v1.NodeContainersRequ" +
-	"est\x1a#.opsguard.v1.NodeContainersResponse\x12[\n\x10RestartContainer" +
-	"\x12#.opsguard.v1.ContainerActionRequest\x1a\".opsguard.v1.ContainerAc" +
-	"tionResult\x12H\n\tCheckPort\x12\x1d.opsguard.v1.CheckPortRequest\x1a" +
-	"\x1c.opsguard.v1.PortCheckResult\x12H\n\tCheckHTTP\x12\x1d.opsguard.v1" +
-	".CheckHTTPRequest\x1a\x1c.opsguard.v1.HTTPCheckResult\x12H\n\tCheckFlo" +
-	"w\x12\x1d.opsguard.v1.CheckFlowRequest\x1a\x1c.opsguard.v1.FlowCheckRe" +
-	"sult\x12M\n\nListEvents\x12\x1e.opsguard.v1.ListEventsRequest\x1a\x1f." +
-	"opsguard.v1.ListEventsResponse\x12J\n\tListAudit\x12\x1d.opsguard.v1.L" +
-	"istAuditRequest\x1a\x1e.opsguard.v1.ListAuditResponse\x12D\n\nStreamLo" +
-	"gs\x12\x1e.opsguard.v1.StreamLogsRequest\x1a\x14.opsguard.v1.LogLine0" +
-	"\x01\x12O\n\x0fSubscribeEvents\x12\x1d.opsguard.v1.SubscribeRequest" +
-	"\x1a\x19.opsguard.v1.MonitorEvent(\x010\x01\x12L\n\x0eSubscribeAudit" +
+	"eq\x12\x1b\n\tchunk_eof\x18\t \x01(\bR\bchunkEof\x12\x1b\n\tchunk_seq" +
+	"\x18\b \x01(\x05R\bchunkSeq\x12\x1b\n\tchunk_eof\x18\t \x01(\bR\bchunk" +
+	"Eof\x12\x1f\n\vreq_chunked\x18\n \x01(\bR\nreqChunked\"6\n\fTunnelHead" +
+	"er\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02" +
+	" \x01(\tR\x05value2\xc2\r\n\x11ManagementService\x12-\n\x04Ping\x12" +
+	"\x12.opsguard.v1.Empty\x1a\x11.opsguard.v1.Pong\x121\n\x04Self\x12\x12" +
+	".opsguard.v1.Empty\x1a\x15.opsguard.v1.SelfInfo\x12S\n\fListServices" +
+	"\x12 .opsguard.v1.ListServicesRequest\x1a!.opsguard.v1.ListServicesRes" +
+	"ponse\x12H\n\nGetService\x12\x1e.opsguard.v1.GetServiceRequest\x1a\x1a" +
+	".opsguard.v1.ServiceDetail\x12<\n\x06Deploy\x12\x1a.opsguard.v1.Deploy" +
+	"Request\x1a\x16.opsguard.v1.Operation\x12<\n\x06Update\x12\x1a.opsguar" +
+	"d.v1.UpdateRequest\x1a\x16.opsguard.v1.Operation\x12:\n\x05Scale\x12" +
+	"\x19.opsguard.v1.ScaleRequest\x1a\x16.opsguard.v1.Operation\x12>\n\aRe" +
+	"start\x12\x1b.opsguard.v1.RestartRequest\x1a\x16.opsguard.v1.Operation" +
+	"\x12<\n\x06Remove\x12\x1a.opsguard.v1.RemoveRequest\x1a\x16.opsguard.v" +
+	"1.Operation\x12H\n\fGetOperation\x12 .opsguard.v1.GetOperationRequest" +
+	"\x1a\x16.opsguard.v1.Operation\x12?\n\tListNodes\x12\x12.opsguard.v1.E" +
+	"mpty\x1a\x1e.opsguard.v1.ListNodesResponse\x12?\n\tNodeStats\x12\x12.o" +
+	"psguard.v1.Empty\x1a\x1e.opsguard.v1.NodeStatsResponse\x12R\n\rNodePro" +
+	"cesses\x12!.opsguard.v1.NodeProcessesRequest\x1a\x1e.opsguard.v1.Proce" +
+	"ssesResponse\x12Y\n\x0eNodeContainers\x12\".opsguard.v1.NodeContainers" +
+	"Request\x1a#.opsguard.v1.NodeContainersResponse\x12[\n\x10RestartConta" +
+	"iner\x12#.opsguard.v1.ContainerActionRequest\x1a\".opsguard.v1.Contain" +
+	"erActionResult\x12H\n\tCheckPort\x12\x1d.opsguard.v1.CheckPortRequest" +
+	"\x1a\x1c.opsguard.v1.PortCheckResult\x12H\n\tCheckHTTP\x12\x1d.opsguar" +
+	"d.v1.CheckHTTPRequest\x1a\x1c.opsguard.v1.HTTPCheckResult\x12H\n\tChec" +
+	"kFlow\x12\x1d.opsguard.v1.CheckFlowRequest\x1a\x1c.opsguard.v1.FlowChe" +
+	"ckResult\x12M\n\nListEvents\x12\x1e.opsguard.v1.ListEventsRequest\x1a" +
+	"\x1f.opsguard.v1.ListEventsResponse\x12J\n\tListAudit\x12\x1d.opsguard" +
+	".v1.ListAuditRequest\x1a\x1e.opsguard.v1.ListAuditResponse\x12D\n\nStr" +
+	"eamLogs\x12\x1e.opsguard.v1.StreamLogsRequest\x1a\x14.opsguard.v1.LogL" +
+	"ine0\x01\x12O\n\x0fSubscribeEvents\x12\x1d.opsguard.v1.SubscribeReques" +
+	"t\x1a\x19.opsguard.v1.MonitorEvent(\x010\x01\x12L\n\x0eSubscribeAudit" +
 	"\x12\x1d.opsguard.v1.SubscribeRequest\x1a\x17.opsguard.v1.AuditEntry(" +
 	"\x010\x01\x12@\n\x06Tunnel\x12\x18.opsguard.v1.TunnelFrame\x1a\x18.ops" +
 	"guard.v1.TunnelFrame(\x010\x01b\x06proto3"

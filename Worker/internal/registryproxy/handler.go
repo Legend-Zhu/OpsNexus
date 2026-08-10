@@ -23,11 +23,18 @@ import (
 
 // TunnelStreamer is the Worker-side capability needed to relay one registry
 // HTTP request over the reverse tunnel with a streaming response body
-// (implemented by *grpcapi.TunnelManager).
+// (implemented by *grpcapi.TunnelManager). body is the (possibly streaming)
+// request body; push methods (POST/PUT/PATCH) forward it as chunked request
+// frames.
 type TunnelStreamer interface {
 	Available() bool
-	RoundTripStream(ctx context.Context, method, path string, headers http.Header, body []byte) (status int, respHeader http.Header, bodyStream io.ReadCloser, err error)
+	RoundTripStream(ctx context.Context, method, path string, headers http.Header, body io.Reader) (status int, respHeader http.Header, bodyStream io.ReadCloser, err error)
 }
+
+// allowedMethods 中继支持的方法：GET/HEAD 拉取 + POST/PUT/PATCH 推送
+// （OCI 分块上传：POST 开启会话 / PATCH 追加分块 / PUT 完结或单块提交 +
+// manifest 提交）。其余（如 DELETE）拒绝。
+func allowedMethods() string { return "GET, HEAD, POST, PUT, PATCH" }
 
 // Handler returns the /v2/ http.Handler. Mount under "/v2/" so dockerd's
 // requests arrive with the full path (/v2/<name>/...), which is forwarded
@@ -47,19 +54,19 @@ func serve(s TunnelStreamer, cache *BlobCache, log *slog.Logger, w http.Response
 		http.Error(w, `{"errors":[{"code":"UNKNOWN","message":"registry tunnel unavailable: management server not connected"}]}`, http.StatusBadGateway)
 		return
 	}
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		http.Error(w, `{"errors":[{"code":"DENIED","message":"registry relay is pull-only (GET/HEAD)"}]}`, http.StatusMethodNotAllowed)
+	if !isRelayMethod(r.Method) {
+		w.Header().Set("Allow", allowedMethods())
+		http.Error(w, `{"errors":[{"code":"DENIED","message":"registry relay only supports pull (GET/HEAD) and push (POST/PUT/PATCH)"}]}`, http.StatusMethodNotAllowed)
 		return
 	}
 	// Forward the full path + query; the /v2/ prefix is significant to the
 	// server-side registry and must not be stripped.
 	p := r.URL.RequestURI()
 
-	// Cache hit fast path (GET blobs only): serve the layer straight from disk,
+	// Cache fast path (GET blobs only): serve the layer straight from disk,
 	// digest-verified, without crossing the tunnel. Manifests/tags stay passthrough.
 	digest, isBlob := blobDigestFromPath(p)
-	if isBlob && cache != nil {
+	if isBlob && cache != nil && r.Method == http.MethodGet {
 		if size, rc, ok := cache.Get(digest); ok {
 			defer rc.Close()
 			w.Header().Set("Docker-Content-Digest", digest)
@@ -75,7 +82,7 @@ func serve(s TunnelStreamer, cache *BlobCache, log *slog.Logger, w http.Response
 		}
 	}
 
-	status, respHeader, stream, err := s.RoundTripStream(r.Context(), r.Method, p, r.Header, nil)
+	status, respHeader, stream, err := s.RoundTripStream(r.Context(), r.Method, p, r.Header, r.Body)
 	if err != nil {
 		log.Warn("registry tunnel round trip failed", "path", p, "err", err)
 		http.Error(w, `{"errors":[{"code":"UNKNOWN","message":"registry tunnel failed"}]}`, http.StatusBadGateway)
@@ -166,6 +173,15 @@ func isHopByHop(h string) bool {
 	switch strings.ToLower(h) {
 	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
 		"te", "trailers", "transfer-encoding", "upgrade":
+		return true
+	}
+	return false
+}
+
+// isRelayMethod reports whether the relay supports the method (pull + push).
+func isRelayMethod(m string) bool {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch:
 		return true
 	}
 	return false

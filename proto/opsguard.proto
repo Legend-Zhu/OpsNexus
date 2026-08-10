@@ -455,6 +455,13 @@ message TunnelFrame {
   // single-frame responses (chunk_seq=0, chunk_eof=false).
   int32 chunk_seq = 8;             // 0 = first (or only) response frame
   bool chunk_eof = 9;              // true = no more frames follow for this id
+  // Request direction (Worker → server): req_chunked=true means the request
+  // body is streamed over multiple frames (chunk_seq/chunk_eof describe the
+  // request frames: first frame carries method/path/headers + first body
+  // chunk, later frames carry only body, last one has chunk_eof=true).
+  // req_chunked=false (or absent — old workers) is a complete single-frame
+  // request whose body is the whole body.
+  bool req_chunked = 10;
 }
 
 // TunnelHeader is a single (key, value) pair; a header with N values becomes N

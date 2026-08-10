@@ -36,8 +36,14 @@ func (f *fakeTunnelClient) RecvMsg(any) error            { return nil }
 // collect runs proxyOneStream to completion and gathers the sent frames.
 func collect(t *testing.T, srvBase string, relay RelayConfig, f *pb.TunnelFrame) []*pb.TunnelFrame {
 	t.Helper()
+	return collectBody(t, srvBase, relay, f, nil)
+}
+
+// collectBody is collect with an explicit request body reader.
+func collectBody(t *testing.T, srvBase string, relay RelayConfig, f *pb.TunnelFrame, body []byte) []*pb.TunnelFrame {
+	t.Helper()
 	cli := &fakeTunnelClient{ctx: context.Background(), sent: make(chan *pb.TunnelFrame, 64)}
-	proxyOneStream(cli, &http.Client{Timeout: 5 * time.Second}, &http.Client{}, srvBase, relay, f)
+	proxyOneStream(cli, &http.Client{Timeout: 5 * time.Second}, &http.Client{}, srvBase, relay, f, bytes.NewReader(body))
 	var frames []*pb.TunnelFrame
 	for len(cli.sent) > 0 {
 		frames = append(frames, <-cli.sent)
@@ -180,3 +186,82 @@ func frameHeader(f *pb.TunnelFrame, key string) string {
 	}
 	return ""
 }
+
+// TestProxyOneStreamForwardsRequestBody verifies a push request body is
+// streamed to the upstream registry.
+func TestProxyOneStreamForwardsRequestBody(t *testing.T) {
+	var got []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	payload := []byte("blob-upload-chunk")
+	frames := collectBody(t, srv.URL, RelayConfig{}, &pb.TunnelFrame{Id: "p1", Method: http.MethodPatch, Path: "/v2/library/x/blobs/uploads/uuid1"}, payload)
+	if len(frames) != 1 || frames[0].Status != http.StatusCreated || !frames[0].ChunkEof {
+		t.Fatalf("frames = %+v", frames)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("upstream body = %q, want %q", got, payload)
+	}
+}
+
+// TestProxyOneStreamLocationRelativized verifies an absolute Location header
+// from the upstream is rewritten to a path so the caller (dockerd) resolves it
+// against the relay endpoint, not the management server's host.
+func TestProxyOneStreamLocationRelativized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "http://10.60.189.6:8080/v2/library/x/blobs/uploads/uuid9")
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	frames := collectBody(t, srv.URL, RelayConfig{}, &pb.TunnelFrame{Id: "u1", Method: http.MethodPost, Path: "/v2/library/x/blobs/uploads/"}, nil)
+	if len(frames) != 1 {
+		t.Fatalf("frames = %d", len(frames))
+	}
+	if got := frameHeader(frames[0], "Location"); got != "/v2/library/x/blobs/uploads/uuid9" {
+		t.Fatalf("Location = %q, want relativized path", got)
+	}
+}
+
+// TestCollectRequestBodyMultiFrame verifies multi-frame request body assembly.
+func TestCollectRequestBodyMultiFrame(t *testing.T) {
+	chunks := [][]byte{[]byte("aaa"), []byte("bbb"), []byte("ccc")}
+	first := &pb.TunnelFrame{Id: "m1", ChunkSeq: 0, ReqChunked: true, Body: chunks[0]}
+	var queue []*pb.TunnelFrame
+	for i, c := range chunks[1:] {
+		queue = append(queue, &pb.TunnelFrame{Id: "m1", ChunkSeq: int32(i + 1), ReqChunked: true, Body: c, ChunkEof: i == len(chunks)-2})
+	}
+	cli := &seqTunnelClient{queue: queue}
+	rd, err := collectRequestBody(cli, first)
+	if err != nil {
+		t.Fatalf("collectRequestBody: %v", err)
+	}
+	all, _ := io.ReadAll(rd)
+	if string(all) != "aaabbbccc" {
+		t.Fatalf("assembled = %q", all)
+	}
+}
+
+// seqTunnelClient feeds a fixed queue of frames to collectRequestBody.
+type seqTunnelClient struct {
+	queue []*pb.TunnelFrame
+}
+
+func (f *seqTunnelClient) Send(*pb.TunnelFrame) error { return nil }
+func (f *seqTunnelClient) Recv() (*pb.TunnelFrame, error) {
+	if len(f.queue) == 0 {
+		return nil, io.EOF
+	}
+	m := f.queue[0]
+	f.queue = f.queue[1:]
+	return m, nil
+}
+func (f *seqTunnelClient) Header() (metadata.MD, error) { return nil, nil }
+func (f *seqTunnelClient) Trailer() metadata.MD         { return nil }
+func (f *seqTunnelClient) CloseSend() error             { return nil }
+func (f *seqTunnelClient) Context() context.Context     { return context.Background() }
+func (f *seqTunnelClient) SendMsg(any) error            { return nil }
+func (f *seqTunnelClient) RecvMsg(any) error            { return nil }

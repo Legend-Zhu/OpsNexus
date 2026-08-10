@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 // tunnelChunkSize 是每条响应帧的最大 body 字节数。响应体 ≤ chunkSize 时按
 // 单帧回(旧 worker 不识别分片字段也兼容);更大 body 拆多帧,末帧 chunk_eof=true。
 // 2MiB 远低于 gRPC 默认 4MiB 消息上限,旧端可按原样收单帧。
+// 请求方向(worker→server)的帧由 worker 按同一尺寸切分,server 侧按帧重组。
 const tunnelChunkSize = 2 << 20
 
 // RelayConfig 隧道中继策略:路径白名单 + 内嵌 registry 的 basic 凭据。
@@ -49,7 +51,7 @@ func allowedPath(p string, relay RelayConfig) bool {
 // ServeTunnel opens the reverse tunnel bidi stream to the Worker and runs
 // it for the lifetime of one stream: it loops receiving request frames the
 // Worker forwards from in-cluster services (r-nacos IdP, docker registry
-// pulls), proxies each to the management server's local IdP / embedded OCI
+// pull/push), proxies each to the management server's local IdP / embedded OCI
 // registry at localBase, and sends the response frame(s) back over the same
 // stream.
 //
@@ -81,37 +83,94 @@ func (c *Client) ServeTunnel(ctx context.Context, localBase string, relay RelayC
 	}
 	log.Info("tunnel stream opened", "target", c.target)
 
-	// IdP responses are small JSON — 15s covers them. Registry pulls carry
-	// multi-hundred-MB blobs and must not be cut by a fixed deadline; their
-	// lifetime is bound to the stream context instead.
+	// IdP responses are small JSON — 15s covers them. Registry pulls/pushes
+	// carry multi-hundred-MB blobs and must not be cut by a fixed deadline;
+	// their lifetime is bound to the stream context instead.
 	hcIdp := &http.Client{Timeout: 15 * time.Second}
 	hcRegistry := &http.Client{}
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		reqFrame, err := stream.Recv()
+		frame, err := stream.Recv()
 		if err != nil {
 			if err == io.EOF {
 				return fmt.Errorf("tunnel stream closed by worker")
 			}
 			return fmt.Errorf("tunnel recv: %w", err)
 		}
-		// Proxy one request in a per-frame goroutine so a slow upstream does not
-		// block reading the next request frame.
-		go func(f *pb.TunnelFrame) {
-			proxyOneStream(stream, hcIdp, hcRegistry, localBase, relay, f)
-		}(reqFrame)
+		// Request framing: req_chunked=true means the body is streamed over
+		// multiple frames (first carries method/path/headers, later ones only
+		// body, last has chunk_eof=true). req_chunked=false (or absent — legacy
+		// worker) is a complete single-frame request whose body is f.Body.
+		if !frame.GetReqChunked() {
+			// Legacy / single-frame request: whole body in f.Body.
+			go func(f *pb.TunnelFrame) {
+				proxyOneStream(stream, hcIdp, hcRegistry, localBase, relay, f, bytes.NewReader(f.Body))
+			}(frame)
+			continue
+		}
+		if frame.GetChunkSeq() == 0 && frame.ChunkEof {
+			// Chunked request that fit in one frame (worker still marks it).
+			go func(f *pb.TunnelFrame) {
+				proxyOneStream(stream, hcIdp, hcRegistry, localBase, relay, f, bytes.NewReader(f.Body))
+			}(frame)
+			continue
+		}
+		if frame.GetChunkSeq() == 0 {
+			// First frame of a multi-frame request: collect the rest.
+			body, err := collectRequestBody(stream, frame)
+			if err != nil {
+				_ = stream.Send(&pb.TunnelFrame{Id: frame.Id, Status: http.StatusBadRequest, ChunkEof: true, Error: "request body: " + err.Error()})
+				continue
+			}
+			go func(f *pb.TunnelFrame, rd io.Reader) {
+				proxyOneStream(stream, hcIdp, hcRegistry, localBase, relay, f, rd)
+			}(frame, body)
+			continue
+		}
+		// Body-only frame with no registered first frame (out-of-order/duplicate).
+		log.Warn("tunnel request frame without first frame", "id", frame.Id, "seq", frame.ChunkSeq)
 	}
+}
+
+// collectRequestBody reassembles a multi-frame request body (the first frame
+// is already included in f) into a single in-memory reader. Registry push
+// chunks are bounded by blob/manifest sizes, so buffering is acceptable.
+func collectRequestBody(stream pb.ManagementService_TunnelClient, f *pb.TunnelFrame) (io.Reader, error) {
+	parts := [][]byte{f.Body}
+	lastSeq := f.ChunkSeq
+	for {
+		nf, err := stream.Recv()
+		if err != nil {
+			return nil, fmt.Errorf("recv frame %d: %w", lastSeq+1, err)
+		}
+		if nf.Id != f.Id {
+			// Frames of different requests must not interleave on the stream
+			// (the Worker sends per-request frames sequentially); drop and
+			// retry.
+			continue
+		}
+		if nf.ChunkSeq != lastSeq+1 {
+			return nil, fmt.Errorf("unexpected chunk_seq %d (want %d)", nf.ChunkSeq, lastSeq+1)
+		}
+		parts = append(parts, nf.Body)
+		lastSeq = nf.ChunkSeq
+		if nf.ChunkEof {
+			break
+		}
+	}
+	return bytes.NewReader(bytes.Join(parts, nil)), nil
 }
 
 // proxyOneStream executes one tunneled HTTP request against the local
 // IdP/registry and streams the response back as one or more frames (single
 // frame when the body fits in tunnelChunkSize, chunked otherwise; every
 // completed response carries chunk_eof=true so new workers can trust the flag).
-// On any proxying failure it returns a single error frame so the Worker can
-// surface it to the caller (dockerd fails the pull and retries).
-func proxyOneStream(stream pb.ManagementService_TunnelClient, hcIdp, hcRegistry *http.Client, localBase string, relay RelayConfig, f *pb.TunnelFrame) {
+// rd is the request body reader (the Worker streams push bodies as request
+// frames). On any proxying failure it returns a single error frame so the
+// Worker can surface it to the caller (dockerd fails and retries).
+func proxyOneStream(stream pb.ManagementService_TunnelClient, hcIdp, hcRegistry *http.Client, localBase string, relay RelayConfig, f *pb.TunnelFrame, rd io.Reader) {
 	if !allowedPath(f.Path, relay) && f.Method != "" {
 		_ = stream.Send(&pb.TunnelFrame{
 			Id: f.Id, Status: http.StatusForbidden, ChunkEof: true,
@@ -125,7 +184,7 @@ func proxyOneStream(stream pb.ManagementService_TunnelClient, hcIdp, hcRegistry 
 		hc = hcRegistry
 	}
 
-	req, err := http.NewRequestWithContext(stream.Context(), f.Method, strings.TrimRight(localBase, "/")+f.Path, bytes.NewReader(f.Body))
+	req, err := http.NewRequestWithContext(stream.Context(), f.Method, strings.TrimRight(localBase, "/")+f.Path, rd)
 	if err != nil {
 		_ = stream.Send(&pb.TunnelFrame{Id: f.Id, Status: http.StatusBadGateway, ChunkEof: true, Error: "build request: " + err.Error()})
 		return
@@ -146,7 +205,22 @@ func proxyOneStream(stream pb.ManagementService_TunnelClient, hcIdp, hcRegistry 
 	}
 	defer resp.Body.Close()
 
+	relayResponse(stream, resp, f.Id)
+}
+
+// relayResponse streams resp back over the tunnel as one or more frames.
+// Registry push responses carry an upload-session Location header; if the
+// embedded registry ever returns an absolute URL (pointing at the management
+// server's own host), it is rewritten to a path-only value so the caller
+// (dockerd) resolves it against the relay endpoint it is talking to — the
+// Location must stay inside the tunnel.
+func relayResponse(stream pb.ManagementService_TunnelClient, resp *http.Response, id string) {
 	headers := headerToPB(resp.Header)
+	for _, h := range headers {
+		if strings.EqualFold(h.Key, "Location") {
+			h.Value = relativizeLocation(h.Value)
+		}
+	}
 	buf := make([]byte, tunnelChunkSize)
 	var (
 		seq     int32
@@ -159,7 +233,7 @@ func proxyOneStream(stream pb.ManagementService_TunnelClient, hcIdp, hcRegistry 
 		if n > 0 {
 			lastEof = rErr == io.EOF // 数据与 EOF 同帧到达是可能的,能省则省
 			frame := &pb.TunnelFrame{
-				Id:       f.Id,
+				Id:       id,
 				Body:     buf[:n],
 				ChunkSeq: seq,
 				ChunkEof: lastEof,
@@ -181,17 +255,17 @@ func proxyOneStream(stream pb.ManagementService_TunnelClient, hcIdp, hcRegistry 
 			if !sent {
 				// Empty body (or HEAD): one frame carrying status+headers.
 				_ = stream.Send(&pb.TunnelFrame{
-					Id: f.Id, Status: int32(resp.StatusCode), Headers: headers, ChunkEof: true,
+					Id: id, Status: int32(resp.StatusCode), Headers: headers, ChunkEof: true,
 				})
 			} else if !lastEof {
 				// 最后一段数据与 EOF 分帧到达:补一条空终止帧,worker 无需依赖
 				// Content-Length 判断结束(旧 worker 也能识别 chunk_eof)。
-				_ = stream.Send(&pb.TunnelFrame{Id: f.Id, ChunkSeq: seq, ChunkEof: true})
+				_ = stream.Send(&pb.TunnelFrame{Id: id, ChunkSeq: seq, ChunkEof: true})
 			}
 			return
 		}
 		if rErr != nil {
-			_ = stream.Send(&pb.TunnelFrame{Id: f.Id, ChunkSeq: seq, ChunkEof: true, Error: "proxy read: " + rErr.Error()})
+			_ = stream.Send(&pb.TunnelFrame{Id: id, ChunkSeq: seq, ChunkEof: true, Error: "proxy read: " + rErr.Error()})
 			return
 		}
 	}
@@ -205,4 +279,14 @@ func headerToPB(h http.Header) []*pb.TunnelHeader {
 		}
 	}
 	return out
+}
+
+// relativizeLocation converts an absolute Location URL into a path-only value
+// (scheme/host dropped, path+query kept). Relative locations pass through.
+func relativizeLocation(v string) string {
+	u, err := url.Parse(v)
+	if err != nil || u.Host == "" {
+		return v
+	}
+	return u.RequestURI()
 }

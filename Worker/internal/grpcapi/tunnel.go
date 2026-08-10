@@ -1,6 +1,7 @@
 package grpcapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -185,14 +186,21 @@ func (m *TunnelManager) RoundTrip(method, path string, headers http.Header, body
 	}
 }
 
+// requestChunkSize 是隧道请求方向单帧 body 上限：push（blob 分块/镜像层）
+// 的请求体较大，worker 把它切成 requestChunkSize 的帧流式发送，末帧
+// chunk_eof=true；GET/HEAD 等无体请求仍是单帧（chunk_eof=true）。
+const requestChunkSize = 2 << 20
+
 // RoundTripStream forwards one HTTP request over the tunnel and returns the
 // response status/headers plus a streaming body reader. The server replies
 // with one frame (chunk_eof=true) or several chunked frames; the reader
 // reassembles them and reports EOF at chunk_eof (or when Content-Length is
 // met — belt-and-braces for old servers that send a single frame without the
-// eof flag). ctx cancels the round trip (callers pass the HTTP request
-// context); Close on the returned reader releases the tunnel slot.
-func (m *TunnelManager) RoundTripStream(ctx context.Context, method, path string, headers http.Header, body []byte) (int, http.Header, io.ReadCloser, error) {
+// eof flag). The request body (io.Reader) is streamed as chunked request
+// frames, so large push bodies (blob uploads) never sit in memory. ctx
+// cancels the round trip (callers pass the HTTP request context); Close on
+// the returned reader releases the tunnel slot.
+func (m *TunnelManager) RoundTripStream(ctx context.Context, method, path string, headers http.Header, body io.Reader) (int, http.Header, io.ReadCloser, error) {
 	m.mu.RLock()
 	stream := m.stream
 	m.mu.RUnlock()
@@ -207,22 +215,67 @@ func (m *TunnelManager) RoundTripStream(ctx context.Context, method, path string
 	// The waiter slot is released by the reader's Close (not here — the
 	// reader outlives this function); error paths below release it explicitly.
 
-	reqFrame := &pb.TunnelFrame{
-		Id:      id,
-		Method:  method,
-		Path:    path,
-		Headers: headerToPB(headers),
-		Body:    body,
+	// Stream the request body as frames: first frame carries method/path/
+	// headers + first chunk; subsequent frames carry only body; the last frame
+	// sets chunk_eof=true. A body that fits in one chunk (or is nil) becomes a
+	// single frame with chunk_eof=true. Every frame marks ReqChunked=true so the
+	// server distinguishes new-worker chunked requests from legacy single-frame
+	// ones (old workers never set it).
+	if body == nil {
+		body = bytes.NewReader(nil)
 	}
-	if err := stream.Send(reqFrame); err != nil {
-		m.removeStream(id)
-		return 0, nil, nil, fmt.Errorf("tunnel send: %w", err)
+	buf := make([]byte, requestChunkSize)
+	seq := int32(0)
+	first := true
+	for {
+		n, rErr := body.Read(buf)
+		if n > 0 {
+			frame := &pb.TunnelFrame{
+				Id:         id,
+				Body:       buf[:n],
+				ChunkSeq:   seq,
+				ChunkEof:   rErr == io.EOF,
+				ReqChunked: true,
+			}
+			if first {
+				frame.Method = method
+				frame.Path = path
+				frame.Headers = headerToPB(headers)
+				first = false
+			}
+			seq++
+			if err := stream.Send(frame); err != nil {
+				m.removeStream(id)
+				return 0, nil, nil, fmt.Errorf("tunnel send: %w", err)
+			}
+		}
+		if rErr == io.EOF {
+			if first {
+				// Empty body: still emit one frame carrying method/path/headers.
+				frame := &pb.TunnelFrame{
+					Id: id, Method: method, Path: path, Headers: headerToPB(headers), ChunkEof: true, ReqChunked: true,
+				}
+				if err := stream.Send(frame); err != nil {
+					m.removeStream(id)
+					return 0, nil, nil, fmt.Errorf("tunnel send: %w", err)
+				}
+			}
+			break
+		}
+		if rErr != nil {
+			m.removeStream(id)
+			return 0, nil, nil, fmt.Errorf("tunnel request body read: %w", rErr)
+		}
+		if n == 0 {
+			// (0, nil) — transient; loop again.
+			continue
+		}
 	}
 
-	// First frame carries status/headers; subsequent frames only body.
-	var first *pb.TunnelFrame
+	// First response frame carries status/headers; subsequent frames only body.
+	var respFirst *pb.TunnelFrame
 	select {
-	case first = <-w.ch:
+	case respFirst = <-w.ch:
 	case <-ctx2.Done():
 		m.removeStream(id)
 		return 0, nil, nil, fmt.Errorf("tunnel stream round trip canceled: %w", ctx2.Err())
@@ -230,11 +283,11 @@ func (m *TunnelManager) RoundTripStream(ctx context.Context, method, path string
 		m.removeStream(id)
 		return 0, nil, nil, fmt.Errorf("tunnel stream closed: %w", stream.Context().Err())
 	}
-	status := int(first.Status)
-	respHeader := PBHeaderToHTTP(first.Headers)
-	if first.Error != "" {
+	status := int(respFirst.Status)
+	respHeader := PBHeaderToHTTP(respFirst.Headers)
+	if respFirst.Error != "" {
 		m.removeStream(id)
-		return status, respHeader, nil, fmt.Errorf("%s", first.Error)
+		return status, respHeader, nil, fmt.Errorf("%s", respFirst.Error)
 	}
 	r := &tunnelStreamReader{
 		m:        m,
@@ -243,8 +296,8 @@ func (m *TunnelManager) RoundTripStream(ctx context.Context, method, path string
 		ctx:      ctx2,
 		cl:       contentLengthOf(respHeader),
 		received: 0,
-		eof:      first.ChunkEof,
-		buf:      first.Body,
+		eof:      respFirst.ChunkEof,
+		buf:      respFirst.Body,
 	}
 	return status, respHeader, r, nil
 }
