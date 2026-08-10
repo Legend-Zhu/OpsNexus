@@ -21,8 +21,8 @@
 
 | 文件 | 部署位置 | 说明 |
 |---|---|---|
-| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.5，离线重打见记录 10） |
-| bundle/opsguard-worker-1.0.0.tar … opsguard-worker-1.1.0.tar | /opt/opsguard/images/ | Worker 镜像（当前线 = 1.2.0，离线重打见记录 10） |
+| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.6，离线重打见记录 10/11） |
+| bundle/opsguard-worker-1.0.0.tar … opsguard-worker-1.1.0.tar | /opt/opsguard/images/ | Worker 镜像（当前线 = 1.2.1，离线重打/中继分发见记录 10/11） |
 | bundle/docker-27.5.1.tgz | /opt/opsguard/offline/ | docker 静态二进制 |
 | install-docker.sh / docker.service / containerd.service / daemon.json | /opt/opsguard/offline/ | 离线安装（含 swarm init、insecure-registries=10.60.189.6:8080） |
 | agent-config.yaml | /etc/opsguard/agent-config.yaml | Worker 策略（blacklist、关 host exec、webhook→:8080） |
@@ -113,6 +113,21 @@
    - worker 缓存 env：`OPSGUARD_REGISTRY_CACHE_DIR`（缺省
      `<dataDir>/registry-cache`）、`OPSGUARD_REGISTRY_CACHE_MB`（MiB，0=不限；
      现网 232 配 2048）。
+11. **中继双向化（2026-08-11，server 1.2.6 / worker 1.2.1）**：集群节点可直接
+   **push** 镜像入内嵌仓库（`docker push 10.60.171.232:6060/<repo>:<tag>`，
+   blob 分块上传 + manifest 提交，无需开通任何「集群→管理端」策略）。
+   - worker 请求体分帧（req_chunked）+ server 多帧重组；**并发 push 帧交错**
+     曾致 server 重组卡死整条隧道，已修（sendMu 串行化发送 + 缺终止帧补发）。
+   - **worker 自身新版本优先走中继分发**（比逐台 commit 更优）：189.6 本地
+     `docker tag/push 10.60.189.6:8080/library/opsguard-worker:<tag>` →
+     5 台 `docker pull 10.60.171.232:6060/library/opsguard-worker:<tag>` →
+     每台 `docker tag <中继引用> opsguard-worker:<tag>` → 232
+     `docker service update --force opsguard_worker`。天然规避 docker cp
+     丢执行位的坑（189.6 构建镜像权限正确）。
+   - 已验证：253 上 `docker push 10.60.171.232:6060/library/build-api-test:v1`
+     （11 层全量上传）→ catalog 可见 → 230 经中继 pull 回 digest 一致。
+   - 注意：旧 worker（1.2.0）无并发修复，**并发 push 大 blob 会卡死隧道**；
+     升级 worker 后再启用 push。
 
 ## 部署步骤（已完成，供重建参考）
 
