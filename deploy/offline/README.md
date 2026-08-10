@@ -21,8 +21,8 @@
 
 | 文件 | 部署位置 | 说明 |
 |---|---|---|
-| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.0） |
-| bundle/opsguard-worker-1.0.0.tar … opsguard-worker-1.1.0.tar | /opt/opsguard/images/ | Worker 镜像（当前线 = 1.1.0） |
+| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.5，离线重打见记录 10） |
+| bundle/opsguard-worker-1.0.0.tar … opsguard-worker-1.1.0.tar | /opt/opsguard/images/ | Worker 镜像（当前线 = 1.2.0，离线重打见记录 10） |
 | bundle/docker-27.5.1.tgz | /opt/opsguard/offline/ | docker 静态二进制 |
 | install-docker.sh / docker.service / containerd.service / daemon.json | /opt/opsguard/offline/ | 离线安装（含 swarm init、insecure-registries=10.60.189.6:8080） |
 | agent-config.yaml | /etc/opsguard/agent-config.yaml | Worker 策略（blacklist、关 host exec、webhook→:8080） |
@@ -76,6 +76,43 @@
    管理端 IdP，需 worker env：`OPSGUARD_TUNNEL_BASE=<集群内可达的 worker HTTP
    地址>` + `OPSGUARD_IDP_PUBLIC_ISSUER=<政务外网 issuer>`。缺 env 时 server
    日志报 `idp tunnel not enabled on this worker`（INFO 级，功能未启用）。
+10. **镜像隧道中继 + blob 缓存（2026-08-10，server 1.2.4→1.2.5 / worker
+   1.1.0→1.2.0）**：集群节点经 server↔worker 既有 gRPC 隧道从管理端内嵌
+   OCI 仓库（`/v2`）拉镜像，**不开通「集群→189.6:8080」方向策略**。方案见
+   `docs/镜像隧道中继方案.md`；本节只记部署要点与坑。
+   - **无外网构建**：本机/189.6 均无外网（goproxy.cn、Docker Hub 全不可达），
+     `docker build` 不可用。改为本地交叉编译 Linux 静态二进制
+     （`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build`，go mod cache 本地齐全）
+     → 上传 189.6 → 离线重打镜像：`FROM opsguard-worker:1.1.0` +
+     `COPY <新二进制> /usr/local/bin/worker`（server 同理 FROM 1.2.4）→ 本地
+     `docker build`（纯 COPY 无网络）→ `docker save` 或直接分发。
+   - **分发约束**：231/249/253 是 RKE 加固节点，**禁 SFTP 子系统**（shell 通道
+     正常、sftp 协议握手直接被拒）；节点间 ssh 互信不通；Harbor `library/`
+     对当前账号无 push 权限。实际做法：**232 起临时 HTTP 服务**
+     （`cd /opt/opsguard/images && setsid python3 -m http.server 18099 --bind 10.60.171.232`，
+     用完 `pkill -f "http.server 18099"`）→ 其余节点内网 `curl` 下载二进制。
+   - **坑① docker cp 丢可执行权限**：`docker cp` 覆盖容器内二进制会丢
+     `+x`，commit 出的镜像 exec 报 `permission denied`。
+   - **坑② docker commit 固化 --entrypoint**：用 `--entrypoint chmod` 起容器
+     再 commit，会把 chmod 写进镜像 Entrypoint（`docker run` 直接进 BusyBox
+     chmod）。修法：`docker commit --change 'ENTRYPOINT ["/usr/local/bin/worker"]'`。
+   - 每节点生成 1.2.0 镜像的标准动作（5 台各执行）：
+     `docker create --name tmp-worker opsguard-worker:1.1.0` →
+     `docker cp <二进制> tmp-worker:/usr/local/bin/worker` →
+     `docker commit --change 'ENTRYPOINT ["/usr/local/bin/worker"]' tmp-worker opsguard-worker:1.2.0` →
+     `docker rm tmp-worker`。更新：232 上
+     `docker service update --image opsguard-worker:1.2.0 --env-add OPSGUARD_REGISTRY_CACHE_MB=2048 opsguard_worker`。
+   - **节点接入中继**：5 台 `/etc/docker/daemon.json` 追加
+     `"insecure-registries": ["10.60.171.232:6060"]`（先 `cp` 备份，python3
+     改 JSON 保留原字段）→ `systemctl restart docker` 生效；镜像引用写
+     `10.60.171.232:6060/<repo>:<tag>`。
+   - 验证（已实测）：`curl 232:6060/v2/` → 200 +
+     `Docker-Distribution-Api-Version`；`docker pull 10.60.171.232:6060/…` digest
+     与 server 内嵌 registry 一致；7.9MB blob 分片经隧道拉取 sha256 逐字节一致；
+     二次拉取命中 worker 侧缓存（server 无新增请求、数据零损坏）。
+   - worker 缓存 env：`OPSGUARD_REGISTRY_CACHE_DIR`（缺省
+     `<dataDir>/registry-cache`）、`OPSGUARD_REGISTRY_CACHE_MB`（MiB，0=不限；
+     现网 232 配 2048）。
 
 ## 部署步骤（已完成，供重建参考）
 

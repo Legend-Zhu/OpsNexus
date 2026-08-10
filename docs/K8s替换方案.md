@@ -115,6 +115,13 @@ docker pull 10.60.171.253:20005/library/data-server@sha256:5688ab340c47b94bb5c8e
 #     每个 digest 从对应运行容器的 .Config.Image 取（见 §1.2 表，admin/monitor/notice/external 的 digest 用
 #     docker inspect 补齐）。预拉取后 OpsGaurd 部署用 imagePullPolicy: missing 直接用本地镜像。
 
+# P4b. （可选）镜像也可从管理端内嵌 registry 经 gRPC 隧道拉取——不开通「集群→管理端」策略，
+#      方案与部署见《镜像隧道中继方案.md》（已实现，2026-08-10 真机验证）：
+#     节点 /etc/docker/daemon.json 加 "insecure-registries": ["10.60.171.232:6060"]（需重启 docker 生效）；
+#     镜像引用写 10.60.171.232:6060/<repo>:<tag>（repo 与内嵌仓库同名，如 opsguard-worker），
+#     docker pull 即经 server↔worker 隧道拉取；worker 侧 blob 缓存（232 现配 2048MB）
+#     使多节点同镜像只有第一份过隧道。
+
 # P5. plan-server / prdl-external-online-server 已 0 副本——与业务确认是弃用还是停用；
 #     弃用则不迁，K8s 拆除时一并清掉 Service。
 
@@ -146,6 +153,8 @@ docker network create -d overlay ops-net
 service:
   name: data-server
   image: 10.60.171.253:20005/library/data-server@sha256:5688ab340c47b94bb5c8e19c39cc4a905e558572ccc02b709748a93ba1d5deed
+  # 镜像来源二选一：① Harbor 253:20005（业务镜像所在，digest 钉版）；② 内嵌 registry
+  # 中继 10.60.171.232:6060/<repo>:<tag>（经 gRPC 隧道，无需 Harbor 凭据，见 P4b/《镜像隧道中继方案.md》）
   replicas: 2
   imagePullPolicy: missing          # 用 P4 预拉取的本地镜像，绕开 swarm 拉取鉴权
   env:                              # 与 K8s Pod 一致，仅 NACOS_ADDR 改直连 232（r-nacos）
@@ -267,7 +276,7 @@ K8s 没了 Rancher 即失业。建议先 `docker stop rancher_v2517-rancher_serv
 | R4 | minio 下落不明 | K8s 只有 Service 无 Pod，data-server 引用它 | P2 前置检查定位（疑似 231 裸跑或已废弃）；废弃则随 K8s 一并清理 |
 | R5 | /data/dbte 节点绑定 | data-server 读宿主 DBTE 密透目录 | P3 确认分布；必要时 placement 钉 230 或先行同步目录 |
 | R6 | 231 混跑 | etcd 与 AI 等裸服务同机 | 迁移期不动 231；拆 etcd 只删 etcd 容器与 /var/lib/etcd |
-| R7 | 镜像拉取鉴权 | swarm 服务拉 Harbor 需凭据 | 各节点 /root/.docker/config.json 已有凭据；**预拉取 + imagePullPolicy: missing** 彻底绕开 |
+| R7 | 镜像拉取鉴权 | swarm 服务拉 Harbor 需凭据 | 各节点 /root/.docker/config.json 已有凭据；**预拉取 + imagePullPolicy: missing** 彻底绕开；或改用内嵌 registry 中继（`10.60.171.232:6060`，经 gRPC 隧道，**无需 Harbor 凭据**，见 P4b/《镜像隧道中继方案.md》） |
 | R8 | 双编排并存期资源 | b-1/2/3 同时跑两套控制面 | 迁移期短暂并存无碍（业务 Pod 此消彼长）；全部迁完立即拆 K8s 释放 |
 | R9 | 命名空间混用 | 新老实例同 ns=test、同在 r-nacos 一个中心，短暂并存 | 预热阶段消费方可能打到新实例——新实例同镜像同配置，行为一致；这也是预热验证的一部分 |
 
