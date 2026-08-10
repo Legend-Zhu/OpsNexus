@@ -5,7 +5,11 @@
 #   - Worker (server side):    gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/grpcapi/pb
 #   - OpsGaurdWeb (client):    gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy/pb
 #
-# Requirements: protoc, protoc-gen-go, protoc-gen-go-grpc on PATH.
+# Preferred path: protoc + protoc-gen-go + protoc-gen-go-grpc on PATH.
+# Fallback (offline, no protoc): Worker/cmd/genpatch patches the compiled pb
+# with the field increments declared in that tool (kept in sync with the
+# .proto by hand). Output is semantically equivalent; prefer protoc whenever
+# available.
 # Run from the repo root: bash proto/gen.sh
 set -euo pipefail
 
@@ -13,13 +17,19 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROTO_DIR="$REPO_ROOT/proto"
 PROTO_FILE="opsguard.proto"
 
+if ! command -v protoc >/dev/null 2>&1; then
+  echo "protoc not found on PATH — falling back to go genpatch (Worker/cmd/genpatch)"
+  echo "NOTE: keep the field increments in that tool in sync with proto/opsguard.proto"
+  (cd "$REPO_ROOT/Worker" && go run ./cmd/genpatch patch)
+  echo "==> done (genpatch fallback)"
+  exit 0
+fi
+
 # Locate protoc well-known types (timestamp.proto). Bundled under protoc's
 # include/ when installed; fall back to the repo copy if needed.
 PROTOC_INCLUDE=""
-if command -v protoc >/dev/null 2>&1; then
-  PROTOC_BIN="$(command -v protoc)"
-  PROTOC_INCLUDE="$(dirname "$PROTOC_BIN")/../include"
-fi
+PROTOC_BIN="$(command -v protoc)"
+PROTOC_INCLUDE="$(dirname "$PROTOC_BIN")/../include"
 
 echo "==> generating Worker stubs (gitee.com/.../Worker/internal/grpcapi/pb)"
 WORKER_OUT="$REPO_ROOT/Worker/internal/grpcapi/pb"

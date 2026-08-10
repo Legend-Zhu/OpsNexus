@@ -23,7 +23,21 @@ type Config struct {
 	MaxUploadMB      int               `yaml:"max_upload_mb" json:"max_upload_mb"`           // 构建 zip 上限,默认 500
 	Users            map[string]string `yaml:"users" json:"-"`                               // /v2 basic auth(bcrypt 或 {PLAIN})
 	Builder          BuilderAccount    `yaml:"builder" json:"-"`                             // 管理端构建 push 账号
+	Relay            RelayAccount      `yaml:"relay" json:"-"`                               // 集群隧道中继拉取凭据
 }
+
+// RelayAccount 隧道中继(local registry relay)配置:集群内 dockerd 经 gRPC
+// 反向隧道拉取本仓库镜像时,由 server 侧用该账号请求本机 /v2(集群侧 dockerd
+// 匿名访问本地中继端点)。缺省 enabled=true(仅在 registry 启用时有意义);
+// registry.users 为空(匿名仓库)时账号无需配置。
+type RelayAccount struct {
+	Enabled  *bool  `yaml:"enabled" json:"enabled"`
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"-"`
+}
+
+// RelayOn 报告 relay 是否启用(缺省开启)。
+func (a RelayAccount) RelayOn() bool { return a.Enabled == nil || *a.Enabled }
 
 // BuilderAccount 管理端构建后 push 用的账号(启动时 docker login 一次)。
 type BuilderAccount struct {

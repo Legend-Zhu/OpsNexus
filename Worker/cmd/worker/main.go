@@ -9,12 +9,14 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -30,6 +32,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/monitor"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/nodeagent"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/orchestrator"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/registryproxy"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/version"
 
 	"google.golang.org/grpc"
@@ -263,6 +266,7 @@ func main() {
 		"/.well-known/oauth-protected-resource",
 		"/healthz",
 		"/idp-proxy/", // reverse IdP tunnel: in-cluster services (r-nacos) reach IdP via here, no bearer
+		"/v2/",        // registry relay: in-cluster docker engines pull server-side images via here, no bearer
 	}
 	if agCfg.Auth.Enabled {
 		log.Info("auth enabled", "tokens", len(agCfg.Auth.Tokens))
@@ -272,8 +276,18 @@ func main() {
 	// Reverse IdP tunnel: a manager-role worker owns the bidi Tunnel stream the
 	// management server opens. The local /idp-proxy/ HTTP entry forwards
 	// in-cluster IdP requests (r-nacos discovery/token/jwks/userinfo) over it,
-	// avoiding a reverse firewall hole. Enabled only when a tunnel is reachable
-	// (OPSGUARD_TUNNEL_BASE configured) on manager-role workers.
+	// and the local /v2/ entry relays registry pulls (docker engines in the
+	// cluster pull images hosted on the management server's embedded OCI
+	// registry) — both avoiding a reverse firewall hole. Enabled only when a
+	// tunnel is reachable (OPSGUARD_TUNNEL_BASE configured) on manager-role
+	// workers.
+	//
+	// The /v2/ relay may cache pulled blobs on disk (content-addressed, LRU
+	// capped): subsequent pulls of the same layer are served locally instead of
+	// crossing the tunnel. Config via env:
+	//   OPSGUARD_REGISTRY_CACHE_DIR  cache root (default <dataDir>/registry-cache)
+	//   OPSGUARD_REGISTRY_CACHE_MB   size cap in MiB (default 0 = unbounded)
+	var regCache *registryproxy.BlobCache
 	var tunnelMgr *grpcapi.TunnelManager
 	if isManager {
 		tunnelBase := os.Getenv("OPSGUARD_TUNNEL_BASE") // e.g. http://10.60.171.232:8080
@@ -283,7 +297,24 @@ func main() {
 				PublicIssuer: os.Getenv("OPSGUARD_IDP_PUBLIC_ISSUER"), // e.g. http://172.28.50.176:8080
 				TunnelBase:   tunnelBase,
 			}, tunnelMgrAdapter{tunnelMgr}, log))
-			log.Info("idp reverse tunnel enabled", "tunnel_base", tunnelBase,
+			// Registry relay + optional blob cache (default dir under dataDir;
+			// cap in MiB, 0/absent = unbounded).
+			cacheDir := os.Getenv("OPSGUARD_REGISTRY_CACHE_DIR")
+			if cacheDir == "" {
+				cacheDir = filepath.Join(dataDir, "registry-cache")
+			}
+			var capMB int64
+			if v := os.Getenv("OPSGUARD_REGISTRY_CACHE_MB"); v != "" {
+				capMB = parseInt64Or(v, 0)
+			}
+			if regCache, err = registryproxy.OpenBlobCache(cacheDir, capMB<<20); err != nil {
+				log.Warn("registry blob cache disabled", "err", err)
+				regCache = nil
+			} else {
+				log.Info("registry relay blob cache", "dir", cacheDir, "max_mb", capMB)
+			}
+			mux.Handle("/v2/", registryproxy.Handler(registryProxyAdapter{tunnelMgr}, regCache, log))
+			log.Info("reverse tunnel enabled", "tunnel_base", tunnelBase,
 				"public_issuer", os.Getenv("OPSGUARD_IDP_PUBLIC_ISSUER"))
 		}
 	}
@@ -299,6 +330,10 @@ func main() {
 	)
 	if isManager {
 		grpcSrv = grpc.NewServer(
+			// Tunnel frames carry up to 2MiB registry blob chunks (plus header
+			// room); raise the message cap for headroom on both directions.
+			grpc.MaxRecvMsgSize(16<<20),
+			grpc.MaxSendMsgSize(16<<20),
 			grpc.ChainUnaryInterceptor(authzMW.GRPCUnaryInterceptor()),
 			grpc.ChainStreamInterceptor(authzMW.GRPCStreamInterceptor()),
 		)
@@ -310,7 +345,7 @@ func main() {
 		Addr:         addr,
 		Handler:      authzMW.Wrap(mux),
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		WriteTimeout: 0, // registry relay streams blob bodies for minutes; a fixed write deadline would cut large pulls
 	}
 
 	// Mutual TLS: when a CA is supplied, require and verify client certs.
@@ -379,6 +414,14 @@ func main() {
 	log.Info("stopped")
 }
 
+// parseInt64Or parses s as an int64, falling back to def on any error.
+func parseInt64Or(s string, def int64) int64 {
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return n
+	}
+	return def
+}
+
 // tunnelMgrAdapter adapts *grpcapi.TunnelManager to idpproxy.TunnelSender by
 // delegating to its RoundTripHTTP method. It lets the idpproxy handler stay
 // decoupled from the grpcapi/pb types.
@@ -396,4 +439,22 @@ func (a tunnelMgrAdapter) RoundTrip(method, path string, headers http.Header, bo
 		return 0, nil, nil, fmt.Errorf("idp tunnel disabled")
 	}
 	return a.m.RoundTripHTTP(method, path, headers, body, timeout)
+}
+
+// registryProxyAdapter adapts *grpcapi.TunnelManager to
+// registryproxy.TunnelStreamer (streaming response bodies).
+type registryProxyAdapter struct{ m *grpcapi.TunnelManager }
+
+func (a registryProxyAdapter) Available() bool {
+	if a.m == nil {
+		return false
+	}
+	return a.m.Available()
+}
+
+func (a registryProxyAdapter) RoundTripStream(ctx context.Context, method, path string, headers http.Header, body []byte) (int, http.Header, io.ReadCloser, error) {
+	if a.m == nil {
+		return 0, nil, nil, fmt.Errorf("registry tunnel disabled")
+	}
+	return a.m.RoundTripStream(ctx, method, path, headers, body)
 }

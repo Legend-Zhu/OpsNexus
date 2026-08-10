@@ -3046,6 +3046,10 @@ type TunnelFrame struct {
 	// response fields (server → Worker)
 	Status        int32  `protobuf:"varint,6,opt,name=status,proto3" json:"status,omitempty"`
 	Error         string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"` // set when the server could not proxy at all
+	// 分片流式（镜像中继）：chunk_seq 从 0 递增；chunk_eof=true 标记末帧。
+	ChunkSeq int32 `protobuf:"varint,8,opt,name=chunk_seq,json=chunkSeq,proto3" json:"chunk_seq,omitempty"`
+	ChunkEof bool  `protobuf:"varint,9,opt,name=chunk_eof,json=chunkEof,proto3" json:"chunk_eof,omitempty"`
+
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3169,6 +3173,21 @@ func (*TunnelHeader) Descriptor() ([]byte, []int) {
 	return file_opsguard_proto_rawDescGZIP(), []int{44}
 }
 
+func (x *TunnelFrame) GetChunkSeq() int32 {
+	if x != nil {
+		return x.ChunkSeq
+	}
+	return 0
+}
+
+func (x *TunnelFrame) GetChunkEof() bool {
+	if x != nil {
+		return x.ChunkEof
+	}
+	return false
+}
+
+
 func (x *TunnelHeader) GetKey() string {
 	if x != nil {
 		return x.Key
@@ -3186,305 +3205,193 @@ func (x *TunnelHeader) GetValue() string {
 var File_opsguard_proto protoreflect.FileDescriptor
 
 const file_opsguard_proto_rawDesc = "" +
-	"\n" +
-	"\x0eopsguard.proto\x12\vopsguard.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\a\n" +
-	"\x05Empty\"\x1e\n" +
-	"\x04Pong\x12\x16\n" +
-	"\x06status\x18\x01 \x01(\tR\x06status\"\xba\x01\n" +
-	"\bSelfInfo\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1a\n" +
-	"\bhostname\x18\x02 \x01(\tR\bhostname\x12\x12\n" +
-	"\x04role\x18\x03 \x01(\tR\x04role\x12\x16\n" +
-	"\x06leader\x18\x04 \x01(\bR\x06leader\x12\x14\n" +
-	"\x05state\x18\x05 \x01(\tR\x05state\x12#\n" +
-	"\rswarm_manager\x18\x06 \x01(\bR\fswarmManager\x12\x12\n" +
-	"\x04addr\x18\a \x01(\tR\x04addr\"+\n" +
-	"\x13ListServicesRequest\x12\x14\n" +
-	"\x05label\x18\x01 \x01(\tR\x05label\";\n" +
-	"\x14ListServicesResponse\x12#\n" +
-	"\rservices_json\x18\x01 \x01(\fR\fservicesJson\"'\n" +
-	"\x11GetServiceRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"\x9f\x01\n" +
-	"\rServiceDetail\x12!\n" +
-	"\fservice_json\x18\x01 \x01(\fR\vserviceJson\x12\x1d\n" +
-	"\n" +
-	"tasks_json\x18\x02 \x01(\fR\ttasksJson\x12\x18\n" +
-	"\arunning\x18\x03 \x01(\x05R\arunning\x12\x18\n" +
-	"\adesired\x18\x04 \x01(\x05R\adesired\x12\x18\n" +
-	"\ahealthy\x18\x05 \x01(\x05R\ahealthy\"I\n" +
-	"\rDeployRequest\x12\x1f\n" +
-	"\vconfig_body\x18\x01 \x01(\fR\n" +
-	"configBody\x12\x17\n" +
-	"\ais_json\x18\x02 \x01(\bR\x06isJson\"]\n" +
-	"\rUpdateRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
-	"\vconfig_body\x18\x02 \x01(\fR\n" +
-	"configBody\x12\x17\n" +
-	"\ais_json\x18\x03 \x01(\bR\x06isJson\">\n" +
-	"\fScaleRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
-	"\breplicas\x18\x02 \x01(\x04R\breplicas\"$\n" +
-	"\x0eRestartRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"#\n" +
-	"\rRemoveRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"%\n" +
-	"\x13GetOperationRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\x9c\x02\n" +
-	"\tOperation\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04type\x18\x02 \x01(\tR\x04type\x12\x18\n" +
-	"\aservice\x18\x03 \x01(\tR\aservice\x12\x16\n" +
-	"\x06status\x18\x04 \x01(\tR\x06status\x12\x1d\n" +
-	"\n" +
-	"started_at\x18\x05 \x01(\tR\tstartedAt\x12\x1f\n" +
-	"\vfinished_at\x18\x06 \x01(\tR\n" +
-	"finishedAt\x12\x1d\n" +
-	"\n" +
-	"service_id\x18\a \x01(\tR\tserviceId\x12\x14\n" +
-	"\x05error\x18\b \x01(\tR\x05error\x12\x14\n" +
-	"\x05steps\x18\t \x03(\tR\x05steps\x12\x1a\n" +
-	"\breplicas\x18\n" +
-	" \x01(\x04R\breplicas\x12\x12\n" +
-	"\x04mode\x18\v \x01(\tR\x04mode\"<\n" +
-	"\x11ListNodesResponse\x12'\n" +
-	"\x05nodes\x18\x01 \x03(\v2\x11.opsguard.v1.NodeR\x05nodes\"\x94\x03\n" +
-	"\x04Node\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
-	"\bhostname\x18\x02 \x01(\tR\bhostname\x12\x12\n" +
-	"\x04role\x18\x03 \x01(\tR\x04role\x12\x14\n" +
-	"\x05state\x18\x04 \x01(\tR\x05state\x12\"\n" +
-	"\favailability\x18\x05 \x01(\tR\favailability\x12\x12\n" +
-	"\x04addr\x18\x06 \x01(\tR\x04addr\x12\x16\n" +
-	"\x06leader\x18\a \x01(\bR\x06leader\x12#\n" +
-	"\rmanager_reach\x18\b \x01(\tR\fmanagerReach\x12\x1c\n" +
-	"\treachable\x18\t \x01(\bR\treachable\x12\x1b\n" +
-	"\tcpu_cores\x18\n" +
-	" \x01(\x01R\bcpuCores\x12\x1b\n" +
-	"\tmem_bytes\x18\v \x01(\x04R\bmemBytes\x12\x1f\n" +
-	"\vcpu_percent\x18\f \x01(\x01R\n" +
-	"cpuPercent\x12\x1f\n" +
-	"\vmem_percent\x18\r \x01(\x01R\n" +
-	"memPercent\x12'\n" +
-	"\x0fcontainer_count\x18\x0e \x01(\x05R\x0econtainerCount\"\xa7\x02\n" +
-	"\x11NodeStatsResponse\x12\x12\n" +
-	"\x04node\x18\x01 \x01(\tR\x04node\x12:\n" +
-	"\n" +
-	"containers\x18\x02 \x03(\v2\x1a.opsguard.v1.ContainerStatR\n" +
-	"containers\x12(\n" +
-	"\x10host_cpu_percent\x18\x03 \x01(\x01R\x0ehostCpuPercent\x12(\n" +
-	"\x10host_mem_percent\x18\x04 \x01(\x01R\x0ehostMemPercent\x12$\n" +
-	"\x0ehost_mem_total\x18\x05 \x01(\x04R\fhostMemTotal\x12\"\n" +
-	"\rhost_mem_used\x18\x06 \x01(\x04R\vhostMemUsed\x12$\n" +
-	"\x0ehost_cpu_cores\x18\a \x01(\x05R\fhostCpuCores\"\xe1\x01\n" +
-	"\rContainerStat\x12!\n" +
-	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x18\n" +
-	"\aservice\x18\x02 \x01(\tR\aservice\x12\x17\n" +
-	"\atask_id\x18\x03 \x01(\tR\x06taskId\x12\x1f\n" +
-	"\vcpu_percent\x18\x04 \x01(\x01R\n" +
-	"cpuPercent\x12\x1f\n" +
-	"\vmem_percent\x18\x05 \x01(\x01R\n" +
-	"memPercent\x12\x1b\n" +
-	"\tmem_usage\x18\x06 \x01(\x04R\bmemUsage\x12\x1b\n" +
-	"\tmem_limit\x18\a \x01(\x04R\bmemLimit\"o\n" +
-	"\x14NodeProcessesRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x10\n" +
-	"\x03top\x18\x02 \x01(\tR\x03top\x12\x14\n" +
-	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12\x16\n" +
-	"\x06filter\x18\x04 \x01(\tR\x06filter\"0\n" +
-	"\x15NodeContainersRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"h\n" +
-	"\x16NodeContainersResponse\x12\x12\n" +
-	"\x04node\x18\x01 \x01(\tR\x04node\x12:\n" +
-	"\n" +
-	"containers\x18\x02 \x03(\v2\x1a.opsguard.v1.ContainerInfoR\n" +
-	"containers\"\xa3\x01\n" +
-	"\rContainerInfo\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
-	"\x05image\x18\x03 \x01(\tR\x05image\x12\x14\n" +
-	"\x05state\x18\x04 \x01(\tR\x05state\x12\x12\n" +
-	"\x04type\x18\x05 \x01(\tR\x04type\x12\x18\n" +
-	"\aservice\x18\x06 \x01(\tR\aservice\x12\x14\n" +
-	"\x05ports\x18\a \x01(\tR\x05ports\"O\n" +
-	"\x16ContainerActionRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1c\n" +
-	"\tcontainer\x18\x02 \x01(\tR\tcontainer\"s\n" +
-	"\x15ContainerActionResult\x12\x12\n" +
-	"\x04node\x18\x01 \x01(\tR\x04node\x12\x1c\n" +
-	"\tcontainer\x18\x02 \x01(\tR\tcontainer\x12\x0e\n" +
-	"\x02ok\x18\x03 \x01(\bR\x02ok\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"u\n" +
-	"\x11ProcessesResponse\x12\x12\n" +
-	"\x04node\x18\x01 \x01(\tR\x04node\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x05R\x05total\x126\n" +
-	"\tprocesses\x18\x03 \x03(\v2\x18.opsguard.v1.ProcessInfoR\tprocesses\"\x9b\x01\n" +
-	"\vProcessInfo\x12\x10\n" +
-	"\x03pid\x18\x01 \x01(\x05R\x03pid\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
-	"\acmdline\x18\x03 \x01(\tR\acmdline\x12\x14\n" +
-	"\x05state\x18\x04 \x01(\tR\x05state\x12\x15\n" +
-	"\x06mem_kb\x18\x05 \x01(\x04R\x05memKb\x12\x1f\n" +
-	"\vcpu_percent\x18\x06 \x01(\x01R\n" +
-	"cpuPercent\"m\n" +
-	"\x10CheckPortRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x12\n" +
-	"\x04host\x18\x02 \x01(\tR\x04host\x12\x12\n" +
-	"\x04port\x18\x03 \x01(\x05R\x04port\x12\x18\n" +
-	"\atimeout\x18\x04 \x01(\tR\atimeout\"\x92\x01\n" +
-	"\x0fPortCheckResult\x12\x12\n" +
-	"\x04node\x18\x01 \x01(\tR\x04node\x12\x12\n" +
-	"\x04host\x18\x02 \x01(\tR\x04host\x12\x12\n" +
-	"\x04port\x18\x03 \x01(\tR\x04port\x12\x0e\n" +
-	"\x02ok\x18\x04 \x01(\bR\x02ok\x12\x1d\n" +
-	"\n" +
-	"latency_ms\x18\x05 \x01(\x03R\tlatencyMs\x12\x14\n" +
-	"\x05error\x18\x06 \x01(\tR\x05error\"\xbf\x02\n" +
-	"\x10CheckHTTPRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x10\n" +
-	"\x03url\x18\x02 \x01(\tR\x03url\x12\x16\n" +
-	"\x06method\x18\x03 \x01(\tR\x06method\x12D\n" +
-	"\aheaders\x18\x04 \x03(\v2*.opsguard.v1.CheckHTTPRequest.HeadersEntryR\aheaders\x12'\n" +
-	"\x0fexpected_status\x18\x05 \x03(\x05R\x0eexpectedStatus\x12#\n" +
-	"\rexpected_body\x18\x06 \x01(\tR\fexpectedBody\x12\x18\n" +
-	"\atimeout\x18\a \x01(\tR\atimeout\x1a:\n" +
-	"\fHeadersEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x94\x01\n" +
-	"\x0fHTTPCheckResult\x12\x12\n" +
-	"\x04node\x18\x01 \x01(\tR\x04node\x12\x10\n" +
-	"\x03url\x18\x02 \x01(\tR\x03url\x12\x0e\n" +
-	"\x02ok\x18\x03 \x01(\bR\x02ok\x12\x16\n" +
-	"\x06status\x18\x04 \x01(\x05R\x06status\x12\x1d\n" +
-	"\n" +
-	"latency_ms\x18\x05 \x01(\x03R\tlatencyMs\x12\x14\n" +
-	"\x05error\x18\x06 \x01(\tR\x05error\"\xe8\x01\n" +
-	"\x10CheckFlowRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12+\n" +
-	"\x05steps\x18\x02 \x03(\v2\x15.opsguard.v1.FlowStepR\x05steps\x12;\n" +
-	"\x04vars\x18\x03 \x03(\v2'.opsguard.v1.CheckFlowRequest.VarsEntryR\x04vars\x12\x18\n" +
-	"\atimeout\x18\x04 \x01(\tR\atimeout\x1a7\n" +
-	"\tVarsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x96\x03\n" +
-	"\bFlowStep\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
-	"\x03url\x18\x02 \x01(\tR\x03url\x12\x16\n" +
-	"\x06method\x18\x03 \x01(\tR\x06method\x12<\n" +
-	"\aheaders\x18\x04 \x03(\v2\".opsguard.v1.FlowStep.HeadersEntryR\aheaders\x12\x12\n" +
-	"\x04body\x18\x05 \x01(\tR\x04body\x12#\n" +
-	"\rexpect_status\x18\x06 \x03(\x05R\fexpectStatus\x12\x1f\n" +
-	"\vexpect_body\x18\a \x01(\tR\n" +
-	"expectBody\x12<\n" +
-	"\aextract\x18\b \x03(\v2\".opsguard.v1.FlowStep.ExtractEntryR\aextract\x1a:\n" +
-	"\fHeadersEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a:\n" +
-	"\fExtractEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xbe\x01\n" +
-	"\x0fFlowCheckResult\x12\x12\n" +
-	"\x04node\x18\x01 \x01(\tR\x04node\x12\x0e\n" +
-	"\x02ok\x18\x02 \x01(\bR\x02ok\x121\n" +
-	"\x05steps\x18\x03 \x03(\v2\x1b.opsguard.v1.FlowStepResultR\x05steps\x12\x1f\n" +
-	"\vfailed_step\x18\x04 \x01(\tR\n" +
-	"failedStep\x12\x1d\n" +
-	"\n" +
-	"latency_ms\x18\x05 \x01(\x03R\tlatencyMs\x12\x14\n" +
-	"\x05error\x18\x06 \x01(\tR\x05error\"\x9f\x01\n" +
-	"\x0eFlowStepResult\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
-	"\x02ok\x18\x02 \x01(\bR\x02ok\x12\x16\n" +
-	"\x06status\x18\x03 \x01(\x05R\x06status\x12\x1d\n" +
-	"\n" +
-	"latency_ms\x18\x04 \x01(\x03R\tlatencyMs\x12\x1c\n" +
-	"\textracted\x18\x05 \x03(\tR\textracted\x12\x14\n" +
-	"\x05error\x18\x06 \x01(\tR\x05error\"t\n" +
-	"\x11ListEventsRequest\x12\x18\n" +
-	"\aservice\x18\x01 \x01(\tR\aservice\x12\x12\n" +
-	"\x04type\x18\x02 \x01(\tR\x04type\x12\x14\n" +
-	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12\x1b\n" +
-	"\tafter_seq\x18\x04 \x01(\x03R\bafterSeq\"5\n" +
-	"\x12ListEventsResponse\x12\x1f\n" +
-	"\vevents_json\x18\x01 \x01(\fR\n" +
-	"eventsJson\"@\n" +
-	"\x10ListAuditRequest\x12\x16\n" +
-	"\x06action\x18\x01 \x01(\tR\x06action\x12\x14\n" +
-	"\x05limit\x18\x02 \x01(\x05R\x05limit\"6\n" +
-	"\x11ListAuditResponse\x12!\n" +
-	"\fentries_json\x18\x01 \x01(\fR\ventriesJson\"o\n" +
-	"\x11StreamLogsRequest\x12\x18\n" +
-	"\aservice\x18\x01 \x01(\tR\aservice\x12\x16\n" +
-	"\x06follow\x18\x02 \x01(\bR\x06follow\x12\x12\n" +
-	"\x04tail\x18\x03 \x01(\x05R\x04tail\x12\x14\n" +
-	"\x05since\x18\x04 \x01(\tR\x05since\"E\n" +
-	"\aLogLine\x12\x0e\n" +
-	"\x02ts\x18\x01 \x01(\tR\x02ts\x12\x16\n" +
-	"\x06stream\x18\x02 \x01(\tR\x06stream\x12\x12\n" +
-	"\x04line\x18\x03 \x01(\tR\x04line\"H\n" +
-	"\x10SubscribeRequest\x12\x1b\n" +
-	"\tafter_seq\x18\x01 \x01(\x03R\bafterSeq\x12\x17\n" +
-	"\aack_seq\x18\x02 \x01(\x03R\x06ackSeq\"\xca\x01\n" +
-	"\fMonitorEvent\x12\x10\n" +
-	"\x03seq\x18\x01 \x01(\x03R\x03seq\x12\x0e\n" +
-	"\x02id\x18\x02 \x01(\tR\x02id\x12*\n" +
-	"\x02ts\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x02ts\x12\x18\n" +
-	"\aservice\x18\x04 \x01(\tR\aservice\x12\x12\n" +
-	"\x04type\x18\x05 \x01(\tR\x04type\x12\x14\n" +
-	"\x05level\x18\x06 \x01(\tR\x05level\x12\x10\n" +
-	"\x03msg\x18\a \x01(\tR\x03msg\x12\x16\n" +
-	"\x06detail\x18\b \x01(\tR\x06detail\"\xfc\x01\n" +
-	"\n" +
-	"AuditEntry\x12\x10\n" +
-	"\x03seq\x18\x01 \x01(\x03R\x03seq\x12\x0e\n" +
-	"\x02id\x18\x02 \x01(\tR\x02id\x12*\n" +
-	"\x02ts\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x02ts\x12\x14\n" +
-	"\x05actor\x18\x04 \x01(\tR\x05actor\x12\x16\n" +
-	"\x06action\x18\x05 \x01(\tR\x06action\x12\x18\n" +
-	"\aservice\x18\x06 \x01(\tR\aservice\x12\x18\n" +
-	"\acommand\x18\a \x01(\tR\acommand\x12\x16\n" +
-	"\x06target\x18\b \x01(\tR\x06target\x12\x0e\n" +
-	"\x02ok\x18\t \x01(\bR\x02ok\x12\x16\n" +
-	"\x06detail\x18\n" +
-	" \x01(\tR\x06detail\"\xc0\x01\n" +
-	"\vTunnelFrame\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
-	"\x06method\x18\x02 \x01(\tR\x06method\x12\x12\n" +
-	"\x04path\x18\x03 \x01(\tR\x04path\x123\n" +
-	"\aheaders\x18\x04 \x03(\v2\x19.opsguard.v1.TunnelHeaderR\aheaders\x12\x12\n" +
-	"\x04body\x18\x05 \x01(\fR\x04body\x12\x16\n" +
-	"\x06status\x18\x06 \x01(\x05R\x06status\x12\x14\n" +
-	"\x05error\x18\a \x01(\tR\x05error\"6\n" +
-	"\fTunnelHeader\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value2\xc2\r\n" +
-	"\x11ManagementService\x12-\n" +
-	"\x04Ping\x12\x12.opsguard.v1.Empty\x1a\x11.opsguard.v1.Pong\x121\n" +
-	"\x04Self\x12\x12.opsguard.v1.Empty\x1a\x15.opsguard.v1.SelfInfo\x12S\n" +
-	"\fListServices\x12 .opsguard.v1.ListServicesRequest\x1a!.opsguard.v1.ListServicesResponse\x12H\n" +
-	"\n" +
-	"GetService\x12\x1e.opsguard.v1.GetServiceRequest\x1a\x1a.opsguard.v1.ServiceDetail\x12<\n" +
-	"\x06Deploy\x12\x1a.opsguard.v1.DeployRequest\x1a\x16.opsguard.v1.Operation\x12<\n" +
-	"\x06Update\x12\x1a.opsguard.v1.UpdateRequest\x1a\x16.opsguard.v1.Operation\x12:\n" +
-	"\x05Scale\x12\x19.opsguard.v1.ScaleRequest\x1a\x16.opsguard.v1.Operation\x12>\n" +
-	"\aRestart\x12\x1b.opsguard.v1.RestartRequest\x1a\x16.opsguard.v1.Operation\x12<\n" +
-	"\x06Remove\x12\x1a.opsguard.v1.RemoveRequest\x1a\x16.opsguard.v1.Operation\x12H\n" +
-	"\fGetOperation\x12 .opsguard.v1.GetOperationRequest\x1a\x16.opsguard.v1.Operation\x12?\n" +
-	"\tListNodes\x12\x12.opsguard.v1.Empty\x1a\x1e.opsguard.v1.ListNodesResponse\x12?\n" +
-	"\tNodeStats\x12\x12.opsguard.v1.Empty\x1a\x1e.opsguard.v1.NodeStatsResponse\x12R\n" +
-	"\rNodeProcesses\x12!.opsguard.v1.NodeProcessesRequest\x1a\x1e.opsguard.v1.ProcessesResponse\x12Y\n" +
-	"\x0eNodeContainers\x12\".opsguard.v1.NodeContainersRequest\x1a#.opsguard.v1.NodeContainersResponse\x12[\n" +
-	"\x10RestartContainer\x12#.opsguard.v1.ContainerActionRequest\x1a\".opsguard.v1.ContainerActionResult\x12H\n" +
-	"\tCheckPort\x12\x1d.opsguard.v1.CheckPortRequest\x1a\x1c.opsguard.v1.PortCheckResult\x12H\n" +
-	"\tCheckHTTP\x12\x1d.opsguard.v1.CheckHTTPRequest\x1a\x1c.opsguard.v1.HTTPCheckResult\x12H\n" +
-	"\tCheckFlow\x12\x1d.opsguard.v1.CheckFlowRequest\x1a\x1c.opsguard.v1.FlowCheckResult\x12M\n" +
-	"\n" +
-	"ListEvents\x12\x1e.opsguard.v1.ListEventsRequest\x1a\x1f.opsguard.v1.ListEventsResponse\x12J\n" +
-	"\tListAudit\x12\x1d.opsguard.v1.ListAuditRequest\x1a\x1e.opsguard.v1.ListAuditResponse\x12D\n" +
-	"\n" +
-	"StreamLogs\x12\x1e.opsguard.v1.StreamLogsRequest\x1a\x14.opsguard.v1.LogLine0\x01\x12O\n" +
-	"\x0fSubscribeEvents\x12\x1d.opsguard.v1.SubscribeRequest\x1a\x19.opsguard.v1.MonitorEvent(\x010\x01\x12L\n" +
-	"\x0eSubscribeAudit\x12\x1d.opsguard.v1.SubscribeRequest\x1a\x17.opsguard.v1.AuditEntry(\x010\x01\x12@\n" +
-	"\x06Tunnel\x12\x18.opsguard.v1.TunnelFrame\x1a\x18.opsguard.v1.TunnelFrame(\x010\x01b\x06proto3"
+	"\n\x0eopsguard.proto\x12\vopsguard.v1\x1a\x1fgoogle/protobuf/timestamp" +
+	".proto\"\a\n\x05Empty\"\x1e\n\x04Pong\x12\x16\n\x06status\x18\x01 \x01" +
+	"(\tR\x06status\"\xba\x01\n\bSelfInfo\x12\x17\n\anode_id\x18\x01 \x01(" +
+	"\tR\x06nodeId\x12\x1a\n\bhostname\x18\x02 \x01(\tR\bhostname\x12\x12\n" +
+	"\x04role\x18\x03 \x01(\tR\x04role\x12\x16\n\x06leader\x18\x04 \x01(\bR" +
+	"\x06leader\x12\x14\n\x05state\x18\x05 \x01(\tR\x05state\x12#\n\rswarm_" +
+	"manager\x18\x06 \x01(\bR\fswarmManager\x12\x12\n\x04addr\x18\a \x01(\t" +
+	"R\x04addr\"+\n\x13ListServicesRequest\x12\x14\n\x05label\x18\x01 \x01(" +
+	"\tR\x05label\";\n\x14ListServicesResponse\x12#\n\rservices_json\x18" +
+	"\x01 \x01(\fR\fservicesJson\"'\n\x11GetServiceRequest\x12\x12\n\x04nam" +
+	"e\x18\x01 \x01(\tR\x04name\"\x9f\x01\n\rServiceDetail\x12!\n\fservice_" +
+	"json\x18\x01 \x01(\fR\vserviceJson\x12\x1d\n\ntasks_json\x18\x02 \x01(" +
+	"\fR\ttasksJson\x12\x18\n\arunning\x18\x03 \x01(\x05R\arunning\x12\x18" +
+	"\n\adesired\x18\x04 \x01(\x05R\adesired\x12\x18\n\ahealthy\x18\x05 " +
+	"\x01(\x05R\ahealthy\"I\n\rDeployRequest\x12\x1f\n\vconfig_body\x18\x01" +
+	" \x01(\fR\nconfigBody\x12\x17\n\ais_json\x18\x02 \x01(\bR\x06isJson\"]" +
+	"\n\rUpdateRequest\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
+	"\vconfig_body\x18\x02 \x01(\fR\nconfigBody\x12\x17\n\ais_json\x18\x03 " +
+	"\x01(\bR\x06isJson\">\n\fScaleRequest\x12\x12\n\x04name\x18\x01 \x01(" +
+	"\tR\x04name\x12\x1a\n\breplicas\x18\x02 \x01(\x04R\breplicas\"$\n\x0eR" +
+	"estartRequest\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\"#\n\rRemoveR" +
+	"equest\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\"%\n\x13GetOperation" +
+	"Request\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\"\x9c\x02\n\tOperation" +
+	"\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n\x04type\x18\x02 \x01" +
+	"(\tR\x04type\x12\x18\n\aservice\x18\x03 \x01(\tR\aservice\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\x12\x1d\n\nstarted_at\x18\x05 " +
+	"\x01(\tR\tstartedAt\x12\x1f\n\vfinished_at\x18\x06 \x01(\tR\nfinishedA" +
+	"t\x12\x1d\n\nservice_id\x18\a \x01(\tR\tserviceId\x12\x14\n\x05error" +
+	"\x18\b \x01(\tR\x05error\x12\x14\n\x05steps\x18\t \x03(\tR\x05steps" +
+	"\x12\x1a\n\breplicas\x18\n \x01(\x04R\breplicas\x12\x12\n\x04mode\x18" +
+	"\v \x01(\tR\x04mode\"<\n\x11ListNodesResponse\x12'\n\x05nodes\x18\x01 " +
+	"\x03(\v2\x11.opsguard.v1.NodeR\x05nodes\"\x94\x03\n\x04Node\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n\bhostname\x18\x02 \x01(\tR\bho" +
+	"stname\x12\x12\n\x04role\x18\x03 \x01(\tR\x04role\x12\x14\n\x05state" +
+	"\x18\x04 \x01(\tR\x05state\x12\"\n\favailability\x18\x05 \x01(\tR\fava" +
+	"ilability\x12\x12\n\x04addr\x18\x06 \x01(\tR\x04addr\x12\x16\n\x06lead" +
+	"er\x18\a \x01(\bR\x06leader\x12#\n\rmanager_reach\x18\b \x01(\tR\fmana" +
+	"gerReach\x12\x1c\n\treachable\x18\t \x01(\bR\treachable\x12\x1b\n\tcpu" +
+	"_cores\x18\n \x01(\x01R\bcpuCores\x12\x1b\n\tmem_bytes\x18\v \x01(\x04" +
+	"R\bmemBytes\x12\x1f\n\vcpu_percent\x18\f \x01(\x01R\ncpuPercent\x12" +
+	"\x1f\n\vmem_percent\x18\r \x01(\x01R\nmemPercent\x12'\n\x0fcontainer_c" +
+	"ount\x18\x0e \x01(\x05R\x0econtainerCount\"\xa7\x02\n\x11NodeStatsResp" +
+	"onse\x12\x12\n\x04node\x18\x01 \x01(\tR\x04node\x12:\n\ncontainers\x18" +
+	"\x02 \x03(\v2\x1a.opsguard.v1.ContainerStatR\ncontainers\x12(\n\x10hos" +
+	"t_cpu_percent\x18\x03 \x01(\x01R\x0ehostCpuPercent\x12(\n\x10host_mem_" +
+	"percent\x18\x04 \x01(\x01R\x0ehostMemPercent\x12$\n\x0ehost_mem_total" +
+	"\x18\x05 \x01(\x04R\fhostMemTotal\x12\"\n\rhost_mem_used\x18\x06 \x01(" +
+	"\x04R\vhostMemUsed\x12$\n\x0ehost_cpu_cores\x18\a \x01(\x05R\fhostCpuC" +
+	"ores\"\xe1\x01\n\rContainerStat\x12!\n\fcontainer_id\x18\x01 \x01(\tR" +
+	"\vcontainerId\x12\x18\n\aservice\x18\x02 \x01(\tR\aservice\x12\x17\n\a" +
+	"task_id\x18\x03 \x01(\tR\x06taskId\x12\x1f\n\vcpu_percent\x18\x04 \x01" +
+	"(\x01R\ncpuPercent\x12\x1f\n\vmem_percent\x18\x05 \x01(\x01R\nmemPerce" +
+	"nt\x12\x1b\n\tmem_usage\x18\x06 \x01(\x04R\bmemUsage\x12\x1b\n\tmem_li" +
+	"mit\x18\a \x01(\x04R\bmemLimit\"o\n\x14NodeProcessesRequest\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x10\n\x03top\x18\x02 \x01(\tR" +
+	"\x03top\x12\x14\n\x05limit\x18\x03 \x01(\x05R\x05limit\x12\x16\n\x06fi" +
+	"lter\x18\x04 \x01(\tR\x06filter\"0\n\x15NodeContainersRequest\x12\x17" +
+	"\n\anode_id\x18\x01 \x01(\tR\x06nodeId\"h\n\x16NodeContainersResponse" +
+	"\x12\x12\n\x04node\x18\x01 \x01(\tR\x04node\x12:\n\ncontainers\x18\x02" +
+	" \x03(\v2\x1a.opsguard.v1.ContainerInfoR\ncontainers\"\xa3\x01\n\rCont" +
+	"ainerInfo\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n\x04name\x18" +
+	"\x02 \x01(\tR\x04name\x12\x14\n\x05image\x18\x03 \x01(\tR\x05image\x12" +
+	"\x14\n\x05state\x18\x04 \x01(\tR\x05state\x12\x12\n\x04type\x18\x05 " +
+	"\x01(\tR\x04type\x12\x18\n\aservice\x18\x06 \x01(\tR\aservice\x12\x14" +
+	"\n\x05ports\x18\a \x01(\tR\x05ports\"O\n\x16ContainerActionRequest\x12" +
+	"\x17\n\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1c\n\tcontainer\x18" +
+	"\x02 \x01(\tR\tcontainer\"s\n\x15ContainerActionResult\x12\x12\n\x04no" +
+	"de\x18\x01 \x01(\tR\x04node\x12\x1c\n\tcontainer\x18\x02 \x01(\tR\tcon" +
+	"tainer\x12\x0e\n\x02ok\x18\x03 \x01(\bR\x02ok\x12\x18\n\amessage\x18" +
+	"\x04 \x01(\tR\amessage\"u\n\x11ProcessesResponse\x12\x12\n\x04node\x18" +
+	"\x01 \x01(\tR\x04node\x12\x14\n\x05total\x18\x02 \x01(\x05R\x05total" +
+	"\x126\n\tprocesses\x18\x03 \x03(\v2\x18.opsguard.v1.ProcessInfoR\tproc" +
+	"esses\"\x9b\x01\n\vProcessInfo\x12\x10\n\x03pid\x18\x01 \x01(\x05R\x03" +
+	"pid\x12\x12\n\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n\acmdline\x18" +
+	"\x03 \x01(\tR\acmdline\x12\x14\n\x05state\x18\x04 \x01(\tR\x05state" +
+	"\x12\x15\n\x06mem_kb\x18\x05 \x01(\x04R\x05memKb\x12\x1f\n\vcpu_percen" +
+	"t\x18\x06 \x01(\x01R\ncpuPercent\"m\n\x10CheckPortRequest\x12\x17\n\an" +
+	"ode_id\x18\x01 \x01(\tR\x06nodeId\x12\x12\n\x04host\x18\x02 \x01(\tR" +
+	"\x04host\x12\x12\n\x04port\x18\x03 \x01(\x05R\x04port\x12\x18\n\atimeo" +
+	"ut\x18\x04 \x01(\tR\atimeout\"\x92\x01\n\x0fPortCheckResult\x12\x12\n" +
+	"\x04node\x18\x01 \x01(\tR\x04node\x12\x12\n\x04host\x18\x02 \x01(\tR" +
+	"\x04host\x12\x12\n\x04port\x18\x03 \x01(\tR\x04port\x12\x0e\n\x02ok" +
+	"\x18\x04 \x01(\bR\x02ok\x12\x1d\n\nlatency_ms\x18\x05 \x01(\x03R\tlate" +
+	"ncyMs\x12\x14\n\x05error\x18\x06 \x01(\tR\x05error\"\xbf\x02\n\x10Chec" +
+	"kHTTPRequest\x12\x17\n\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x10\n" +
+	"\x03url\x18\x02 \x01(\tR\x03url\x12\x16\n\x06method\x18\x03 \x01(\tR" +
+	"\x06method\x12D\n\aheaders\x18\x04 \x03(\v2*.opsguard.v1.CheckHTTPRequ" +
+	"est.HeadersEntryR\aheaders\x12'\n\x0fexpected_status\x18\x05 \x03(\x05" +
+	"R\x0eexpectedStatus\x12#\n\rexpected_body\x18\x06 \x01(\tR\fexpectedBo" +
+	"dy\x12\x18\n\atimeout\x18\a \x01(\tR\atimeout\x1a:\n\fHeadersEntry\x12" +
+	"\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(" +
+	"\tR\x05value:\x028\x01\"\x94\x01\n\x0fHTTPCheckResult\x12\x12\n\x04nod" +
+	"e\x18\x01 \x01(\tR\x04node\x12\x10\n\x03url\x18\x02 \x01(\tR\x03url" +
+	"\x12\x0e\n\x02ok\x18\x03 \x01(\bR\x02ok\x12\x16\n\x06status\x18\x04 " +
+	"\x01(\x05R\x06status\x12\x1d\n\nlatency_ms\x18\x05 \x01(\x03R\tlatency" +
+	"Ms\x12\x14\n\x05error\x18\x06 \x01(\tR\x05error\"\xe8\x01\n\x10CheckFl" +
+	"owRequest\x12\x17\n\anode_id\x18\x01 \x01(\tR\x06nodeId\x12+\n\x05step" +
+	"s\x18\x02 \x03(\v2\x15.opsguard.v1.FlowStepR\x05steps\x12;\n\x04vars" +
+	"\x18\x03 \x03(\v2'.opsguard.v1.CheckFlowRequest.VarsEntryR\x04vars\x12" +
+	"\x18\n\atimeout\x18\x04 \x01(\tR\atimeout\x1a7\n\tVarsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR" +
+	"\x05value:\x028\x01\"\x96\x03\n\bFlowStep\x12\x12\n\x04name\x18\x01 " +
+	"\x01(\tR\x04name\x12\x10\n\x03url\x18\x02 \x01(\tR\x03url\x12\x16\n" +
+	"\x06method\x18\x03 \x01(\tR\x06method\x12<\n\aheaders\x18\x04 \x03(\v2" +
+	"\".opsguard.v1.FlowStep.HeadersEntryR\aheaders\x12\x12\n\x04body\x18" +
+	"\x05 \x01(\tR\x04body\x12#\n\rexpect_status\x18\x06 \x03(\x05R\fexpect" +
+	"Status\x12\x1f\n\vexpect_body\x18\a \x01(\tR\nexpectBody\x12<\n\aextra" +
+	"ct\x18\b \x03(\v2\".opsguard.v1.FlowStep.ExtractEntryR\aextract\x1a:\n" +
+	"\fHeadersEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05v" +
+	"alue\x18\x02 \x01(\tR\x05value:\x028\x01\x1a:\n\fExtractEntry\x12\x10" +
+	"\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR" +
+	"\x05value:\x028\x01\"\xbe\x01\n\x0fFlowCheckResult\x12\x12\n\x04node" +
+	"\x18\x01 \x01(\tR\x04node\x12\x0e\n\x02ok\x18\x02 \x01(\bR\x02ok\x121" +
+	"\n\x05steps\x18\x03 \x03(\v2\x1b.opsguard.v1.FlowStepResultR\x05steps" +
+	"\x12\x1f\n\vfailed_step\x18\x04 \x01(\tR\nfailedStep\x12\x1d\n\nlatenc" +
+	"y_ms\x18\x05 \x01(\x03R\tlatencyMs\x12\x14\n\x05error\x18\x06 \x01(\tR" +
+	"\x05error\"\x9f\x01\n\x0eFlowStepResult\x12\x12\n\x04name\x18\x01 \x01" +
+	"(\tR\x04name\x12\x0e\n\x02ok\x18\x02 \x01(\bR\x02ok\x12\x16\n\x06statu" +
+	"s\x18\x03 \x01(\x05R\x06status\x12\x1d\n\nlatency_ms\x18\x04 \x01(\x03" +
+	"R\tlatencyMs\x12\x1c\n\textracted\x18\x05 \x03(\tR\textracted\x12\x14" +
+	"\n\x05error\x18\x06 \x01(\tR\x05error\"t\n\x11ListEventsRequest\x12" +
+	"\x18\n\aservice\x18\x01 \x01(\tR\aservice\x12\x12\n\x04type\x18\x02 " +
+	"\x01(\tR\x04type\x12\x14\n\x05limit\x18\x03 \x01(\x05R\x05limit\x12" +
+	"\x1b\n\tafter_seq\x18\x04 \x01(\x03R\bafterSeq\"5\n\x12ListEventsRespo" +
+	"nse\x12\x1f\n\vevents_json\x18\x01 \x01(\fR\neventsJson\"@\n\x10ListAu" +
+	"ditRequest\x12\x16\n\x06action\x18\x01 \x01(\tR\x06action\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\"6\n\x11ListAuditResponse\x12!\n" +
+	"\fentries_json\x18\x01 \x01(\fR\ventriesJson\"o\n\x11StreamLogsRequest" +
+	"\x12\x18\n\aservice\x18\x01 \x01(\tR\aservice\x12\x16\n\x06follow\x18" +
+	"\x02 \x01(\bR\x06follow\x12\x12\n\x04tail\x18\x03 \x01(\x05R\x04tail" +
+	"\x12\x14\n\x05since\x18\x04 \x01(\tR\x05since\"E\n\aLogLine\x12\x0e\n" +
+	"\x02ts\x18\x01 \x01(\tR\x02ts\x12\x16\n\x06stream\x18\x02 \x01(\tR\x06" +
+	"stream\x12\x12\n\x04line\x18\x03 \x01(\tR\x04line\"H\n\x10SubscribeReq" +
+	"uest\x12\x1b\n\tafter_seq\x18\x01 \x01(\x03R\bafterSeq\x12\x17\n\aack_" +
+	"seq\x18\x02 \x01(\x03R\x06ackSeq\"\xca\x01\n\fMonitorEvent\x12\x10\n" +
+	"\x03seq\x18\x01 \x01(\x03R\x03seq\x12\x0e\n\x02id\x18\x02 \x01(\tR\x02" +
+	"id\x12*\n\x02ts\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x02ts" +
+	"\x12\x18\n\aservice\x18\x04 \x01(\tR\aservice\x12\x12\n\x04type\x18" +
+	"\x05 \x01(\tR\x04type\x12\x14\n\x05level\x18\x06 \x01(\tR\x05level\x12" +
+	"\x10\n\x03msg\x18\a \x01(\tR\x03msg\x12\x16\n\x06detail\x18\b \x01(\tR" +
+	"\x06detail\"\xfc\x01\n\nAuditEntry\x12\x10\n\x03seq\x18\x01 \x01(\x03R" +
+	"\x03seq\x12\x0e\n\x02id\x18\x02 \x01(\tR\x02id\x12*\n\x02ts\x18\x03 " +
+	"\x01(\v2\x1a.google.protobuf.TimestampR\x02ts\x12\x14\n\x05actor\x18" +
+	"\x04 \x01(\tR\x05actor\x12\x16\n\x06action\x18\x05 \x01(\tR\x06action" +
+	"\x12\x18\n\aservice\x18\x06 \x01(\tR\aservice\x12\x18\n\acommand\x18\a" +
+	" \x01(\tR\acommand\x12\x16\n\x06target\x18\b \x01(\tR\x06target\x12" +
+	"\x0e\n\x02ok\x18\t \x01(\bR\x02ok\x12\x16\n\x06detail\x18\n \x01(\tR" +
+	"\x06detail\"\xfa\x01\n\vTunnelFrame\x12\x0e\n\x02id\x18\x01 \x01(\tR" +
+	"\x02id\x12\x16\n\x06method\x18\x02 \x01(\tR\x06method\x12\x12\n\x04pat" +
+	"h\x18\x03 \x01(\tR\x04path\x123\n\aheaders\x18\x04 \x03(\v2\x19.opsgua" +
+	"rd.v1.TunnelHeaderR\aheaders\x12\x12\n\x04body\x18\x05 \x01(\fR\x04bod" +
+	"y\x12\x16\n\x06status\x18\x06 \x01(\x05R\x06status\x12\x14\n\x05error" +
+	"\x18\a \x01(\tR\x05error\x12\x1b\n\tchunk_seq\x18\b \x01(\x05R\bchunkS" +
+	"eq\x12\x1b\n\tchunk_eof\x18\t \x01(\bR\bchunkEof\"6\n\fTunnelHeader" +
+	"\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 " +
+	"\x01(\tR\x05value2\xc2\r\n\x11ManagementService\x12-\n\x04Ping\x12\x12" +
+	".opsguard.v1.Empty\x1a\x11.opsguard.v1.Pong\x121\n\x04Self\x12\x12.ops" +
+	"guard.v1.Empty\x1a\x15.opsguard.v1.SelfInfo\x12S\n\fListServices\x12 ." +
+	"opsguard.v1.ListServicesRequest\x1a!.opsguard.v1.ListServicesResponse" +
+	"\x12H\n\nGetService\x12\x1e.opsguard.v1.GetServiceRequest\x1a\x1a.opsg" +
+	"uard.v1.ServiceDetail\x12<\n\x06Deploy\x12\x1a.opsguard.v1.DeployReque" +
+	"st\x1a\x16.opsguard.v1.Operation\x12<\n\x06Update\x12\x1a.opsguard.v1." +
+	"UpdateRequest\x1a\x16.opsguard.v1.Operation\x12:\n\x05Scale\x12\x19.op" +
+	"sguard.v1.ScaleRequest\x1a\x16.opsguard.v1.Operation\x12>\n\aRestart" +
+	"\x12\x1b.opsguard.v1.RestartRequest\x1a\x16.opsguard.v1.Operation\x12<" +
+	"\n\x06Remove\x12\x1a.opsguard.v1.RemoveRequest\x1a\x16.opsguard.v1.Ope" +
+	"ration\x12H\n\fGetOperation\x12 .opsguard.v1.GetOperationRequest\x1a" +
+	"\x16.opsguard.v1.Operation\x12?\n\tListNodes\x12\x12.opsguard.v1.Empty" +
+	"\x1a\x1e.opsguard.v1.ListNodesResponse\x12?\n\tNodeStats\x12\x12.opsgu" +
+	"ard.v1.Empty\x1a\x1e.opsguard.v1.NodeStatsResponse\x12R\n\rNodeProcess" +
+	"es\x12!.opsguard.v1.NodeProcessesRequest\x1a\x1e.opsguard.v1.Processes" +
+	"Response\x12Y\n\x0eNodeContainers\x12\".opsguard.v1.NodeContainersRequ" +
+	"est\x1a#.opsguard.v1.NodeContainersResponse\x12[\n\x10RestartContainer" +
+	"\x12#.opsguard.v1.ContainerActionRequest\x1a\".opsguard.v1.ContainerAc" +
+	"tionResult\x12H\n\tCheckPort\x12\x1d.opsguard.v1.CheckPortRequest\x1a" +
+	"\x1c.opsguard.v1.PortCheckResult\x12H\n\tCheckHTTP\x12\x1d.opsguard.v1" +
+	".CheckHTTPRequest\x1a\x1c.opsguard.v1.HTTPCheckResult\x12H\n\tCheckFlo" +
+	"w\x12\x1d.opsguard.v1.CheckFlowRequest\x1a\x1c.opsguard.v1.FlowCheckRe" +
+	"sult\x12M\n\nListEvents\x12\x1e.opsguard.v1.ListEventsRequest\x1a\x1f." +
+	"opsguard.v1.ListEventsResponse\x12J\n\tListAudit\x12\x1d.opsguard.v1.L" +
+	"istAuditRequest\x1a\x1e.opsguard.v1.ListAuditResponse\x12D\n\nStreamLo" +
+	"gs\x12\x1e.opsguard.v1.StreamLogsRequest\x1a\x14.opsguard.v1.LogLine0" +
+	"\x01\x12O\n\x0fSubscribeEvents\x12\x1d.opsguard.v1.SubscribeRequest" +
+	"\x1a\x19.opsguard.v1.MonitorEvent(\x010\x01\x12L\n\x0eSubscribeAudit" +
+	"\x12\x1d.opsguard.v1.SubscribeRequest\x1a\x17.opsguard.v1.AuditEntry(" +
+	"\x010\x01\x12@\n\x06Tunnel\x12\x18.opsguard.v1.TunnelFrame\x1a\x18.ops" +
+	"guard.v1.TunnelFrame(\x010\x01b\x06proto3"
 
 var (
 	file_opsguard_proto_rawDescOnce sync.Once

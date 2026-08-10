@@ -73,7 +73,16 @@ func (c *Client) SetCache(st *store.Store, clusterName string) {
 // (http(s)://host:9080 或 host:9080)；token 作为 bearer 元数据。
 func New(baseURL, token string) *Client {
 	target := grpcTarget(baseURL)
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Tunnel frames carry up to 2MiB registry blob chunks (plus header room);
+	// raise the per-call message cap so a chunked relay response and the
+	// reverse-tunnel stream never trip the 4MiB default.
+	conn, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(16<<20),
+			grpc.MaxCallSendMsgSize(16<<20),
+		),
+	)
 	if err != nil {
 		// grpc.NewClient only errors on an invalid target string; fall back to
 		// a lazy dial that surfaces the error on first call via ErrUnreachable.

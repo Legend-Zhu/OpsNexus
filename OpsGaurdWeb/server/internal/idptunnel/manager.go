@@ -1,7 +1,9 @@
-// Package idptunnel owns the per-cluster reverse IdP tunnels. For each
-// registered cluster it opens (and reopens on disconnect) the server-initiated
-// Tunnel bidi stream to that cluster's Worker, proxying the Worker's forwarded
-// IdP HTTP requests to this management server's local IdP.
+// Package idptunnel owns the per-cluster reverse tunnels. For each registered
+// cluster it opens (and reopens on disconnect) the server-initiated Tunnel
+// bidi stream to that cluster's Worker, proxying the Worker's forwarded HTTP
+// requests to this management server's local IdP and embedded OCI registry
+// (/v2 image pulls). This avoids opening a reverse firewall hole from the
+// cluster to the management plane.
 //
 // This mirrors ingest.Manager's lifecycle (Start seeds all clusters; Add/Remove
 // follow cluster registry changes; Stop drains) but is simpler — there is no
@@ -17,13 +19,15 @@ import (
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy"
 )
 
-// Manager opens one reverse IdP tunnel per registered cluster.
+// Manager opens one reverse tunnel per registered cluster.
 type Manager struct {
 	clusterSvc *cluster.Service
 	st         *store.Store
-	localBase  string // loopback base of the management server's IdP, e.g. http://127.0.0.1:8080
+	localBase  string // loopback base of the management server, e.g. http://127.0.0.1:8080
+	relay      workerproxy.RelayConfig
 	log        *slog.Logger
 
 	mu      sync.Mutex
@@ -32,9 +36,10 @@ type Manager struct {
 	rootCtx context.Context
 }
 
-// NewManager creates an IdP tunnel manager. localBase is the loopback base the
-// management server uses to reach its own IdP (same process/port).
-func NewManager(clusterSvc *cluster.Service, st *store.Store, localBase string, log *slog.Logger) *Manager {
+// NewManager creates a reverse tunnel manager. localBase is the loopback base
+// the management server uses to reach its own IdP/registry (same process/port);
+// relay carries the path allowlist and the embedded-registry pull credentials.
+func NewManager(clusterSvc *cluster.Service, st *store.Store, localBase string, relay workerproxy.RelayConfig, log *slog.Logger) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -42,6 +47,7 @@ func NewManager(clusterSvc *cluster.Service, st *store.Store, localBase string, 
 		clusterSvc: clusterSvc,
 		st:         st,
 		localBase:  localBase,
+		relay:      relay,
 		log:        log,
 		tunnels:    map[string]context.CancelFunc{},
 	}
@@ -127,9 +133,9 @@ func (m *Manager) runWithReconnect(ctx context.Context, cluster string) {
 		}
 		cli, err := m.clusterSvc.WorkerClient(cluster)
 		if err != nil {
-			m.log.Warn("idp tunnel: worker client unavailable, retrying", "cluster", cluster, "err", err)
+			m.log.Warn("tunnel: worker client unavailable, retrying", "cluster", cluster, "err", err)
 		} else {
-			err = cli.ServeTunnel(ctx, m.localBase, m.log)
+			err = cli.ServeTunnel(ctx, m.localBase, m.relay, m.log)
 			cli.Close()
 		}
 		if ctx.Err() != nil {

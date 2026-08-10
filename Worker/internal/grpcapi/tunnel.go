@@ -1,11 +1,14 @@
 package grpcapi
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -13,23 +16,43 @@ import (
 )
 
 // TunnelManager owns the reverse-tunnel bidi stream opened by the management
-// server. The Worker's local /idp-proxy/ HTTP handler forwards in-cluster IdP
-// requests through TunnelManager.RoundTrip; they ride the server-initiated
-// Tunnel stream to the server (which proxies them to its local IdP) and the
-// response comes back on the same stream, paired by frame id.
+// server. The Worker's local HTTP handlers — /idp-proxy/ (IdP) and /v2/
+// (registry image pulls) — forward in-cluster HTTP requests through
+// TunnelManager.RoundTrip / RoundTripStream; they ride the server-initiated
+// Tunnel stream to the server (which proxies them to its local IdP / OCI
+// registry) and the response comes back on the same stream, paired by frame id.
+//
+// Two response modes share one stream (multiplexed by frame id):
+//   - unary  (RoundTrip, IdP): one response frame per request id.
+//   - stream (RoundTripStream, registry): the server splits large bodies into
+//     chunked frames (chunk_seq 0..N-1, last one chunk_eof=true); the worker
+//     reassembles them on the fly into the HTTP response body.
 //
 // Lifecycle: the management server opens exactly one Tunnel stream per Worker
 // and keeps it alive (reopening on disconnect, like SubscribeEvents). The
 // Worker side learns of the stream when its Tunnel handler runs; it registers
-// the stream here so the HTTP handler can use it. When the stream ends the
-// handler unregisters it and round-trips in flight fail fast.
+// the stream here so the HTTP handlers can use it. When the stream ends the
+// handler unregisters it and in-flight round trips fail fast.
 type TunnelManager struct {
 	log *slog.Logger
 
 	mu     sync.RWMutex
 	stream pb.ManagementService_TunnelServer // current stream; nil when none attached
-	// pending requests: frame id -> chan that receives the response frame.
+	// pending: unary waiters — frame id -> chan receiving the single response
+	// frame (consumed by RoundTrip).
 	pending map[string]chan *pb.TunnelFrame
+	// streams: streaming waiters — frame id -> waiter receiving one frame at a
+	// time until chunk_eof (consumed by RoundTripStream).
+	streams map[string]*streamWaiter
+}
+
+// streamWaiter is one in-flight streaming round trip. ch carries response
+// frames (buffered so the tunnel recv loop does not stall on a slow HTTP
+// writer); cancel is released by the reader's Close or by detach on stream
+// loss, unblocking pending Reads.
+type streamWaiter struct {
+	ch     chan *pb.TunnelFrame
+	cancel context.CancelFunc
 }
 
 // NewTunnelManager constructs a TunnelManager (no stream attached yet).
@@ -37,34 +60,79 @@ func NewTunnelManager(log *slog.Logger) *TunnelManager {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &TunnelManager{log: log, pending: map[string]chan *pb.TunnelFrame{}}
+	return &TunnelManager{
+		log:     log,
+		pending: map[string]chan *pb.TunnelFrame{},
+		streams: map[string]*streamWaiter{},
+	}
 }
 
 // Tunnel implements the gRPC bidi handler. It runs for the lifetime of one
 // server-initiated stream: it registers the stream, loops receiving response
 // frames (dispatching each to its pending waiter), and unregisters on exit.
-// Send-side (forwarding local HTTP requests) happens via RoundTrip, which
-// writes to the registered stream under its own concurrency.
+// Send-side (forwarding local HTTP requests) happens via RoundTrip[Stream],
+// which writes to the registered stream under its own concurrency.
 func (m *TunnelManager) Tunnel(stream pb.ManagementService_TunnelServer) error {
 	m.attach(stream)
 	defer m.detach()
 
 	// Loop receiving response frames. Each carries the id of a pending request;
-	// deliver it to that request's waiter and delete the pending entry.
+	// deliver it to that request's waiter.
 	for {
 		frame, err := stream.Recv()
 		if err != nil {
 			m.log.Debug("tunnel stream recv ended", "err", err)
 			return err
 		}
-		ch, ok := m.takePending(frame.Id)
-		if !ok {
-			// Late/duplicate response for an already-timed-out request; drop.
-			m.log.Debug("tunnel frame with no pending waiter", "id", frame.Id)
-			continue
-		}
-		ch <- frame
+		m.dispatch(frame)
 	}
+}
+
+// dispatch delivers one response frame to its waiter: unary waiters consume
+// exactly one frame (their entry is removed); streaming waiters keep their
+// entry until the reader is done or the stream ends. Frames with no waiter
+// (late/orphaned after reader Close) are dropped. Sends carry a 5s guard so a
+// wedged waiter can never stall the shared tunnel stream.
+func (m *TunnelManager) dispatch(frame *pb.TunnelFrame) {
+	// Unary path (existing semantics): take the waiter so a second frame for
+	// the same id is dropped.
+	if ch, ok := m.takePending(frame.Id); ok {
+		select {
+		case ch <- frame:
+		case <-time.After(5 * time.Second):
+			m.log.Warn("tunnel dispatch: unary waiter full, dropping frame", "id", frame.Id)
+		}
+		return
+	}
+	// Streaming path: peek; keep registered until ChunkEof or reader Close.
+	m.mu.RLock()
+	w := m.streams[frame.Id]
+	m.mu.RUnlock()
+	if w == nil {
+		m.log.Debug("tunnel frame with no pending waiter", "id", frame.Id)
+		return
+	}
+	select {
+	case w.ch <- frame:
+	case <-time.After(5 * time.Second):
+		// Reader stopped draining without closing (the handler always closes on
+		// return, so this is a defensive fallback). Drop rather than stall.
+		m.log.Warn("tunnel dispatch: stream waiter full, dropping frame", "id", frame.Id)
+	case <-m.streamDone():
+	}
+}
+
+// streamDone returns a channel closed when the attached stream ends, used by
+// dispatch to unblock sends when the server dropped the stream.
+func (m *TunnelManager) streamDone() <-chan struct{} {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.stream == nil {
+		closed := make(chan struct{})
+		close(closed)
+		return closed
+	}
+	return m.stream.Context().Done()
 }
 
 // Available reports whether a tunnel stream is currently attached and usable.
@@ -76,7 +144,8 @@ func (m *TunnelManager) Available() bool {
 
 // RoundTrip forwards one HTTP request over the tunnel and waits for the paired
 // response (or timeout). Returns the response frame, or an error if no tunnel
-// is attached, the send fails, or the response does not arrive in time.
+// is attached, the send fails, or the response does not arrive in time. Used
+// by the IdP proxy (small bodies, single response frame).
 func (m *TunnelManager) RoundTrip(method, path string, headers http.Header, body []byte, timeout time.Duration) (*pb.TunnelFrame, error) {
 	m.mu.RLock()
 	stream := m.stream
@@ -116,16 +185,152 @@ func (m *TunnelManager) RoundTrip(method, path string, headers http.Header, body
 	}
 }
 
+// RoundTripStream forwards one HTTP request over the tunnel and returns the
+// response status/headers plus a streaming body reader. The server replies
+// with one frame (chunk_eof=true) or several chunked frames; the reader
+// reassembles them and reports EOF at chunk_eof (or when Content-Length is
+// met — belt-and-braces for old servers that send a single frame without the
+// eof flag). ctx cancels the round trip (callers pass the HTTP request
+// context); Close on the returned reader releases the tunnel slot.
+func (m *TunnelManager) RoundTripStream(ctx context.Context, method, path string, headers http.Header, body []byte) (int, http.Header, io.ReadCloser, error) {
+	m.mu.RLock()
+	stream := m.stream
+	m.mu.RUnlock()
+	if stream == nil {
+		return 0, nil, nil, fmt.Errorf("registry tunnel not available (management server not connected)")
+	}
+
+	id := randomFrameID()
+	ctx2, cancel := context.WithCancel(ctx)
+	w := &streamWaiter{ch: make(chan *pb.TunnelFrame, 16), cancel: cancel}
+	m.addStream(id, w)
+	// The waiter slot is released by the reader's Close (not here — the
+	// reader outlives this function); error paths below release it explicitly.
+
+	reqFrame := &pb.TunnelFrame{
+		Id:      id,
+		Method:  method,
+		Path:    path,
+		Headers: headerToPB(headers),
+		Body:    body,
+	}
+	if err := stream.Send(reqFrame); err != nil {
+		m.removeStream(id)
+		return 0, nil, nil, fmt.Errorf("tunnel send: %w", err)
+	}
+
+	// First frame carries status/headers; subsequent frames only body.
+	var first *pb.TunnelFrame
+	select {
+	case first = <-w.ch:
+	case <-ctx2.Done():
+		m.removeStream(id)
+		return 0, nil, nil, fmt.Errorf("tunnel stream round trip canceled: %w", ctx2.Err())
+	case <-stream.Context().Done():
+		m.removeStream(id)
+		return 0, nil, nil, fmt.Errorf("tunnel stream closed: %w", stream.Context().Err())
+	}
+	status := int(first.Status)
+	respHeader := PBHeaderToHTTP(first.Headers)
+	if first.Error != "" {
+		m.removeStream(id)
+		return status, respHeader, nil, fmt.Errorf("%s", first.Error)
+	}
+	r := &tunnelStreamReader{
+		m:        m,
+		id:       id,
+		w:        w,
+		ctx:      ctx2,
+		cl:       contentLengthOf(respHeader),
+		received: 0,
+		eof:      first.ChunkEof,
+		buf:      first.Body,
+	}
+	return status, respHeader, r, nil
+}
+
+// contentLengthOf returns the integer Content-Length of h, or -1 if absent.
+func contentLengthOf(h http.Header) int64 {
+	if v := h.Get("Content-Length"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n
+		}
+	}
+	return -1
+}
+
+// tunnelStreamReader is an io.ReadCloser over chunked frames. Read serves the
+// pending bytes of the current frame (or waits for the next one) and reports
+// io.EOF when the server sent chunk_eof or Content-Length is satisfied. Close
+// releases the tunnel slot (cancels the round trip and removes the waiter).
+type tunnelStreamReader struct {
+	m         *TunnelManager
+	id        string
+	w         *streamWaiter
+	ctx       context.Context // canceled on Close or stream loss
+	cl        int64           // upstream Content-Length, -1 unknown
+	received  int64           // bytes served so far
+	eof       bool            // no more data is coming
+	buf       []byte          // pending bytes of the current frame
+	closeOnce sync.Once
+}
+
+func (r *tunnelStreamReader) Read(p []byte) (int, error) {
+	for {
+		if r.eof && len(r.buf) == 0 {
+			return 0, io.EOF
+		}
+		if err := r.ctx.Err(); err != nil {
+			return 0, err
+		}
+		// Serve pending bytes of the current frame first.
+		if len(r.buf) > 0 {
+			n := copy(p, r.buf)
+			r.buf = r.buf[n:]
+			r.received += int64(n)
+			if r.cl > 0 && r.received >= r.cl {
+				r.eof = true
+			}
+			return n, nil
+		}
+		// Fetch the next frame.
+		select {
+		case f := <-r.w.ch:
+			if f.Error != "" {
+				r.eof = true
+				return 0, fmt.Errorf("%s", f.Error)
+			}
+			r.buf = f.Body
+			if f.ChunkEof {
+				r.eof = true
+			}
+			// Content-Length short-circuit: old servers send a single frame
+			// without the eof flag; stop once the advertised length is met.
+			if r.cl > 0 && r.received+int64(len(f.Body)) >= r.cl {
+				r.eof = true
+			}
+		case <-r.ctx.Done():
+			return 0, r.ctx.Err()
+		}
+	}
+}
+
+func (r *tunnelStreamReader) Close() error {
+	r.closeOnce.Do(func() { r.m.removeStream(r.id) })
+	return nil
+}
+
 // attach registers a freshly opened server-side stream.
 func (m *TunnelManager) attach(stream pb.ManagementService_TunnelServer) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stream = stream
-	m.log.Info("idp tunnel attached")
+	m.log.Info("tunnel attached")
 }
 
 // detach clears the stream and fails all pending waiters (their channels are
-// closed so they return immediately). A subsequent server reconnect re-attaches.
+// closed so they return immediately; stream waiters are canceled so their
+// reads unblock with an error). A subsequent server reconnect re-attaches.
 func (m *TunnelManager) detach() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -134,7 +339,11 @@ func (m *TunnelManager) detach() {
 		close(ch)
 		delete(m.pending, id)
 	}
-	m.log.Info("idp tunnel detached")
+	for id, w := range m.streams {
+		w.cancel()
+		delete(m.streams, id)
+	}
+	m.log.Info("tunnel detached")
 }
 
 func (m *TunnelManager) addPending(id string) chan *pb.TunnelFrame {
@@ -154,6 +363,21 @@ func (m *TunnelManager) takePending(id string) (chan *pb.TunnelFrame, bool) {
 		delete(m.pending, id)
 	}
 	return ch, ok
+}
+
+func (m *TunnelManager) addStream(id string, w *streamWaiter) {
+	m.mu.Lock()
+	m.streams[id] = w
+	m.mu.Unlock()
+}
+
+func (m *TunnelManager) removeStream(id string) {
+	m.mu.Lock()
+	if w, ok := m.streams[id]; ok {
+		w.cancel()
+		delete(m.streams, id)
+	}
+	m.mu.Unlock()
 }
 
 // RoundTripHTTP is an idpproxy.TunnelSender-compatible adapter around

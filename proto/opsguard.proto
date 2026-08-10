@@ -448,6 +448,13 @@ message TunnelFrame {
   // response fields (server → Worker)
   int32 status = 6;
   string error = 7;                // set when the server could not proxy at all
+  // chunked streaming (image relay over the tunnel): a response whose body
+  // fits in one frame is sent as a single frame with chunk_eof=true;
+  // larger bodies are split into frames with chunk_seq 0..N-1, the last one
+  // carrying chunk_eof=true. Old peers that never set these fields are
+  // single-frame responses (chunk_seq=0, chunk_eof=false).
+  int32 chunk_seq = 8;             // 0 = first (or only) response frame
+  bool chunk_eof = 9;              // true = no more frames follow for this id
 }
 
 // TunnelHeader is a single (key, value) pair; a header with N values becomes N
