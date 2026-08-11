@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -331,45 +332,100 @@ func nodeViewToPB(v orchestrator.NodeView) *pb.Node {
 }
 
 // WatchNodeStats streams the base node list (kind="init", emitted immediately
-// with NO stats fan-out so the UI renders right away) followed by one update
-// per node (kind="node") as each node's stats sample completes. Per-node
+// with NO stats fan-out so the UI renders right away) followed by per-node
+// updates (kind="node") as each node's stats sample completes. Per-node
 // samples run concurrently with a bounded 8s timeout, so a slow/unreachable
 // node emits a reachable=false update at 8s instead of blocking the others.
-// Backs the server-side SSE /nodes/stream endpoint.
+//
+// The stream LOOPS: it re-samples every nodeStatsRefreshInterval and keeps
+// pushing "node" updates so the node cards stay live, until the client
+// disconnects. A "init" (full base list) is re-sent only when the node ID set
+// changes (nodes added/removed) — re-sending it every tick would wipe the
+// stats fields the UI just filled and cause flicker. Backs the server-side
+// SSE /nodes/stream endpoint.
 func (s *Server) WatchNodeStats(_ *pb.WatchNodeStatsRequest, stream pb.ManagementService_WatchNodeStatsServer) error {
 	ctx := stream.Context()
+
+	// gRPC ServerStream.Send is not safe for concurrent calls; serialize the
+	// per-node emissions (StreamNodeStats fans out concurrently).
+	var sendMu sync.Mutex
+	sendUpdate := func(u *pb.NodeStatsUpdate) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		return stream.Send(u)
+	}
+	sample := func(views []orchestrator.NodeView) {
+		s.orch.StreamNodeStats(ctx, views, 8*time.Second, func(st orchestrator.NodeViewStats) {
+			_ = sendUpdate(&pb.NodeStatsUpdate{
+				Kind:           "node",
+				NodeId:         st.NodeID,
+				Reachable:      st.Reachable,
+				CpuPercent:     st.CPUPercent,
+				MemPercent:     st.MemPercent,
+				MemUsage:       st.MemUsage,
+				MemLimit:       st.MemTotal,
+				ContainerCount: int32(st.ContainerCount),
+			})
+		})
+	}
+
+	// Initial base list + first stats round.
 	views, err := s.orch.ListNodesView(ctx)
 	if err != nil {
 		return status.Error(codes.Unavailable, err.Error())
 	}
-	initNodes := make([]*pb.Node, len(views))
-	for i, v := range views {
-		initNodes[i] = nodeViewToPB(v)
-	}
-	if err := stream.Send(&pb.NodeStatsUpdate{Kind: "init", Nodes: initNodes}); err != nil {
+	if err := sendUpdate(initUpdate(views)); err != nil {
 		return err
 	}
-	// gRPC ServerStream.Send is not safe for concurrent calls, so serialize
-	// the per-node emissions with a mutex.
-	var sendMu sync.Mutex
-	sendUpdate := func(u *pb.NodeStatsUpdate) {
-		sendMu.Lock()
-		defer sendMu.Unlock()
-		_ = stream.Send(u)
+	lastKey := nodeSetKey(views)
+	sample(views)
+
+	// Periodic refresh until the client disconnects (ctx cancels).
+	ticker := time.NewTicker(nodeStatsRefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+		views, err := s.orch.ListNodesView(ctx)
+		if err != nil {
+			continue
+		}
+		if key := nodeSetKey(views); key != lastKey {
+			lastKey = key
+			if err := sendUpdate(initUpdate(views)); err != nil {
+				return err
+			}
+		}
+		sample(views)
 	}
-	s.orch.StreamNodeStats(ctx, views, 8*time.Second, func(st orchestrator.NodeViewStats) {
-		sendUpdate(&pb.NodeStatsUpdate{
-			Kind:           "node",
-			NodeId:         st.NodeID,
-			Reachable:      st.Reachable,
-			CpuPercent:     st.CPUPercent,
-			MemPercent:     st.MemPercent,
-			MemUsage:       st.MemUsage,
-			MemLimit:       st.MemTotal,
-			ContainerCount: int32(st.ContainerCount),
-		})
-	})
-	return nil
+}
+
+// nodeStatsRefreshInterval is how often WatchNodeStats re-samples each node.
+const nodeStatsRefreshInterval = 10 * time.Second
+
+// initUpdate builds the kind="init" message carrying the base node list (no
+// stats) — emitted on connect and whenever the swarm node set changes.
+func initUpdate(views []orchestrator.NodeView) *pb.NodeStatsUpdate {
+	nodes := make([]*pb.Node, len(views))
+	for i, v := range views {
+		nodes[i] = nodeViewToPB(v)
+	}
+	return &pb.NodeStatsUpdate{Kind: "init", Nodes: nodes}
+}
+
+// nodeSetKey is a stable signature of the node ID set, used to detect topology
+// changes between refresh ticks so "init" is only re-sent when nodes are
+// added/removed (avoiding UI flicker on every tick).
+func nodeSetKey(views []orchestrator.NodeView) string {
+	ids := make([]string, len(views))
+	for i, v := range views {
+		ids[i] = v.ID
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ",")
 }
 
 func (s *Server) NodeStats(ctx context.Context, _ *pb.Empty) (*pb.NodeStatsResponse, error) {

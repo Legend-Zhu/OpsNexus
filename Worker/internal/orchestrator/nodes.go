@@ -86,6 +86,12 @@ type NodeViewStats struct {
 // nodes to sample (from ListNodesView) — each entry's Addr identifies the
 // node worker to query (the manager proxies via NodeClientByAddr, forwarding
 // the configured bearer token).
+//
+// This uses the lightweight HostStats path (host CPU/mem + container count
+// only, no per-container breakdown): the full LocalStats per-container
+// double-snapshot is O(N) sequential ContainerStats calls that blocks 10-20s
+// on container-heavy (k8s) nodes, which would blow the perNodeTimeout and
+// mark every node unreachable.
 func (o *Orchestrator) StreamNodeStats(ctx context.Context, base []NodeView, perNodeTimeout time.Duration, emit func(NodeViewStats)) {
 	var wg sync.WaitGroup
 	for _, v := range base {
@@ -98,7 +104,7 @@ func (o *Orchestrator) StreamNodeStats(ctx context.Context, base []NodeView, per
 			}
 			nctx, cancel := context.WithTimeout(ctx, perNodeTimeout)
 			defer cancel()
-			stats, err := o.NodeClientByAddr(v.Addr).Stats(nctx)
+			stats, err := o.NodeClientByAddr(v.Addr).HostStats(nctx)
 			if err != nil {
 				emit(NodeViewStats{NodeID: v.ID, Reachable: false})
 				return

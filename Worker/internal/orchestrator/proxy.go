@@ -68,6 +68,19 @@ type NodeStats struct {
 	ContainerCount int                 `json:"containerCount,omitempty"`
 }
 
+// HostStats is the lightweight host-only response of GET
+// /api/v1/local/host-stats (no per-container breakdown). The streaming
+// node-card path uses this so a slow/container-heavy node can't block the
+// others — the full LocalStats per-container double-snapshot is skipped.
+type HostStats struct {
+	HostCPUPercent float64 `json:"hostCpuPercent,omitempty"`
+	HostMemPercent float64 `json:"hostMemPercent,omitempty"`
+	HostMemTotal   uint64  `json:"hostMemTotalBytes,omitempty"`
+	HostMemUsed    uint64  `json:"hostMemUsedBytes,omitempty"`
+	HostCPUCores   int     `json:"hostCpuCores,omitempty"`
+	ContainerCount int     `json:"containerCount,omitempty"`
+}
+
 // NodeContainerStat mirrors nodeagent.containerStat.
 type NodeContainerStat struct {
 	ContainerID string  `json:"containerId"`
@@ -282,6 +295,17 @@ func (n *NodeClient) Stats(ctx context.Context) (NodeStats, error) {
 	var out NodeStats
 	if err := n.getJSON(ctx, "/api/v1/local/stats", &out); err != nil {
 		return NodeStats{}, err
+	}
+	return out, nil
+}
+
+// HostStats fetches only the node's host-level CPU/mem + container count (the
+// lightweight path — no per-container breakdown). Used by the streaming
+// node-card path where the full LocalStats would block on container-heavy nodes.
+func (n *NodeClient) HostStats(ctx context.Context) (HostStats, error) {
+	var out HostStats
+	if err := n.getJSON(ctx, "/api/v1/local/host-stats", &out); err != nil {
+		return HostStats{}, err
 	}
 	return out, nil
 }

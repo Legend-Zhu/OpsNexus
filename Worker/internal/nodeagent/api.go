@@ -28,6 +28,10 @@ type API struct {
 	statsMu    sync.Mutex
 	statsCache *StatsResp
 	statsAt    time.Time
+	// hostStatsCache 轻量 host-only 采样缓存（流式节点卡片专用，跳过
+	// per-container 双快照）。与 statsCache 共用 statsMu。
+	hostStatsCache *HostStatsResp
+	hostStatsAt    time.Time
 }
 
 const statsCacheTTL = 5 * time.Second
@@ -44,6 +48,7 @@ func New(cli docker.Client, policy *agent.CommandPolicy, log *slog.Logger) *API 
 func (a *API) Routes() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
 		"GET /api/v1/local/stats":         a.stats,
+		"GET /api/v1/local/host-stats":    a.hostStats,
 		"GET /api/v1/local/processes":     a.processes,
 		"GET /api/v1/local/containers":    a.containers,
 		"POST /api/v1/local/containers/restart": a.restartContainer,
