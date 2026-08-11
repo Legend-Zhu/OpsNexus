@@ -142,8 +142,28 @@ docker network create -d overlay ops-net
 | ② 单副本 | neo4j-server | 单副本，先确认 R3（数据归属） |
 | ③ 核心双副本 | data-server、admin-server | 有 /data/dbte 依赖的先处理挂载 |
 | ④ 多副本 | monitor-server（4） | 跨 230/249 |
-| ⑤ 边界 | plotting-server、mapcache-server | 跨 232/249 |
-| ⑥ 收尾 | plan-server、prdl（确认弃用后只删不迁） | |
+| ⑤ 边界 | plotting-server、mapcache-server | 跨 232/249；mapcache 不注册 nacos（见 4.2.1 env 对照表） |
+| ⑥ 收尾 | plan-server、prdl-external-online-server | 已确认要迁（在 231 Running，非弃用）；镜像在 231 本地与 Harbor nx 项目 |
+
+### 4.2.1 逐服务 env 迁移对照表（2026-08-11，从 K8s Deployment spec 权威提取）
+
+Rancher 部署时各服务靠**环境变量覆盖**注入 nacos 配置。迁移到 Swarm 时 env **原样照搬**，仅一处改动：`NACOS_ADDR` 从旧 nacos（253:20011，DNAT 过渡）改直连 r-nacos（`10.60.171.232:8848`）。以下为各 Deployment 的自定义 env（已剔除 K8s 自动注入的 `*_SERVICE_*`/`*_PORT_*` 变量）。
+
+| 服务 | NACOS_ADDR（迁移后） | NACOS_NAMESPACE | spring.profiles.active | 其他 env（原样照搬） | 备注 |
+|---|---|---|---|---|---|
+| admin-server | `10.60.171.232:8848` | `test` | `nacos` | `springdoc.api-docs.enabled=false`、`springdoc.swagger-ui.enabled=false` | |
+| data-server | `10.60.171.232:8848` | `test` | `nacos` | 同上 springdoc×2 | 另有 bind `/data/dbte` |
+| monitor-server | `10.60.171.232:8848` | `test` | `nacos` | 同上 springdoc×2 | ⚠️ **丢弃 `SPRING_CLOUD_NACOS_DISCOVERY_IP=undefined`**（Rancher 表单留空的脏值，字面注册 IP `undefined`；Swarm 不设，取容器真实 IP） |
+| neo4j-server | `10.60.171.232:8848` | `test` | `nacos` | 同上 springdoc×2 | R3：先确认无本地数据卷（真库疑似 253 `neo4j-neo4j-1`） |
+| notice-test | `10.60.171.232:8848` | `test` | `nacos` | springdoc×2 + `logging.level.root=debug`、`userCenter.ifSendNoticeMsg=false` | 批次① |
+| external-test | `10.60.171.232:8848` | `test` | `nacos` | springdoc×2 + `schedule-enable=true` | 批次① |
+| plotting-server | `10.60.171.232:8848` | `test` | `nacos` | 同上 springdoc×2 | |
+| plan-server | `10.60.171.232:8848` | `test` | `nacos` | 同上 springdoc×2 | 批次⑥ |
+| prdl-external-online-server | `10.60.171.232:8848` | `test` | `nacos` | 同上 springdoc×2 | 批次⑥；镜像 `nx/external-online-server:v202503201` |
+| **mapcache-server** | **无 NACOS env** | — | **`nx`** | `spring.data.mongodb.host=10.60.171.253`、`spring.data.mongodb.port=20016` | **不注册 nacos**——照搬原样，不带任何 NACOS_* 变量 |
+
+> 共性：`NACOS_NAMESPACE=test`、`spring.profiles.active=nacos`、`springdoc.swagger-ui.enabled=false`、`springdoc.api-docs.enabled=false` 为 9 个 nacos 系服务通用。
+> 迁移后双实例并存期：新 Swarm 实例（直连 232）与老 K8s Pod（走 253 DNAT→232）进**同一 r-nacos、同 ns=test**，互相可见，验证手法 = r-nacos 控制台看实例数翻倍。
 
 ### 4.2 OpsGaurd config.Service 部署模板（以 data-server 为例）
 
