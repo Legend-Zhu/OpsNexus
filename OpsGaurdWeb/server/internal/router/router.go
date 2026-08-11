@@ -116,8 +116,9 @@ func New(h *api.Handlers) *gin.Engine {
 		clusters.GET("/:name/events", h.ListEvents)
 		clusters.GET("/:name/audit", h.ListAudit)
 		clusters.GET("/:name/metrics", h.ClusterMetrics)
-		clusters.GET("/:name/nodes", h.ListNodes)
-		clusters.GET("/:name/nodes/:id/processes", h.NodeProcesses)
+			clusters.GET("/:name/nodes", h.ListNodes)
+			clusters.GET("/:name/nodes/stream", h.StreamNodes)
+			clusters.GET("/:name/nodes/:id/processes", h.NodeProcesses)
 		clusters.GET("/:name/nodes/:id/containers", h.NodeContainers)
 		clusters.POST("/:name/nodes/:id/containers/restart", h.NodeContainerRestart)
 

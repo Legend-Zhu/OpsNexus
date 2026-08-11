@@ -46,6 +46,12 @@ service ManagementService {
   // ---- node / host inspection ----
   rpc ListNodes(Empty) returns (ListNodesResponse);
   rpc NodeStats(Empty) returns (NodeStatsResponse);
+  // Server-streaming node list + per-node stats. The first message (kind=init)
+  // carries the base node list immediately — NO stats fan-out, so it returns
+  // fast. Subsequent messages (kind=node) carry each node's stats as they
+  // complete (fetched concurrently per node), so a slow/unreachable node never
+  // blocks the others. Used by the SSE /nodes/stream endpoint.
+  rpc WatchNodeStats(WatchNodeStatsRequest) returns (stream NodeStatsUpdate);
   rpc NodeProcesses(NodeProcessesRequest) returns (ProcessesResponse);
   rpc NodeContainers(NodeContainersRequest) returns (NodeContainersResponse);
 
@@ -201,6 +207,25 @@ message Node {
   double cpu_percent = 12;
   double mem_percent = 13;
   int32 container_count = 14;
+}
+
+message WatchNodeStatsRequest {}
+
+// NodeStatsUpdate carries either the base node list (kind="init", emitted
+// first so the UI renders immediately) or one node's stats (kind="node",
+// emitted per-node as each stats fetch completes — slow nodes don't block
+// others). kind="init": nodes holds the base list (stats fields empty).
+// kind="node": node_id identifies the node; the stat fields carry its sample.
+message NodeStatsUpdate {
+  string kind = 1;            // "init" | "node"
+  repeated Node nodes = 2;    // kind=init: base node list (stats fields empty)
+  string node_id = 3;         // kind=node: which node this sample is for
+  bool reachable = 4;
+  double cpu_percent = 5;
+  double mem_percent = 6;
+  uint64 mem_usage = 7;
+  uint64 mem_limit = 8;
+  int32 container_count = 9;
 }
 
 message NodeStatsResponse {

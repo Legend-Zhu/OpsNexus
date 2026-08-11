@@ -193,12 +193,20 @@ func (s *Service) Middleware(public []string) gin.HandlerFunc {
 				return
 			}
 		}
-		auth := c.GetHeader("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
+		// Bearer token from Authorization header, or ?token= query (the query
+		// fallback exists for EventSource/SSE clients, which can't set custom
+		// headers — e.g. /nodes/stream).
+		token := ""
+		if auth := c.GetHeader("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimPrefix(auth, "Bearer ")
+		} else if q := c.Query("token"); q != "" {
+			token = q
+		}
+		if token == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "missing bearer token"})
 			return
 		}
-		username, role, err := s.VerifyToken(strings.TrimPrefix(auth, "Bearer "))
+		username, role, err := s.VerifyToken(token)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "message": err.Error()})
 			return

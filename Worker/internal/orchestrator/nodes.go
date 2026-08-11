@@ -9,6 +9,7 @@ package orchestrator
 import (
 	"context"
 	"sync"
+	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/docker"
 )
@@ -31,27 +32,20 @@ type NodeView struct {
 	ContainerCount int     `json:"containerCount"`
 }
 
-// ListNodesView aggregates the swarm node table with per-node HOST resource
-// usage (宿主机 CPU/内存，读节点 /proc/stat + /proc/meminfo，而非 swarm 容器聚合).
-// The local node's stats come from this daemon directly; remote nodes via their
-// node-role worker's /api/v1/local/stats. Failures of individual remote stats
-// are non-fatal (the node is marked unreachable).
+// ListNodesView returns the BASE node view (swarm node table only — id/
+// hostname/role/state/addr/cpuCores/memBytes). It does NOT fan out per-node
+// stats: that was the source of the /nodes endpoint blocking for 15s+ (the
+// stats endpoint is O(N) sequential ContainerStats on container-heavy nodes).
+// Per-node stats now stream via the WatchNodeStats RPC / SSE so a slow node
+// can't block the list. The returned stats fields (CPUPercent/MemPercent/
+// ContainerCount/Reachable) are left zero — the caller (UI) fills them via
+// the stream.
 func (o *Orchestrator) ListNodesView(ctx context.Context) ([]NodeView, error) {
 	nodes, err := o.cli.ListNodes(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	addrs, err := o.NodeAddrs(ctx)
-	if err != nil {
-		addrs = map[string]string{}
-	}
-	selfID, _ := o.SelfNodeID(ctx)
-
-	// Per-node stats are fetched concurrently — each node's aggregation already
-	// takes ~1s (CPU sampling), so serializing N nodes would make this O(N
-	// seconds). The slice is preallocated; each goroutine writes its own slot.
 	views := make([]NodeView, len(nodes))
-	var wg sync.WaitGroup
 	for i, n := range nodes {
 		v := NodeView{
 			ID:           n.ID,
@@ -68,31 +62,59 @@ func (o *Orchestrator) ListNodesView(ctx context.Context) ([]NodeView, error) {
 			v.ManagerReach = n.ManagerStatus.Reachability
 		}
 		views[i] = v
+	}
+	return views, nil
+}
 
+// NodeViewStats is one node's per-node resource sample (the streaming
+// companion to ListNodesView's base view). Returned by StreamNodeStats per
+// node as each sample completes.
+type NodeViewStats struct {
+	NodeID         string
+	Reachable      bool
+	CPUPercent     float64
+	MemPercent     float64
+	MemUsage       uint64
+	MemTotal       uint64
+	ContainerCount int
+}
+
+// StreamNodeStats fetches each node's host resource stats concurrently and
+// invokes emit with each result as it completes (order non-deterministic).
+// A slow/unreachable node is bounded by perNodeTimeout and emits a
+// reachable=false result rather than blocking the others. base provides the
+// nodes to sample (from ListNodesView) — each entry's Addr identifies the
+// node worker to query (the manager proxies via NodeClientByAddr, forwarding
+// the configured bearer token).
+func (o *Orchestrator) StreamNodeStats(ctx context.Context, base []NodeView, perNodeTimeout time.Duration, emit func(NodeViewStats)) {
+	var wg sync.WaitGroup
+	for _, v := range base {
 		wg.Add(1)
-		go func(i int, n docker.Node) {
+		go func(v NodeView) {
 			defer wg.Done()
-			// 本机也走统一的 local stats 端点（含宿主采样），保持两路逻辑一致。
-			addr, ok := addrs[n.ID]
-			if n.ID == selfID {
-				addr = n.Status.Addr
-				ok = addr != ""
-			}
-			if !ok {
+			if v.Addr == "" {
+				emit(NodeViewStats{NodeID: v.ID, Reachable: false})
 				return
 			}
-			stats, err := o.NodeClientByAddr(addr).Stats(ctx)
+			nctx, cancel := context.WithTimeout(ctx, perNodeTimeout)
+			defer cancel()
+			stats, err := o.NodeClientByAddr(v.Addr).Stats(nctx)
 			if err != nil {
+				emit(NodeViewStats{NodeID: v.ID, Reachable: false})
 				return
 			}
-			views[i].Reachable = true
-			views[i].CPUPercent = stats.HostCPUPercent
-			views[i].MemPercent = stats.HostMemPercent
-			views[i].ContainerCount = stats.ContainerCount
-		}(i, n)
+			emit(NodeViewStats{
+				NodeID:         v.ID,
+				Reachable:      true,
+				CPUPercent:     stats.HostCPUPercent,
+				MemPercent:     stats.HostMemPercent,
+				MemUsage:       stats.HostMemUsed,
+				MemTotal:       stats.HostMemTotal,
+				ContainerCount: stats.ContainerCount,
+			})
+		}(v)
 	}
 	wg.Wait()
-	return views, nil
 }
 
 // ResolveNodeAddr 把 id（node ID 或 hostname）解析为 ready 节点的 worker 地址。

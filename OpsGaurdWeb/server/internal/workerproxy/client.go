@@ -428,6 +428,19 @@ func (c *Client) ListNodes(ctx context.Context) ([]Node, error) {
 	return out, nil
 }
 
+// WatchNodeStats opens the server-streaming node-stats RPC. The caller Recvs
+// NodeStatsUpdate messages: kind="init" (base node list, emitted immediately
+// with no stats fan-out) then kind="node" (one per node, as each node's stats
+// sample completes — concurrent, so a slow node never blocks the others). The
+// bearer token is attached; no fixed deadline is imposed — the stream follows
+// ctx (the SSE connection's lifetime). Backs the SSE /nodes/stream endpoint.
+func (c *Client) WatchNodeStats(ctx context.Context) (pb.ManagementService_WatchNodeStatsClient, error) {
+	if c.token != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.token)
+	}
+	return c.stub.WatchNodeStats(ctx, &pb.WatchNodeStatsRequest{})
+}
+
 // ListProcesses 获取指定节点的宿主机进程。
 func (c *Client) ListProcesses(ctx context.Context, nodeID, top string, limit int, filter string) (ProcessesResp, error) {
 	cctx, cancel := c.callCtx(ctx)

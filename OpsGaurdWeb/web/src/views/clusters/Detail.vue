@@ -36,29 +36,32 @@
               </el-tag>
             </div>
             <div class="node-sub mono">{{ n.addr }}</div>
-            <div class="node-stats">
-              <div class="stat">
-                <div class="stat-label">CPU</div>
-                <el-progress :percentage="pct(n.cpuPercent)" :stroke-width="6" :show-text="false" />
-                <div class="stat-val">{{ n.cpuPercent?.toFixed(1) ?? '—' }}%</div>
+            <template v-if="nodeStatsReady[n.id]">
+              <div class="node-stats">
+                <div class="stat">
+                  <div class="stat-label">CPU</div>
+                  <el-progress :percentage="pct(n.cpuPercent)" :stroke-width="6" :show-text="false" />
+                  <div class="stat-val">{{ n.cpuPercent?.toFixed(1) ?? '—' }}%</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">内存</div>
+                  <el-progress
+                    :percentage="pct(n.memPercent)"
+                    :stroke-width="6"
+                    :show-text="false"
+                    :status="n.memPercent > 85 ? 'exception' : undefined"
+                  />
+                  <div class="stat-val">{{ n.memPercent?.toFixed(1) ?? '—' }}%</div>
+                </div>
               </div>
-              <div class="stat">
-                <div class="stat-label">内存</div>
-                <el-progress
-                  :percentage="pct(n.memPercent)"
-                  :stroke-width="6"
-                  :show-text="false"
-                  :status="n.memPercent > 85 ? 'exception' : undefined"
-                />
-                <div class="stat-val">{{ n.memPercent?.toFixed(1) ?? '—' }}%</div>
+              <div class="node-foot">
+                <span class="og-dim">容器 {{ n.containerCount ?? 0 }}</span>
+                <el-tag size="small" :type="n.reachable ? 'success' : 'danger'" effect="plain">
+                  {{ n.reachable ? '可达' : '不可达' }}
+                </el-tag>
               </div>
-            </div>
-            <div class="node-foot">
-              <span class="og-dim">容器 {{ n.containerCount ?? 0 }}</span>
-              <el-tag size="small" :type="n.reachable ? 'success' : 'danger'" effect="plain">
-                {{ n.reachable ? '可达' : '不可达' }}
-              </el-tag>
-            </div>
+            </template>
+            <div v-else class="node-stats og-dim">加载中…</div>
           </div>
           <el-empty v-if="!nodesLoading && !nodes.length" description="暂无节点（Worker 不可达或无 swarm 节点）" />
         </div>
@@ -398,7 +401,7 @@ monitoring:
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Back, Plus, Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
@@ -451,6 +454,11 @@ function writeCache<T>(kind: string, data: T) {
 // ---- 节点 ----
 const nodesLoading = ref(false)
 const nodes = ref<ClusterNode[]>([])
+// nodeStatsReady[id] = true once that node's stats sample has arrived over the
+// SSE stream (before that the card shows a "加载中…" placeholder — the base
+// list arrives instantly but stats stream in per-node).
+const nodeStatsReady = reactive<Record<string, boolean>>({})
+let nodeStream: EventSource | null = null
 const nodeVisible = ref(false)
 const currentNode = ref<ClusterNode | null>(null)
 const nodeDrawerTab = ref('procs')
@@ -670,6 +678,65 @@ async function loadNodes() {
   } finally {
     nodesLoading.value = false
   }
+}
+
+function closeNodeStream() {
+  nodeStream?.close()
+  nodeStream = null
+}
+
+// 订阅节点 stats 的 SSE 流：base 节点列表由 "init" 事件立即带出，随后每个
+// 节点的 stats 采样完成时发一条 "node" 事件。逐节点把 reachable/cpu/mem/
+// 容器数填回并标记为 ready；慢节点不阻塞其它。流以 [DONE] 结束；出错或组件
+// 卸载时主动关闭，避免 EventSource 自动重连。
+function watchNodeStats() {
+  closeNodeStream()
+  for (const k of Object.keys(nodeStatsReady)) delete nodeStatsReady[k]
+  const url = nodeApi.streamUrl(clusterName.value)
+  if (!url.includes('token=')) return // 未登录，无 token 可订阅
+  let es: EventSource
+  try {
+    es = new EventSource(url)
+  } catch {
+    return
+  }
+  nodeStream = es
+  es.addEventListener('init', (ev: MessageEvent) => {
+    try {
+      const list = JSON.parse(ev.data) as ClusterNode[]
+      if (Array.isArray(list)) nodes.value = list
+    } catch {
+      /* ignore malformed */
+    }
+  })
+  es.addEventListener('node', (ev: MessageEvent) => {
+    try {
+      const s = JSON.parse(ev.data) as {
+        nodeId: string
+        reachable?: boolean
+        cpuPercent?: number
+        memPercent?: number
+        containerCount?: number
+      }
+      const idx = nodes.value.findIndex((n) => n.id === s.nodeId)
+      if (idx < 0) return
+      nodes.value[idx] = {
+        ...nodes.value[idx],
+        reachable: s.reachable ?? false,
+        cpuPercent: s.cpuPercent ?? 0,
+        memPercent: s.memPercent ?? 0,
+        containerCount: s.containerCount ?? 0,
+      }
+      nodeStatsReady[s.nodeId] = true
+    } catch {
+      /* ignore */
+    }
+  })
+  // [DONE] 无 event 名，落到 onmessage：关闭以免 EventSource 自动重连。
+  es.onmessage = (ev: MessageEvent) => {
+    if (ev.data === '[DONE]') closeNodeStream()
+  }
+  es.onerror = () => closeNodeStream()
 }
 
 function openNode(n: ClusterNode) {
@@ -988,6 +1055,7 @@ watch(clusterName, async () => {
   workloads.value = []
   nodes.value = []
   await Promise.all([fetchCluster(), loadNodes(), loadWorkloads(), loadInventory()])
+  watchNodeStats()
 })
 
 onMounted(async () => {
@@ -995,10 +1063,16 @@ onMounted(async () => {
   // 并行加载集群信息 + 节点 + 工作负载 + 纳管清单（fetchCluster 含一次探测，
   // 不再串行阻塞首屏；离线时其余数据照常渲染）
   await Promise.all([fetchCluster(), loadNodes(), loadWorkloads(), loadInventory()])
+  // base 节点列表已秒回（/nodes 不再 fan-out stats）；订阅 SSE 让各节点 stats
+  // 逐个流入，慢节点不阻塞首屏。
+  watchNodeStats()
   loading.value = false
 })
 
-onBeforeUnmount(() => logAbort?.abort())
+onBeforeUnmount(() => {
+  logAbort?.abort()
+  closeNodeStream()
+})
 </script>
 
 <style scoped>

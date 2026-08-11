@@ -4,6 +4,8 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -22,6 +24,64 @@ func (h *Handlers) ListNodes(c *gin.Context) {
 		return
 	}
 	ok(c, http.StatusOK, gin.H{"items": nodes})
+}
+
+// StreamNodes godoc: GET /api/v1/clusters/:name/nodes/stream
+// Server-Sent Events: emits an "init" event (base node list, immediately — no
+// stats fan-out so the UI renders right away), then one "node" event per node
+// as its stats sample completes (fetched concurrently, so a slow/unreachable
+// node never blocks the others). Terminates with data: [DONE]. Auth via
+// ?token= query (EventSource can't set Authorization header).
+func (h *Handlers) StreamNodes(c *gin.Context) {
+	cli, got := h.workerClient(c)
+	if !got {
+		return
+	}
+	fl, ok := c.Writer.(http.Flusher)
+	if !ok {
+		fail(c, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.WriteHeader(http.StatusOK)
+	fl.Flush()
+
+	stream, err := cli.WatchNodeStats(c.Request.Context())
+	if err != nil {
+		fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", err.Error())
+		fl.Flush()
+		return
+	}
+	for {
+		upd, err := stream.Recv()
+		if err != nil {
+			break
+		}
+		var data []byte
+		switch upd.GetKind() {
+		case "init":
+			data, _ = json.Marshal(upd.GetNodes())
+		case "node":
+			data, _ = json.Marshal(map[string]any{
+				"nodeId":         upd.GetNodeId(),
+				"reachable":      upd.GetReachable(),
+				"cpuPercent":     upd.GetCpuPercent(),
+				"memPercent":     upd.GetMemPercent(),
+				"memUsage":       upd.GetMemUsage(),
+				"memLimit":       upd.GetMemLimit(),
+				"containerCount": upd.GetContainerCount(),
+			})
+		default:
+			continue
+		}
+		fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", upd.GetKind(), data)
+		fl.Flush()
+	}
+	fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
+	fl.Flush()
 }
 
 // NodeProcesses godoc: GET /api/v1/clusters/:name/nodes/:id/processes?top=&limit=&filter=

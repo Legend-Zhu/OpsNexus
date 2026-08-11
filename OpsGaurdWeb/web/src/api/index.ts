@@ -1,4 +1,4 @@
-import { get, post, del, put } from './http'
+import { get, post, del, put, getToken } from './http'
 import type {
   AddClusterPayload,
   AINexusConfig,
@@ -60,6 +60,15 @@ export const clusterApi = {
 // ---- 集群节点（管理层级：集群 → 节点 → 容器/进程） ----
 export const nodeApi = {
   list: (cluster: string) => get<{ items: ClusterNode[] }>(`/v1/clusters/${cluster}/nodes`),
+  // SSE stream URL for /nodes/stream (EventSource can't set headers, so the
+  // token goes in the query). Emits an "init" event (base node list) then one
+  // "node" event per node as its stats arrive.
+  streamUrl: (cluster: string) => {
+    const token = getToken()
+    const base = import.meta.env.VITE_API_BASE ?? '/api'
+    const q = token ? `?token=${encodeURIComponent(token)}` : ''
+    return `${base}/v1/clusters/${cluster}/nodes/stream${q}`
+  },
   processes: (cluster: string, nodeId: string, params?: { top?: string; limit?: number; filter?: string }) =>
     get<{ node: string; total: number; processes: ProcessInfo[] }>(
       `/v1/clusters/${cluster}/nodes/${nodeId}/processes`,

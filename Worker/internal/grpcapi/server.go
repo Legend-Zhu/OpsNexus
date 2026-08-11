@@ -304,24 +304,72 @@ func (s *Server) ListNodes(ctx context.Context, _ *pb.Empty) (*pb.ListNodesRespo
 	}
 	nodes := make([]*pb.Node, 0, len(views))
 	for _, v := range views {
-		nodes = append(nodes, &pb.Node{
-			Id:             v.ID,
-			Hostname:       v.Hostname,
-			Role:           v.Role,
-			State:          v.State,
-			Availability:   v.Availability,
-			Addr:           v.Addr,
-			Leader:         v.Leader,
-			ManagerReach:   v.ManagerReach,
-			Reachable:      v.Reachable,
-			CpuCores:       v.CPUCores,
-			MemBytes:       v.MemBytes,
-			CpuPercent:     v.CPUPercent,
-			MemPercent:     v.MemPercent,
-			ContainerCount: int32(v.ContainerCount),
-		})
+		nodes = append(nodes, nodeViewToPB(v))
 	}
 	return &pb.ListNodesResponse{Nodes: nodes}, nil
+}
+
+// nodeViewToPB maps an orchestrator NodeView to the pb Node. Shared by
+// ListNodes (base) and WatchNodeStats (init event).
+func nodeViewToPB(v orchestrator.NodeView) *pb.Node {
+	return &pb.Node{
+		Id:             v.ID,
+		Hostname:       v.Hostname,
+		Role:           v.Role,
+		State:          v.State,
+		Availability:   v.Availability,
+		Addr:           v.Addr,
+		Leader:         v.Leader,
+		ManagerReach:   v.ManagerReach,
+		Reachable:      v.Reachable,
+		CpuCores:       v.CPUCores,
+		MemBytes:       v.MemBytes,
+		CpuPercent:     v.CPUPercent,
+		MemPercent:     v.MemPercent,
+		ContainerCount: int32(v.ContainerCount),
+	}
+}
+
+// WatchNodeStats streams the base node list (kind="init", emitted immediately
+// with NO stats fan-out so the UI renders right away) followed by one update
+// per node (kind="node") as each node's stats sample completes. Per-node
+// samples run concurrently with a bounded 8s timeout, so a slow/unreachable
+// node emits a reachable=false update at 8s instead of blocking the others.
+// Backs the server-side SSE /nodes/stream endpoint.
+func (s *Server) WatchNodeStats(_ *pb.WatchNodeStatsRequest, stream pb.ManagementService_WatchNodeStatsServer) error {
+	ctx := stream.Context()
+	views, err := s.orch.ListNodesView(ctx)
+	if err != nil {
+		return status.Error(codes.Unavailable, err.Error())
+	}
+	initNodes := make([]*pb.Node, len(views))
+	for i, v := range views {
+		initNodes[i] = nodeViewToPB(v)
+	}
+	if err := stream.Send(&pb.NodeStatsUpdate{Kind: "init", Nodes: initNodes}); err != nil {
+		return err
+	}
+	// gRPC ServerStream.Send is not safe for concurrent calls, so serialize
+	// the per-node emissions with a mutex.
+	var sendMu sync.Mutex
+	sendUpdate := func(u *pb.NodeStatsUpdate) {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		_ = stream.Send(u)
+	}
+	s.orch.StreamNodeStats(ctx, views, 8*time.Second, func(st orchestrator.NodeViewStats) {
+		sendUpdate(&pb.NodeStatsUpdate{
+			Kind:           "node",
+			NodeId:         st.NodeID,
+			Reachable:      st.Reachable,
+			CpuPercent:     st.CPUPercent,
+			MemPercent:     st.MemPercent,
+			MemUsage:       st.MemUsage,
+			MemLimit:       st.MemTotal,
+			ContainerCount: int32(st.ContainerCount),
+		})
+	})
+	return nil
 }
 
 func (s *Server) NodeStats(ctx context.Context, _ *pb.Empty) (*pb.NodeStatsResponse, error) {
