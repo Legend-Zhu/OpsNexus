@@ -21,8 +21,8 @@
 
 | 文件 | 部署位置 | 说明 |
 |---|---|---|
-| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.6，离线重打见记录 10/11） |
-| bundle/opsguard-worker-1.0.0.tar … opsguard-worker-1.1.0.tar | /opt/opsguard/images/ | Worker 镜像（当前线 = 1.2.1，离线重打/中继分发见记录 10/11） |
+| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.7，离线重打见记录 10/11/12） |
+| bundle/opsguard-worker-1.0.0.tar … opsguard-worker-1.1.0.tar | /opt/opsguard/images/ | Worker 镜像（当前线 = 1.2.2，离线重打/中继分发见记录 10/11/12） |
 | bundle/docker-27.5.1.tgz | /opt/opsguard/offline/ | docker 静态二进制 |
 | install-docker.sh / docker.service / containerd.service / daemon.json | /opt/opsguard/offline/ | 离线安装（含 swarm init、insecure-registries=10.60.189.6:8080） |
 | agent-config.yaml | /etc/opsguard/agent-config.yaml | Worker 策略（blacklist、关 host exec、webhook→:8080） |
@@ -128,6 +128,34 @@
      （11 层全量上传）→ catalog 可见 → 230 经中继 pull 回 digest 一致。
    - 注意：旧 worker（1.2.0）无并发修复，**并发 push 大 blob 会卡死隧道**；
      升级 worker 后再启用 push。
+12. **隧道吞吐修复（2026-08-11，server 1.2.6→1.2.7 / worker 1.2.1→1.2.2 + 189.6
+    本地 worker 1.1.0→1.2.2）**：经隧道拉/推镜像只有 35-70 KB/s（裸链路 3.9Gbps，
+    慢约 10000 倍）。根因与修复见提交 `a2dd6ba`（`perf(relay)`）。
+    - **根因**：① grpc-go 默认每流接收窗口 64KiB，单 HTTP/2 stream 在途字节卡死，
+      吞吐 ≈ 64KiB/RTT——数量级主凶；② 整个集群一条 bidi stream 头阻塞 + 服务端
+      并发 `Send` 无锁（旧 `sendMu` 仅 worker 侧有）；③ push body 整块缓冲阻塞
+      recv 循环。
+    - **修复**：两侧流控窗口提到 32MiB/流、64MiB/连接（client
+      `WithInitialWindowSize`/`ConnWindow`；worker server `InitialWindowSize`/
+      `ConnWindow`）；**隧道池化**——server 向每个 worker 开 N 条 Tunnel 流（默认
+      16，`OPSGUARD_TUNNEL_POOL` 两端一致），每请求借独占一条，N 路并发各享独立
+      流控窗口与 recv，干掉 worker 侧 `sendMu`/dispatch/streams map/id-demux、
+      服务端每流单写者无需锁；push body 改 `io.Pipe` 流式转发（消除上百 MB 内存
+      峰值）；registryproxy spool buf 32KiB→1MiB。proto/帧格式不变。
+    - **互通性**：池化破坏「新 server↔旧 worker」（旧 worker 单 `stream` 字段被
+      N 条流覆盖）——**部署顺序：先升全部 worker，再升 server**。本次：灾害 5 节点
+      worker 1.2.1→1.2.2（中继 pull+tag 后 `service update`，host-mode 6060 端口
+      冲突如记录 2 所述自愈）→ 189.6 本地 worker 1.1.0→1.2.2 → 最后 server 容器
+      1.2.6→1.2.7（`docker rm -f` 后原样重建，保留 data/config/docker.sock 三挂载）。
+    - **重打方式**：本地交叉编译 `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build`
+      → 上传 189.6 → `FROM <旧镜像> + COPY <二进制> + RUN chmod +x`（纯 COPY 无网络，
+      避开记录 10 坑①docker cp 丢执行位 / 坑②commit 固化 entrypoint）→ push
+      189.6:8080 → 各节点经 232:6060 中继 pull+tag。
+    - **实测**（50MB 不可压缩单层，经隧道 232↔189.6）：push 4.5s≈11MB/s、pull
+      4.2s≈11.8MB/s，双向对称，较修前提升约 150-340 倍。（单层数字含 docker gzip
+      + OCI 分块协议开销；in-process bench 单流 926MB/s / 池并发 1012MB/s；真实
+      多层并发拉取聚合更高。）
+    - **回滚**：旧镜像 server 1.2.6 / worker 1.2.1（灾害）·1.1.0（本地）均保留。
 
 ## 部署步骤（已完成，供重建参考）
 
