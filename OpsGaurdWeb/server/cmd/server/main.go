@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexusrt"
@@ -182,6 +183,13 @@ func main() {
 		// 启用时有意义。集群增删跟随。
 		relay := workerproxy.RelayConfig{
 			AllowExtraPaths: nil,
+		}
+		// 隧道池大小：与 worker 侧 OPSGUARD_TUNNEL_POOL 必须一致。决定向每个
+		// worker 打开的并发 Tunnel bidi 流数量（每条流独占一个 HTTP/2 流控窗口）。
+		if v := os.Getenv("OPSGUARD_TUNNEL_POOL"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				relay.TunnelConcurrency = n
+			}
 		}
 		if cfg.Registry.Enabled && cfg.Registry.Relay.RelayOn() {
 			relay.RegistryUser = cfg.Registry.Relay.Username

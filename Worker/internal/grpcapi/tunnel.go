@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,185 +17,238 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/grpcapi/pb"
 )
 
-// TunnelManager owns the reverse-tunnel bidi stream opened by the management
-// server. The Worker's local HTTP handlers — /idp-proxy/ (IdP) and /v2/
-// (registry image pulls) — forward in-cluster HTTP requests through
-// TunnelManager.RoundTrip / RoundTripStream; they ride the server-initiated
-// Tunnel stream to the server (which proxies them to its local IdP / OCI
-// registry) and the response comes back on the same stream, paired by frame id.
-//
-// Two response modes share one stream (multiplexed by frame id):
-//   - unary  (RoundTrip, IdP): one response frame per request id.
-//   - stream (RoundTripStream, registry): the server splits large bodies into
-//     chunked frames (chunk_seq 0..N-1, last one chunk_eof=true); the worker
-//     reassembles them on the fly into the HTTP response body.
-//
-// Lifecycle: the management server opens exactly one Tunnel stream per Worker
-// and keeps it alive (reopening on disconnect, like SubscribeEvents). The
-// Worker side learns of the stream when its Tunnel handler runs; it registers
-// the stream here so the HTTP handlers can use it. When the stream ends the
-// handler unregisters it and in-flight round trips fail fast.
-type TunnelManager struct {
-	log *slog.Logger
+// defaultTunnelPoolSize is the number of bidi Tunnel streams the management
+// server pre-opens to this worker. Each forwarded HTTP request borrows one
+// stream exclusively, so N concurrent requests each get their own HTTP/2
+// flow-control window and recv loop — no head-of-line blocking on a single
+// shared stream. Must match the server side's RelayConfig.TunnelConcurrency.
+const defaultTunnelPoolSize = 16
 
-	mu     sync.RWMutex
-	stream pb.ManagementService_TunnelServer // current stream; nil when none attached
-	// pending: unary waiters — frame id -> chan receiving the single response
-	// frame (consumed by RoundTrip).
-	pending map[string]chan *pb.TunnelFrame
-	// streams: streaming waiters — frame id -> waiter receiving one frame at a
-	// time until chunk_eof (consumed by RoundTripStream).
-	streams map[string]*streamWaiter
-	// sendMu serializes request-frame sending across concurrent round trips.
-	// The server reassembles a chunked request body synchronously (collecting
-	// the frames of ONE request before proxying), so frames of different
-	// requests must never interleave on the shared bidi stream — otherwise the
-	// server's collector swallows/drops frames belonging to other requests and
-	// that request stalls forever. Every RoundTrip/RoundTripStream holds
-	// sendMu for the whole duration of its frame-send phase.
-	sendMu sync.Mutex
+// TunnelManager owns a POOL of the reverse-tunnel bidi streams opened by the
+// management server. The worker's local HTTP handlers — /idp-proxy/ (IdP) and
+// /v2/ (registry image pull/push) — forward in-cluster HTTP requests through
+// TunnelManager.RoundTrip / RoundTripStream.
+//
+// Pool model (replaces the old single-shared-stream multiplexer): each request
+// borrows one stream for its lifetime and drives it directly — Send request
+// frames, Recv response frames. One stream serves one request at a time, so
+// there is no frame interleaving to guard against and no per-id demux: the
+// entire sendMu / dispatch / pending / streams machinery is gone. N concurrent
+// transfers get N independent HTTP/2 flow-control windows (each sized by the
+// gRPC flow-control options in main.go), which is what removes the throughput
+// ceiling the old single-stream design hit.
+//
+// Lifecycle: the management server opens up to poolSize Tunnel streams to this
+// worker; each Tunnel handler invocation registers its stream into the pool and
+// blocks for the stream's lifetime. A borrower that aborts mid-request (caller
+// ctx canceled or a stream error) tears its stream down so the server's relay
+// goroutine doesn't stall mid-send; a clean completion returns the stream to
+// the pool for reuse. When a stream ends (teardown / server disconnect) the
+// handler returns and the server reopens that slot.
+type TunnelManager struct {
+	log      *slog.Logger
+	poolSize int
+
+	mu     sync.Mutex
+	pool   chan *tunnelConn         // idle streams available for borrowing (cap = poolSize)
+	live   map[*tunnelConn]struct{} // all attached streams (idle + in-flight); membership == alive
+	closed bool
+	done   chan struct{} // closed when Detach is called, waking all borrowers
 }
 
-// streamWaiter is one in-flight streaming round trip. ch carries response
-// frames (buffered so the tunnel recv loop does not stall on a slow HTTP
-// writer); cancel is released by the reader's Close or by detach on stream
-// loss, unblocking pending Reads.
-type streamWaiter struct {
-	ch     chan *pb.TunnelFrame
+// tunnelConn wraps one bidi Tunnel stream plus a cancel that tears it down.
+type tunnelConn struct {
+	stream pb.ManagementService_TunnelServer
+	// cancel unblocks the owning Tunnel handler, which returns and thereby
+	// closes the gRPC stream. Borrowers call it via teardown when they abort.
 	cancel context.CancelFunc
 }
 
-// NewTunnelManager constructs a TunnelManager (no stream attached yet).
-func NewTunnelManager(log *slog.Logger) *TunnelManager {
+// NewTunnelManager constructs a TunnelManager with the given pool size. poolSize
+// <= 0 falls back to defaultTunnelPoolSize. No streams are attached until the
+// management server opens Tunnel streams (served by Tunnel).
+func NewTunnelManager(log *slog.Logger, poolSize int) *TunnelManager {
 	if log == nil {
 		log = slog.Default()
 	}
+	if poolSize <= 0 {
+		poolSize = defaultTunnelPoolSize
+	}
 	return &TunnelManager{
-		log:     log,
-		pending: map[string]chan *pb.TunnelFrame{},
-		streams: map[string]*streamWaiter{},
+		log:      log,
+		poolSize: poolSize,
+		pool:     make(chan *tunnelConn, poolSize),
+		live:     map[*tunnelConn]struct{}{},
+		done:     make(chan struct{}),
 	}
 }
 
-// Tunnel implements the gRPC bidi handler. It runs for the lifetime of one
-// server-initiated stream: it registers the stream, loops receiving response
-// frames (dispatching each to its pending waiter), and unregisters on exit.
-// Send-side (forwarding local HTTP requests) happens via RoundTrip[Stream],
-// which writes to the registered stream under its own concurrency.
+// Tunnel implements the gRPC bidi handler. One invocation per stream the
+// management server opens. It registers the stream into the pool (making it
+// available to borrowers) and blocks until the stream ends — either the stream
+// itself dies (server disconnect / transport error) or a borrower tears it down
+// via cancel. On exit the stream is revoked from the live set.
 func (m *TunnelManager) Tunnel(stream pb.ManagementService_TunnelServer) error {
-	m.attach(stream)
-	defer m.detach()
+	// Derive a cancellable context so borrowers can force this handler to
+	// return (closing the stream) when they abort a request mid-flight.
+	ctx, cancel := context.WithCancel(stream.Context())
+	tc := &tunnelConn{stream: stream, cancel: cancel}
+	m.offer(tc)
+	defer m.revoke(tc)
 
-	// Loop receiving response frames. Each carries the id of a pending request;
-	// deliver it to that request's waiter.
-	for {
-		frame, err := stream.Recv()
-		if err != nil {
-			m.log.Debug("tunnel stream recv ended", "err", err)
-			return err
-		}
-		m.dispatch(frame)
+	select {
+	case <-ctx.Done():
+	case <-m.done:
 	}
+	if err := stream.Context().Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
-// dispatch delivers one response frame to its waiter: unary waiters consume
-// exactly one frame (their entry is removed); streaming waiters keep their
-// entry until the reader is done or the stream ends. Frames with no waiter
-// (late/orphaned after reader Close) are dropped. Sends carry a 5s guard so a
-// wedged waiter can never stall the shared tunnel stream.
-func (m *TunnelManager) dispatch(frame *pb.TunnelFrame) {
-	// Unary path (existing semantics): take the waiter so a second frame for
-	// the same id is dropped.
-	if ch, ok := m.takePending(frame.Id); ok {
-		select {
-		case ch <- frame:
-		case <-time.After(5 * time.Second):
-			m.log.Warn("tunnel dispatch: unary waiter full, dropping frame", "id", frame.Id)
-		}
+// Available reports whether at least one tunnel stream is attached and the
+// manager isn't shut down. (Idle vs. all-busy is not distinguished — a borrow
+// may still block waiting for a stream to be released.)
+func (m *TunnelManager) Available() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return !m.closed && len(m.live) > 0
+}
+
+// offer registers a freshly attached stream as idle in the pool.
+func (m *TunnelManager) offer(tc *tunnelConn) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
 		return
 	}
-	// Streaming path: peek; keep registered until ChunkEof or reader Close.
-	m.mu.RLock()
-	w := m.streams[frame.Id]
-	m.mu.RUnlock()
-	if w == nil {
-		m.log.Debug("tunnel frame with no pending waiter", "id", frame.Id)
+	m.live[tc] = struct{}{}
+	m.mu.Unlock()
+	select {
+	case m.pool <- tc:
+	default:
+		// Pool channel full: the server opened more streams than poolSize.
+		// This extra one stays live but unborrowable until something drains.
+		// Does not happen when both sides use the same configured size.
+	}
+}
+
+// revoke drops a stream from the live set. Stale copies still queued in the
+// pool channel are skipped by borrow's liveness check.
+func (m *TunnelManager) revoke(tc *tunnelConn) {
+	m.mu.Lock()
+	delete(m.live, tc)
+	m.mu.Unlock()
+}
+
+// borrow takes an idle stream from the pool, skipping any that died while
+// queued. It fails fast when no stream is attached at all (tunnel down);
+// otherwise it blocks until a stream becomes idle or ctx/manager-close fires.
+func (m *TunnelManager) borrow(ctx context.Context) (*tunnelConn, error) {
+	for {
+		m.mu.Lock()
+		if m.closed || len(m.live) == 0 {
+			m.mu.Unlock()
+			return nil, errTunnelNotAttached
+		}
+		m.mu.Unlock()
+		select {
+		case tc := <-m.pool:
+			m.mu.Lock()
+			_, alive := m.live[tc]
+			m.mu.Unlock()
+			if !alive {
+				continue // died while queued; discard and retry
+			}
+			return tc, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-m.done:
+			return nil, errTunnelClosed
+		}
+	}
+}
+
+// release returns a healthy stream to the pool for reuse. Dead or
+// manager-closed streams are discarded (their handlers will return on their
+// own).
+func (m *TunnelManager) release(tc *tunnelConn) {
+	m.mu.Lock()
+	_, alive := m.live[tc]
+	closed := m.closed
+	m.mu.Unlock()
+	if !alive || closed {
 		return
 	}
 	select {
-	case w.ch <- frame:
-	case <-time.After(5 * time.Second):
-		// Reader stopped draining without closing (the handler always closes on
-		// return, so this is a defensive fallback). Drop rather than stall.
-		m.log.Warn("tunnel dispatch: stream waiter full, dropping frame", "id", frame.Id)
-	case <-m.streamDone():
+	case m.pool <- tc:
+	default:
+		// Pool full (size mismatch); drop — revoke runs when the handler exits.
 	}
 }
 
-// streamDone returns a channel closed when the attached stream ends, used by
-// dispatch to unblock sends when the server dropped the stream.
-func (m *TunnelManager) streamDone() <-chan struct{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if m.stream == nil {
-		closed := make(chan struct{})
-		close(closed)
-		return closed
+// teardown forces a borrowed stream's Tunnel handler to return, closing the
+// stream. Used when a request aborts with an error so the server's relay
+// goroutine gets an EOF (and reopens that slot) instead of blocking forever on
+// a peer that stopped reading. No-op if the stream already ended.
+func (m *TunnelManager) teardown(tc *tunnelConn) {
+	tc.cancel()
+}
+
+// Detach shuts the pool down: current and future borrowers fail fast and
+// attached stream handlers return. Called when the worker is stopping.
+func (m *TunnelManager) Detach() {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
 	}
-	return m.stream.Context().Done()
+	m.closed = true
+	m.mu.Unlock()
+	close(m.done)
+	m.log.Info("tunnel pool detached")
 }
 
-// Available reports whether a tunnel stream is currently attached and usable.
-func (m *TunnelManager) Available() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.stream != nil
-}
+var (
+	errTunnelNotAttached = errors.New("tunnel not available (management server not connected)")
+	errTunnelClosed      = errors.New("tunnel closed")
+)
 
-// RoundTrip forwards one HTTP request over the tunnel and waits for the paired
-// response (or timeout). Returns the response frame, or an error if no tunnel
-// is attached, the send fails, or the response does not arrive in time. Used
-// by the IdP proxy (small bodies, single response frame).
+// RoundTrip forwards one HTTP request over an idle tunnel stream and waits for
+// the paired response (or timeout). Returns the response frame, or an error if
+// no tunnel is attached, the send fails, or the response does not arrive in
+// time. Used by the IdP proxy (small bodies, single response frame).
 func (m *TunnelManager) RoundTrip(method, path string, headers http.Header, body []byte, timeout time.Duration) (*pb.TunnelFrame, error) {
-	m.mu.RLock()
-	stream := m.stream
-	m.mu.RUnlock()
-	if stream == nil {
-		return nil, fmt.Errorf("idp tunnel not available (management server not connected)")
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
-
-	id := randomFrameID()
-	ch := m.addPending(id)
-	defer m.takePending(id) // ensure cleanup on any return path
-
-	reqFrame := &pb.TunnelFrame{
-		Id:      id,
-		Method:  method,
-		Path:    path,
-		Headers: headerToPB(headers),
-		Body:    body,
-	}
-	m.sendMu.Lock()
-	err := stream.Send(reqFrame)
-	m.sendMu.Unlock()
+	tc, err := m.borrow(ctx)
 	if err != nil {
+		return nil, err
+	}
+	stream := tc.stream
+	id := randomFrameID()
+	if err := stream.Send(&pb.TunnelFrame{
+		Id: id, Method: method, Path: path, Headers: headerToPB(headers), Body: body,
+		ChunkEof: true, ReqChunked: true,
+	}); err != nil {
+		m.teardown(tc)
 		return nil, fmt.Errorf("tunnel send: %w", err)
 	}
-
-	select {
-	case resp := <-ch:
-		if resp.Error != "" {
-			return resp, fmt.Errorf("%s", resp.Error)
-		}
-		return resp, nil
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("tunnel round-trip timed out after %s", timeout)
-	case <-stream.Context().Done():
-		return nil, fmt.Errorf("tunnel stream closed: %w", stream.Context().Err())
+	resp, err := recvFrame(ctx, stream)
+	if err != nil {
+		m.teardown(tc)
+		return nil, fmt.Errorf("tunnel recv: %w", err)
 	}
+	// Error frame is a complete response; the stream is reusable.
+	m.release(tc)
+	if resp.Error != "" {
+		return resp, fmt.Errorf("%s", resp.Error)
+	}
+	return resp, nil
 }
 
 // requestChunkSize 是隧道请求方向单帧 body 上限：push（blob 分块/镜像层）
@@ -202,83 +256,52 @@ func (m *TunnelManager) RoundTrip(method, path string, headers http.Header, body
 // chunk_eof=true；GET/HEAD 等无体请求仍是单帧（chunk_eof=true）。
 const requestChunkSize = 2 << 20
 
-// RoundTripStream forwards one HTTP request over the tunnel and returns the
-// response status/headers plus a streaming body reader. The server replies
-// with one frame (chunk_eof=true) or several chunked frames; the reader
-// reassembles them and reports EOF at chunk_eof (or when Content-Length is
-// met — belt-and-braces for old servers that send a single frame without the
-// eof flag). The request body (io.Reader) is streamed as chunked request
-// frames, so large push bodies (blob uploads) never sit in memory. ctx
-// cancels the round trip (callers pass the HTTP request context); Close on
-// the returned reader releases the tunnel slot.
+// RoundTripStream forwards one HTTP request over an idle tunnel stream and
+// returns the response status/headers plus a streaming body reader. The request
+// body (io.Reader) is streamed as chunked request frames; the response is read
+// back as chunked frames directly off the (exclusively borrowed) stream. Close
+// on the returned reader returns the stream to the pool on a clean EOF, or
+// tears it down on an abort/error so the server doesn't stall.
 func (m *TunnelManager) RoundTripStream(ctx context.Context, method, path string, headers http.Header, body io.Reader) (int, http.Header, io.ReadCloser, error) {
-	m.mu.RLock()
-	stream := m.stream
-	m.mu.RUnlock()
-	if stream == nil {
-		return 0, nil, nil, fmt.Errorf("registry tunnel not available (management server not connected)")
+	tc, err := m.borrow(ctx)
+	if err != nil {
+		return 0, nil, nil, err
 	}
-
+	stream := tc.stream
 	id := randomFrameID()
-	ctx2, cancel := context.WithCancel(ctx)
-	w := &streamWaiter{ch: make(chan *pb.TunnelFrame, 16), cancel: cancel}
-	m.addStream(id, w)
-	// The waiter slot is released by the reader's Close (not here — the
-	// reader outlives this function); error paths below release it explicitly.
-
-	// Stream the request body as frames: first frame carries method/path/
-	// headers + first chunk; subsequent frames carry only body; the last frame
-	// sets chunk_eof=true. A body that fits in one chunk (or is nil) becomes a
-	// single frame with chunk_eof=true. Every frame marks ReqChunked=true so the
-	// server distinguishes new-worker chunked requests from legacy single-frame
-	// ones (old workers never set it). The send loop holds sendMu ONLY while
-	// frames are being written (released before waiting for the response) so
-	// concurrent round trips never interleave frames on the shared stream, yet
-	// waiting for a response never blocks other senders.
 	if err := m.sendFrames(stream, id, method, path, headers, body); err != nil {
-		m.removeStream(id)
+		m.teardown(tc)
 		return 0, nil, nil, fmt.Errorf("tunnel send: %w", err)
 	}
-
-	// First response frame carries status/headers; subsequent frames only body.
-	var respFirst *pb.TunnelFrame
-	select {
-	case respFirst = <-w.ch:
-	case <-ctx2.Done():
-		m.removeStream(id)
-		return 0, nil, nil, fmt.Errorf("tunnel stream round trip canceled: %w", ctx2.Err())
-	case <-stream.Context().Done():
-		m.removeStream(id)
-		return 0, nil, nil, fmt.Errorf("tunnel stream closed: %w", stream.Context().Err())
+	respFirst, err := recvFrame(ctx, stream)
+	if err != nil {
+		m.teardown(tc)
+		return 0, nil, nil, fmt.Errorf("tunnel recv: %w", err)
 	}
 	status := int(respFirst.Status)
 	respHeader := PBHeaderToHTTP(respFirst.Headers)
 	if respFirst.Error != "" {
-		m.removeStream(id)
+		// Error frame is a complete response; reuse the stream.
+		m.release(tc)
 		return status, respHeader, nil, fmt.Errorf("%s", respFirst.Error)
 	}
 	r := &tunnelStreamReader{
-		m:        m,
-		id:       id,
-		w:        w,
-		ctx:      ctx2,
-		cl:       contentLengthOf(respHeader),
-		received: 0,
-		eof:      respFirst.ChunkEof,
-		buf:      respFirst.Body,
+		mgr:    m,
+		conn:   tc,
+		stream: stream,
+		ctx:    ctx,
+		cl:     contentLengthOf(respHeader),
+		buf:    respFirst.Body,
+		eof:    respFirst.ChunkEof,
 	}
 	return status, respHeader, r, nil
 }
 
-// sendFrames streams one request's body as chunked frames over the tunnel,
-// holding sendMu for the duration so frames of concurrent requests never
-// interleave on the shared stream (the server reassembles one request's frames
-// synchronously). The lock is released when the frames are all written, before
-// the caller waits for the response.
+// sendFrames streams one request's body as chunked frames on the exclusively
+// borrowed stream. One stream serves one request at a time, so there's nothing
+// to interleave with — no mutex needed (the old shared-stream design needed
+// sendMu precisely because concurrent requests shared one stream).
 func (m *TunnelManager) sendFrames(stream pb.ManagementService_TunnelServer, id, method, path string, headers http.Header, body io.Reader) error {
-	m.sendMu.Lock()
-	defer m.sendMu.Unlock()
-
 	if body == nil {
 		body = bytes.NewReader(nil)
 	}
@@ -312,12 +335,13 @@ func (m *TunnelManager) sendFrames(stream pb.ManagementService_TunnelServer, id,
 			if first {
 				// Empty body: still emit one frame carrying method/path/headers.
 				return stream.Send(&pb.TunnelFrame{
-					Id: id, Method: method, Path: path, Headers: headerToPB(headers), ChunkEof: true, ReqChunked: true,
+					Id: id, Method: method, Path: path, Headers: headerToPB(headers),
+					ChunkEof: true, ReqChunked: true,
 				})
 			}
 			if !lastEof {
 				// Data and EOF arrived in separate Reads: append an empty
-				// terminating frame so the server's collector sees chunk_eof.
+				// terminating frame so the server's pump sees chunk_eof.
 				return stream.Send(&pb.TunnelFrame{Id: id, ChunkSeq: seq, ChunkEof: true, ReqChunked: true})
 			}
 			return nil
@@ -326,8 +350,7 @@ func (m *TunnelManager) sendFrames(stream pb.ManagementService_TunnelServer, id,
 			return fmt.Errorf("request body read: %w", rErr)
 		}
 		if n == 0 {
-			// (0, nil) — transient; loop again.
-			continue
+			continue // (0, nil) — transient; loop again.
 		}
 	}
 }
@@ -342,19 +365,23 @@ func contentLengthOf(h http.Header) int64 {
 	return -1
 }
 
-// tunnelStreamReader is an io.ReadCloser over chunked frames. Read serves the
-// pending bytes of the current frame (or waits for the next one) and reports
-// io.EOF when the server sent chunk_eof or Content-Length is satisfied. Close
-// releases the tunnel slot (cancels the round trip and removes the waiter).
+// tunnelStreamReader is an io.ReadCloser over the response frames arriving on
+// the borrowed stream. Read serves pending bytes of the current frame (or Recvs
+// the next one) and reports io.EOF when the server sent chunk_eof or
+// Content-Length is satisfied. Close releases the stream back to the pool on a
+// clean EOF, or tears it down if the read was aborted (caller cancel / stream
+// error) so the server-side relay goroutine doesn't block waiting on a peer
+// that stopped draining.
 type tunnelStreamReader struct {
-	m         *TunnelManager
-	id        string
-	w         *streamWaiter
-	ctx       context.Context // canceled on Close or stream loss
-	cl        int64           // upstream Content-Length, -1 unknown
-	received  int64           // bytes served so far
-	eof       bool            // no more data is coming
-	buf       []byte          // pending bytes of the current frame
+	mgr      *TunnelManager
+	conn     *tunnelConn
+	stream   pb.ManagementService_TunnelServer
+	ctx      context.Context
+	cl       int64 // upstream Content-Length, -1 unknown
+	received int64
+	eof      bool
+	buf      []byte
+	aborted  bool
 	closeOnce sync.Once
 }
 
@@ -364,6 +391,7 @@ func (r *tunnelStreamReader) Read(p []byte) (int, error) {
 			return 0, io.EOF
 		}
 		if err := r.ctx.Err(); err != nil {
+			r.aborted = true
 			return 0, err
 		}
 		// Serve pending bytes of the current frame first.
@@ -376,91 +404,60 @@ func (r *tunnelStreamReader) Read(p []byte) (int, error) {
 			}
 			return n, nil
 		}
-		// Fetch the next frame.
-		select {
-		case f := <-r.w.ch:
-			if f.Error != "" {
-				r.eof = true
-				return 0, fmt.Errorf("%s", f.Error)
-			}
-			r.buf = f.Body
-			if f.ChunkEof {
-				r.eof = true
-			}
-			// Content-Length short-circuit: old servers send a single frame
-			// without the eof flag; stop once the advertised length is met.
-			if r.cl > 0 && r.received+int64(len(f.Body)) >= r.cl {
-				r.eof = true
-			}
-		case <-r.ctx.Done():
-			return 0, r.ctx.Err()
+		// Fetch the next frame directly off the stream (ctx-cancellable).
+		f, err := recvFrame(r.ctx, r.stream)
+		if err != nil {
+			r.aborted = true
+			return 0, err
+		}
+		if f.Error != "" {
+			r.aborted = true
+			r.eof = true
+			return 0, fmt.Errorf("%s", f.Error)
+		}
+		r.buf = f.Body
+		if f.ChunkEof {
+			r.eof = true
+		}
+		// Content-Length short-circuit: old servers send a single frame
+		// without the eof flag; stop once the advertised length is met.
+		if r.cl > 0 && r.received+int64(len(f.Body)) >= r.cl {
+			r.eof = true
 		}
 	}
 }
 
 func (r *tunnelStreamReader) Close() error {
-	r.closeOnce.Do(func() { r.m.removeStream(r.id) })
+	r.closeOnce.Do(func() {
+		if r.aborted {
+			r.mgr.teardown(r.conn)
+		} else {
+			r.mgr.release(r.conn)
+		}
+	})
 	return nil
 }
 
-// attach registers a freshly opened server-side stream.
-func (m *TunnelManager) attach(stream pb.ManagementService_TunnelServer) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.stream = stream
-	m.log.Info("tunnel attached")
-}
-
-// detach clears the stream and fails all pending waiters (their channels are
-// closed so they return immediately; stream waiters are canceled so their
-// reads unblock with an error). A subsequent server reconnect re-attaches.
-func (m *TunnelManager) detach() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.stream = nil
-	for id, ch := range m.pending {
-		close(ch)
-		delete(m.pending, id)
+// recvFrame reads one frame from the stream, aborting early (returning the ctx
+// error) if ctx fires before Recv returns. When ctx fires the stream is left
+// with a pending Recv the caller must resolve by tearing the stream down (the
+// resulting close makes the leaked Recv goroutine return).
+func recvFrame(ctx context.Context, stream pb.ManagementService_TunnelServer) (*pb.TunnelFrame, error) {
+	type recvResult struct {
+		f   *pb.TunnelFrame
+		err error
 	}
-	for id, w := range m.streams {
-		w.cancel()
-		delete(m.streams, id)
+	ch := make(chan recvResult, 1)
+	go func() {
+		f, err := stream.Recv()
+		ch <- recvResult{f, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.f, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	m.log.Info("tunnel detached")
-}
-
-func (m *TunnelManager) addPending(id string) chan *pb.TunnelFrame {
-	ch := make(chan *pb.TunnelFrame, 1)
-	m.mu.Lock()
-	m.pending[id] = ch
-	m.mu.Unlock()
-	return ch
-}
-
-// takePending removes and returns the pending channel for id; ok=false if none.
-func (m *TunnelManager) takePending(id string) (chan *pb.TunnelFrame, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ch, ok := m.pending[id]
-	if ok {
-		delete(m.pending, id)
-	}
-	return ch, ok
-}
-
-func (m *TunnelManager) addStream(id string, w *streamWaiter) {
-	m.mu.Lock()
-	m.streams[id] = w
-	m.mu.Unlock()
-}
-
-func (m *TunnelManager) removeStream(id string) {
-	m.mu.Lock()
-	if w, ok := m.streams[id]; ok {
-		w.cancel()
-		delete(m.streams, id)
-	}
-	m.mu.Unlock()
 }
 
 // RoundTripHTTP is an idpproxy.TunnelSender-compatible adapter around

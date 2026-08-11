@@ -118,7 +118,9 @@ func serve(s TunnelStreamer, cache *BlobCache, log *slog.Logger, w http.Response
 	// progressively instead of one big buffer at the end. When caching, the
 	// same bytes are written to the temp file (published only on full success).
 	fl, _ := w.(http.Flusher)
-	buf := make([]byte, 32*1024)
+	// 1MiB spool：与上游 2MiB chunk 帧匹配，减少逐 32KiB flush 的 syscall 开销，
+	// 仍保持渐进式 flush 让 dockerd 及时看到数据。
+	buf := make([]byte, 1<<20)
 	var wrote int64
 	for {
 		n, rErr := stream.Read(buf)

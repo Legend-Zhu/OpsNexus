@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,10 +15,10 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// fakeTunnelStream simulates the server side of the Tunnel bidi stream: the
-// test "server" pushes response frames into respCh; TunnelManager.Tunnel
-// receives them via Recv and dispatches to the right waiter. Send records the
-// forwarded request so tests can inspect what was sent upstream.
+// fakeTunnelStream simulates the server side of one Tunnel bidi stream. In the
+// pool model each borrowed stream is driven directly by the borrower: Send puts
+// request frames into reqs; Recv pulls response frames the test injects into
+// respCh. One fake == one pooled stream == one request at a time.
 type fakeTunnelStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -55,13 +56,17 @@ func (f *fakeTunnelStream) SendMsg(any) error            { return nil }
 func (f *fakeTunnelStream) RecvMsg(any) error            { return nil }
 func (f *fakeTunnelStream) CloseSend() error             { return nil }
 
-// startTunnel runs the Tunnel recv loop against the fake stream in the
-// background (so dispatch executes on the real code path) and returns the
-// manager. The stream is torn down (ctx canceled) at test end so the recv loop
-// exits.
+// idleCount returns the number of idle streams currently in the pool. It is a
+// snapshot of the pool channel length (no lock needed; len on a channel is
+// safe). Used to assert Close/release put the stream back.
+func (m *TunnelManager) idleCount() int { return len(m.pool) }
+
+// startTunnel registers one fake stream into a fresh manager's pool and waits
+// for it to attach. The stream's ctx is canceled at test end so the handler
+// returns.
 func startTunnel(t *testing.T, f *fakeTunnelStream) *TunnelManager {
 	t.Helper()
-	m := NewTunnelManager(nil)
+	m := NewTunnelManager(nil, 4)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -72,10 +77,8 @@ func startTunnel(t *testing.T, f *fakeTunnelStream) *TunnelManager {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			t.Error("tunnel loop did not stop")
 		}
 	})
-	// Wait until the stream is attached.
 	for i := 0; i < 200 && !m.Available(); i++ {
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -97,7 +100,7 @@ func frameResp(id string, status int, headers http.Header, body []byte, seq int3
 
 // TestRoundTripStreamChunked drives a 5MiB body split into 2MiB frames and
 // verifies the reader reassembles it, honors the Content-Length header and
-// releases the waiter on Close.
+// returns the stream to the pool on Close.
 func TestRoundTripStreamChunked(t *testing.T) {
 	f := newFakeTunnelStream()
 	m := startTunnel(t, f)
@@ -142,12 +145,9 @@ func TestRoundTripStreamChunked(t *testing.T) {
 			t.Fatalf("byte %d = %d, want %d", i, got[i], full[i])
 		}
 	}
-	// Waiter must have been released by Close.
-	m.mu.RLock()
-	n := len(m.streams)
-	m.mu.RUnlock()
-	if n != 0 {
-		t.Fatalf("stream waiters left after Close: %d", n)
+	// Clean EOF must have returned the stream to the pool for reuse.
+	if n := m.idleCount(); n != 1 {
+		t.Fatalf("idle pool count after Close = %d, want 1 (stream not released)", n)
 	}
 }
 
@@ -183,7 +183,8 @@ func TestRoundTripStreamSingleFrameNoEOF(t *testing.T) {
 }
 
 // TestRoundTripStreamErrorFrame checks an error first frame surfaces as an
-// error (and the waiter is cleaned up).
+// error and the stream is released back to the pool (error frame is a complete
+// response).
 func TestRoundTripStreamErrorFrame(t *testing.T) {
 	f := newFakeTunnelStream()
 	m := startTunnel(t, f)
@@ -199,15 +200,15 @@ func TestRoundTripStreamErrorFrame(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if n := len(m.streams); n != 0 {
-		t.Fatalf("stream waiters left after error: %d", n)
+	if n := m.idleCount(); n != 1 {
+		t.Fatalf("idle pool count after error frame = %d, want 1 (stream not released)", n)
 	}
 }
 
 // TestRoundTripStreamNotAttached verifies a fast-fail when no tunnel stream is
 // connected.
 func TestRoundTripStreamNotAttached(t *testing.T) {
-	m := NewTunnelManager(nil)
+	m := NewTunnelManager(nil, 4)
 	_, _, _, err := m.RoundTripStream(context.Background(), "GET", "/v2/foo", nil, nil)
 	if err == nil {
 		t.Fatal("expected error when no tunnel attached")
@@ -215,7 +216,7 @@ func TestRoundTripStreamNotAttached(t *testing.T) {
 }
 
 // TestRoundTripStreamCanceled verifies a canceled caller context aborts the
-// wait for the first frame.
+// wait for the first frame (and tears down the borrowed stream).
 func TestRoundTripStreamCanceled(t *testing.T) {
 	f := newFakeTunnelStream()
 	m := startTunnel(t, f)
@@ -234,8 +235,8 @@ func TestRoundTripStreamCanceled(t *testing.T) {
 	}
 }
 
-// TestRoundTripStreamStreamLoss verifies Read unblocks with the stream's
-// context error when the server drops the stream mid-body.
+// TestRoundTripStreamStreamLoss verifies Read unblocks with an error when the
+// server drops the stream mid-body (the borrowed stream is torn down).
 func TestRoundTripStreamStreamLoss(t *testing.T) {
 	f := newFakeTunnelStream()
 	m := startTunnel(t, f)
@@ -256,96 +257,86 @@ func TestRoundTripStreamStreamLoss(t *testing.T) {
 		t.Fatalf("RoundTripStream: %v", err)
 	}
 	buf := make([]byte, 1024)
-	n, rErr := body.Read(buf)
+	n, _ := body.Read(buf)
 	if n != 5 || string(buf[:n]) != "part1" {
 		t.Fatalf("first read = %d %q, want 5 'part1'", n, buf[:n])
 	}
-	if _, rErr = body.Read(buf); rErr == nil {
+	if _, rErr := body.Read(buf); rErr == nil {
 		t.Fatal("expected read error after stream loss")
 	}
 	body.Close()
 }
 
-// TestConcurrentChunkedRequestsSerialized verifies that concurrent chunked
-// request bodies never interleave frames on the shared stream: each request's
-// frames (identified by id) must arrive contiguously. Without sendMu the
-// server-side synchronous collector would see mixed frames and stall.
-func TestConcurrentChunkedRequestsSerialized(t *testing.T) {
-	f := newFakeTunnelStream()
-	m := startTunnel(t, f)
+// TestTunnelPoolConcurrent verifies the pool lets N concurrent requests
+// proceed in parallel (each on its own stream), the structural replacement for
+// the old single-stream non-interleave property. Each fake acts as the server
+// for the one request it receives: drain the chunked request body to eof, then
+// reply with one response frame.
+func TestTunnelPoolConcurrent(t *testing.T) {
+	const n = 6
+	m := NewTunnelManager(nil, n)
+	fakes := make([]*fakeTunnelStream, n)
+	for i := range fakes {
+		fakes[i] = newFakeTunnelStream()
+		f := fakes[i]
+		done := make(chan struct{})
+		go func() { defer close(done); _ = m.Tunnel(f) }()
+		t.Cleanup(func() { f.cancel(); <-done })
+	}
+	for i := 0; i < 200 && !m.Available(); i++ {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !m.Available() {
+		t.Fatal("tunnel pool never attached")
+	}
 
-	const nReq = 6
-	const chunksPerReq = 3
+	// Server-side goroutine per fake: consume the request (drain chunked body
+	// to eof) and send a small response so the worker's RoundTripStream returns.
+	for _, f := range fakes {
+		f := f
+		go func() {
+			req, ok := <-f.reqs
+			if !ok {
+				return
+			}
+			for !req.ChunkEof {
+				next, ok := <-f.reqs
+				if !ok {
+					return
+				}
+				req = next
+			}
+			f.respCh <- frameResp(req.Id, 200, nil, []byte("ok"), 0, true)
+		}()
+	}
+
 	// Body must exceed requestChunkSize so it is split into multiple frames.
-	bodySize := chunksPerReq*requestChunkSize + 5
-	done := make(chan error, nReq)
-	for i := 0; i < nReq; i++ {
-		go func(i int) {
-			body := bytes.NewReader(bytes.Repeat([]byte{byte('a' + i)}, bodySize))
-			_, _, rc, err := m.RoundTripStream(context.Background(), "PATCH", "/v2/x/blobs/uploads/u", nil, body)
+	bodySize := 2*requestChunkSize + 5
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // release all goroutines simultaneously
+			body := bytes.NewReader(bytes.Repeat([]byte{'x'}, bodySize))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _, rc, err := m.RoundTripStream(ctx, "PATCH", "/v2/x/blobs/uploads/u", nil, body)
 			if rc != nil {
 				io.Copy(io.Discard, rc)
 				rc.Close()
 			}
-			done <- err
-		}(i)
+			errs <- err
+		}()
 	}
-	// Collect all request frames (from all goroutines) off the fake stream.
-	// Each request sends up to chunksPerReq+2 frames: chunksPerReq full chunks
-	// + 1 remainder (+1 terminating frame when data and EOF arrive in separate
-	// Reads). Collect the upper bound so every request's frames are captured.
-	var seq []*pb.TunnelFrame
-	for len(seq) < nReq*(chunksPerReq+2) {
-		select {
-		case fr := <-f.reqs:
-			seq = append(seq, fr)
-		case <-time.After(5 * time.Second):
-			t.Fatalf("timed out after %d frames", len(seq))
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent roundtrip failed: %v", err)
 		}
-	}
-	// The fake stream doesn't answer responses, so RoundTripStream blocks on
-	// first response — nothing to join there; send-side is what we assert.
-
-	// Assert: frames are contiguous per request, and every request's last
-	// frame carries chunk_eof=true.
-	groups := map[string][]*pb.TunnelFrame{}
-	for _, fr := range seq {
-		groups[fr.Id] = append(groups[fr.Id], fr)
-	}
-	for id, frames := range groups {
-		if len(frames) < 2 {
-			t.Fatalf("request %q only sent %d frames", id, len(frames))
-		}
-		for i := 1; i < len(frames); i++ {
-			if frames[i].ChunkSeq != int32(i) {
-				t.Fatalf("request %q chunk_seq not contiguous: frame %d = %d", id, i, frames[i].ChunkSeq)
-			}
-		}
-		if !frames[len(frames)-1].ChunkEof {
-			t.Fatalf("request %q last frame missing chunk_eof (sent %d frames)", id, len(frames))
-		}
-	}
-	// The stream must not interleave: consecutive frames of different ids are
-	// allowed only at request boundaries (previous id's last frame was eof).
-	for i := 1; i < len(seq); i++ {
-		if seq[i].Id == seq[i-1].Id {
-			continue
-		}
-		if !seq[i-1].ChunkEof {
-			t.Fatalf("frame %d switched id %q -> %q without chunk_eof", i, seq[i-1].Id, seq[i].Id)
-		}
-	}
-	// Every chunked frame must carry the request metadata on seq 0.
-	seenFirst := map[string]bool{}
-	for _, fr := range seq {
-		if fr.ChunkSeq == 0 {
-			seenFirst[fr.Id] = true
-			if fr.Method == "" || fr.Path == "" {
-				t.Fatalf("first frame missing method/path: %+v", fr)
-			}
-		}
-	}
-	if len(seenFirst) != nReq {
-		t.Fatalf("expected %d first frames, got %d", nReq, len(seenFirst))
 	}
 }

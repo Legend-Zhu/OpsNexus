@@ -292,7 +292,14 @@ func main() {
 	if isManager {
 		tunnelBase := os.Getenv("OPSGUARD_TUNNEL_BASE") // e.g. http://10.60.171.232:8080
 		if tunnelBase != "" {
-			tunnelMgr = grpcapi.NewTunnelManager(log)
+			tunnelPoolSize := 16
+			if v := os.Getenv("OPSGUARD_TUNNEL_POOL"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					tunnelPoolSize = n
+				}
+			}
+			log.Info("reverse tunnel pool size", "streams", tunnelPoolSize)
+			tunnelMgr = grpcapi.NewTunnelManager(log, tunnelPoolSize)
 			mux.Handle("/idp-proxy/", idpproxy.Handler(idpproxy.Config{
 				PublicIssuer: os.Getenv("OPSGUARD_IDP_PUBLIC_ISSUER"), // e.g. http://172.28.50.176:8080
 				TunnelBase:   tunnelBase,
@@ -334,6 +341,11 @@ func main() {
 			// room); raise the message cap for headroom on both directions.
 			grpc.MaxRecvMsgSize(16<<20),
 			grpc.MaxSendMsgSize(16<<20),
+			// 流控窗口：与 workerproxy client 对称。worker 服务端声明的接收窗口
+			// 决定 server→worker 方向（即镜像 blob pull）能灌多快。默认 64KiB 会
+			// 把单流在途字节卡死，大 blob 拉取塌缩到几十 KB/s。
+			grpc.InitialWindowSize(32<<20),
+			grpc.InitialConnWindowSize(64<<20),
 			grpc.ChainUnaryInterceptor(authzMW.GRPCUnaryInterceptor()),
 			grpc.ChainStreamInterceptor(authzMW.GRPCStreamInterceptor()),
 		)

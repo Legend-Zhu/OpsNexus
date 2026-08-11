@@ -82,6 +82,13 @@ func New(baseURL, token string) *Client {
 			grpc.MaxCallRecvMsgSize(16<<20),
 			grpc.MaxCallSendMsgSize(16<<20),
 		),
+		// 流控窗口：grpc-go 默认每流接收窗口只有 64KiB，单条 HTTP/2 stream 的
+		// 在途字节被卡死在 64KiB，吞吐 ≈ 64KiB/RTT。镜像层动辄几十上百 MiB，
+		// 默认窗口会把它憋成几十 KB/s。这里把客户端声明的接收窗口（决定
+		// worker→server 方向，即 push body 能灌多快）提到 32MiB/流、64MiB/连接，
+		// 与 worker 服务端的对称设置配合，解除数量级瓶颈。
+		grpc.WithInitialWindowSize(32<<20),
+		grpc.WithInitialConnWindowSize(64<<20),
 	)
 	if err != nil {
 		// grpc.NewClient only errors on an invalid target string; fall back to

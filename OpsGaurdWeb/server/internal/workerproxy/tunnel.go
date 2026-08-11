@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy/pb"
@@ -17,11 +18,17 @@ import (
 
 // tunnelChunkSize 是每条响应帧的最大 body 字节数。响应体 ≤ chunkSize 时按
 // 单帧回(旧 worker 不识别分片字段也兼容);更大 body 拆多帧,末帧 chunk_eof=true。
-// 2MiB 远低于 gRPC 默认 4MiB 消息上限,旧端可按原样收单帧。
-// 请求方向(worker→server)的帧由 worker 按同一尺寸切分,server 侧按帧重组。
+// 2MiB 远低于 gRPC 消息上限,旧端可按原样收单帧。
 const tunnelChunkSize = 2 << 20
 
-// RelayConfig 隧道中继策略:路径白名单 + 内嵌 registry 的 basic 凭据。
+// defaultTunnelConcurrency is the number of bidi Tunnel streams the management
+// server opens per worker when RelayConfig.TunnelConcurrency is unset. Each
+// stream serves one request at a time, so this many requests can be in flight
+// concurrently, each on its own HTTP/2 flow-control window. Must match the
+// worker's defaultTunnelPoolSize (both driven by OPSGUARD_TUNNEL_POOL).
+const defaultTunnelConcurrency = 16
+
+// RelayConfig 隧道中继策略:路径白名单 + 内嵌 registry 的 basic 凭据 + 隧道并发。
 type RelayConfig struct {
 	// AllowExtraPaths 额外的允许前缀(默认白名单:IdP 端点 + /v2 镜像仓库)。
 	AllowExtraPaths []string
@@ -29,6 +36,11 @@ type RelayConfig struct {
 	// 集群侧 dockerd 始终匿名访问本地中继点,由本侧代持注入。
 	RegistryUser string
 	RegistryPass string
+	// TunnelConcurrency 是向 worker 打开的并发 Tunnel bidi 流数量(隧道池大小)。
+	// 每条流同一时刻只服务一个请求,故该值决定可并发中继的请求数,每条流独占
+	// 一个 HTTP/2 流控窗口。0(未设置)走 defaultTunnelConcurrency。必须与
+	// worker 侧 OPSGUARD_TUNNEL_POOL 一致。
+	TunnelConcurrency int
 }
 
 // allowedPath 判定隧道转发白名单。非白名单路径一律 403——防止集群内主体
@@ -48,19 +60,18 @@ func allowedPath(p string, relay RelayConfig) bool {
 	return false
 }
 
-// ServeTunnel opens the reverse tunnel bidi stream to the Worker and runs
-// it for the lifetime of one stream: it loops receiving request frames the
-// Worker forwards from in-cluster services (r-nacos IdP, docker registry
-// pull/push), proxies each to the management server's local IdP / embedded OCI
-// registry at localBase, and sends the response frame(s) back over the same
-// stream.
+// ServeTunnel opens a POOL of reverse tunnel bidi streams to the Worker and
+// keeps them open for the cluster's lifetime. Each stream (runOneTunnelStream)
+// is independent: it serves one forwarded HTTP request at a time, proxies it to
+// this management server's local IdP / embedded OCI registry at localBase, and
+// streams the response back over the same stream. A stream that ends (transport
+// error, worker restart, poisoned-by-abort) is reopened independently of the
+// others, so one bad transfer doesn't take the whole tunnel down.
 //
-// localBase is the loopback base of this management server (e.g.
-// "http://127.0.0.1:8080"); the Worker's request path is appended to it.
-//
-// The stream is server-initiated (honoring the one-way network policy) and kept
-// open; the idptunnel manager reconnects on error. This call blocks until the
-// stream ends (ctx cancel, transport error, or Worker disconnect).
+// Opening N streams (rather than the old single shared stream) gives each
+// in-flight request its own HTTP/2 flow-control window and recv loop — that,
+// plus the raised flow-control windows on the gRPC client/server, is what
+// removes the throughput ceiling. Blocks until ctx is canceled.
 func (c *Client) ServeTunnel(ctx context.Context, localBase string, relay RelayConfig, log *slog.Logger) error {
 	if log == nil {
 		log = slog.Default()
@@ -68,26 +79,81 @@ func (c *Client) ServeTunnel(ctx context.Context, localBase string, relay RelayC
 	if c.stub == nil {
 		return &ErrUnreachable{URL: c.target, Err: fmt.Errorf("grpc client not initialized")}
 	}
-	streamCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	// gRPC bidi streams carry per-RPC metadata from the context; the auth token
-	// must be attached here (unary RPCs do it in callCtx, but streams open the
-	// context directly). Without it the Worker's stream interceptor rejects with
-	// Unauthenticated.
-	if c.token != "" {
-		streamCtx = metadata.AppendToOutgoingContext(streamCtx, "authorization", "Bearer "+c.token)
+	n := relay.TunnelConcurrency
+	if n <= 0 {
+		n = defaultTunnelConcurrency
 	}
-	stream, err := c.stub.Tunnel(streamCtx)
-	if err != nil {
-		return c.wrapErr(err)
-	}
-	log.Info("tunnel stream opened", "target", c.target)
 
 	// IdP responses are small JSON — 15s covers them. Registry pulls/pushes
 	// carry multi-hundred-MB blobs and must not be cut by a fixed deadline;
 	// their lifetime is bound to the stream context instead.
 	hcIdp := &http.Client{Timeout: 15 * time.Second}
 	hcRegistry := &http.Client{}
+
+	log.Info("tunnel pool starting", "target", c.target, "streams", n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.runOneTunnelStream(ctx, hcIdp, hcRegistry, localBase, relay, log)
+		}()
+	}
+	wg.Wait()
+	log.Info("tunnel pool stopped", "target", c.target)
+	return ctx.Err()
+}
+
+// runOneTunnelStream opens one bidi stream and serves requests on it until it
+// ends, then reopens with exponential backoff. A stream that cannot be opened
+// (worker unreachable) keeps retrying rather than killing the pool.
+func (c *Client) runOneTunnelStream(ctx context.Context, hcIdp, hcRegistry *http.Client, localBase string, relay RelayConfig, log *slog.Logger) {
+	backoff := time.Second
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		streamCtx := ctx
+		// gRPC bidi streams carry per-RPC metadata from the context; the auth
+		// token must be attached here (unary RPCs do it in callCtx, but streams
+		// open the context directly). Without it the Worker rejects with
+		// Unauthenticated.
+		if c.token != "" {
+			streamCtx = metadata.AppendToOutgoingContext(streamCtx, "authorization", "Bearer "+c.token)
+		}
+		stream, err := c.stub.Tunnel(streamCtx)
+		if err != nil {
+			log.Warn("tunnel stream open failed, retrying", "target", c.target, "err", err)
+		} else {
+			err = c.serveOneStream(ctx, stream, hcIdp, hcRegistry, localBase, relay, log)
+			_ = stream.CloseSend()
+			if err != nil && ctx.Err() == nil {
+				log.Debug("tunnel stream ended, reopening", "target", c.target, "err", err)
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 10*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+// serveOneStream reads forwarded requests off one bidi stream and proxies each
+// to the local IdP/registry, streaming the response back. One stream serves one
+// request at a time (the worker borrows it exclusively per request), so there's
+// no per-id demux and no concurrent Send on this stream — only this loop sends
+// (via proxyOneStream/relayResponse); a request-body pump goroutine only Recvs.
+// Returns (ending the stream) on a transport error or when a multi-frame
+// request body wasn't fully consumed (a poisoned stream); runOneTunnelStream
+// reopens a fresh one.
+func (c *Client) serveOneStream(ctx context.Context, stream pb.ManagementService_TunnelClient, hcIdp, hcRegistry *http.Client, localBase string, relay RelayConfig, log *slog.Logger) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -99,77 +165,89 @@ func (c *Client) ServeTunnel(ctx context.Context, localBase string, relay RelayC
 			}
 			return fmt.Errorf("tunnel recv: %w", err)
 		}
-		// Request framing: req_chunked=true means the body is streamed over
-		// multiple frames (first carries method/path/headers, later ones only
-		// body, last has chunk_eof=true). req_chunked=false (or absent — legacy
-		// worker) is a complete single-frame request whose body is f.Body.
-		if !frame.GetReqChunked() {
-			// Legacy / single-frame request: whole body in f.Body.
-			go func(f *pb.TunnelFrame) {
-				proxyOneStream(stream, hcIdp, hcRegistry, localBase, relay, f, bytes.NewReader(f.Body))
-			}(frame)
-			continue
+		// Build the request body reader. A multi-frame request body is streamed
+		// through an io.Pipe (pumpRequestBody recvs remaining frames and writes
+		// them) so hundred-MB push layers never sit fully in memory.
+		var (
+			body io.Reader = bytes.NewReader(frame.Body)
+			pump *bodyPump
+		)
+		if frame.GetReqChunked() && !frame.ChunkEof {
+			// Multi-frame chunked request: first frame carries method/path/
+			// headers + the first body chunk; the pump feeds the rest.
+			pr, pw := io.Pipe()
+			body = pr
+			pump = &bodyPump{done: make(chan struct{})}
+			go pumpRequestBody(stream, frame, pw, pump)
 		}
-		if frame.GetChunkSeq() == 0 && frame.ChunkEof {
-			// Chunked request that fit in one frame (worker still marks it).
-			go func(f *pb.TunnelFrame) {
-				proxyOneStream(stream, hcIdp, hcRegistry, localBase, relay, f, bytes.NewReader(f.Body))
-			}(frame)
-			continue
-		}
-		if frame.GetChunkSeq() == 0 {
-			// First frame of a multi-frame request: collect the rest.
-			body, err := collectRequestBody(stream, frame)
-			if err != nil {
-				_ = stream.Send(&pb.TunnelFrame{Id: frame.Id, Status: http.StatusBadRequest, ChunkEof: true, Error: "request body: " + err.Error()})
-				continue
+		// proxyOneStream sends the response (success chunked or an error frame).
+		proxyOneStream(stream, hcIdp, hcRegistry, localBase, relay, frame, body)
+		if pump != nil {
+			<-pump.done
+			if !pump.consumed {
+				// The reader gave up before EOF (worker aborted, or the local
+				// registry rejected before consuming the body). Leftover body
+				// frames may still be queued on this stream, so we can't safely
+				// recv the next request on it — recycle the whole stream.
+				return fmt.Errorf("request body not fully consumed; recycling stream")
 			}
-			go func(f *pb.TunnelFrame, rd io.Reader) {
-				proxyOneStream(stream, hcIdp, hcRegistry, localBase, relay, f, rd)
-			}(frame, body)
-			continue
 		}
-		// Body-only frame with no registered first frame (out-of-order/duplicate).
-		log.Warn("tunnel request frame without first frame", "id", frame.Id, "seq", frame.ChunkSeq)
 	}
 }
 
-// collectRequestBody reassembles a multi-frame request body (the first frame
-// is already included in f) into a single in-memory reader. Registry push
-// chunks are bounded by blob/manifest sizes, so buffering is acceptable.
-func collectRequestBody(stream pb.ManagementService_TunnelClient, f *pb.TunnelFrame) (io.Reader, error) {
-	parts := [][]byte{f.Body}
-	lastSeq := f.ChunkSeq
+// bodyPump carries the request-body pump goroutine's completion state back to
+// serveOneStream. consumed is set before done is closed, so reading it after
+// <-done is race-free (channel close establishes happens-before).
+type bodyPump struct {
+	done     chan struct{}
+	consumed bool
+}
+
+// pumpRequestBody drains the remaining chunked request-body frames (the first
+// frame's body is already in first) into pw as the HTTP request body fed to the
+// local registry. It exits when EOF is reached (consumed=true), when the reader
+// stops draining (consumed=false — the request body wasn't fully consumed), or
+// on a stream error (consumed=false).
+func pumpRequestBody(stream pb.ManagementService_TunnelClient, first *pb.TunnelFrame, pw *io.PipeWriter, bp *bodyPump) {
+	defer close(bp.done)
+	defer pw.Close()
+	if len(first.Body) > 0 {
+		if _, err := pw.Write(first.Body); err != nil {
+			return // reader gave up; body not fully consumed
+		}
+	}
+	seq := first.ChunkSeq
 	for {
 		nf, err := stream.Recv()
 		if err != nil {
-			return nil, fmt.Errorf("recv frame %d: %w", lastSeq+1, err)
+			pw.CloseWithError(err)
+			return
 		}
-		if nf.Id != f.Id {
-			// Frames of different requests must not interleave on the stream
-			// (the Worker sends per-request frames sequentially); drop and
-			// retry.
-			continue
+		if nf.ChunkSeq != seq+1 {
+			pw.CloseWithError(fmt.Errorf("tunnel body: out-of-order chunk_seq %d (want %d)", nf.ChunkSeq, seq+1))
+			return
 		}
-		if nf.ChunkSeq != lastSeq+1 {
-			return nil, fmt.Errorf("unexpected chunk_seq %d (want %d)", nf.ChunkSeq, lastSeq+1)
+		if len(nf.Body) > 0 {
+			if _, err := pw.Write(nf.Body); err != nil {
+				return // reader stopped; body not fully consumed
+			}
 		}
-		parts = append(parts, nf.Body)
-		lastSeq = nf.ChunkSeq
+		seq = nf.ChunkSeq
 		if nf.ChunkEof {
-			break
+			bp.consumed = true
+			return
 		}
 	}
-	return bytes.NewReader(bytes.Join(parts, nil)), nil
 }
 
 // proxyOneStream executes one tunneled HTTP request against the local
 // IdP/registry and streams the response back as one or more frames (single
 // frame when the body fits in tunnelChunkSize, chunked otherwise; every
-// completed response carries chunk_eof=true so new workers can trust the flag).
-// rd is the request body reader (the Worker streams push bodies as request
-// frames). On any proxying failure it returns a single error frame so the
-// Worker can surface it to the caller (dockerd fails and retries).
+// completed response carries chunk_eof=true so the worker can trust the flag).
+// rd is the request body reader (a bytes.Reader for single-frame requests, or
+// an io.PipeReader streaming a chunked push body). On any proxying failure it
+// returns a single error frame so the worker can surface it to the caller
+// (dockerd fails and retries).
 func proxyOneStream(stream pb.ManagementService_TunnelClient, hcIdp, hcRegistry *http.Client, localBase string, relay RelayConfig, f *pb.TunnelFrame, rd io.Reader) {
 	if !allowedPath(f.Path, relay) && f.Method != "" {
 		_ = stream.Send(&pb.TunnelFrame{
