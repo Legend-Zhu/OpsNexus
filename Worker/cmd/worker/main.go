@@ -36,6 +36,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/version"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 )
 
 func main() {
@@ -346,6 +347,14 @@ func main() {
 			// 把单流在途字节卡死，大 blob 拉取塌缩到几十 KB/s。
 			grpc.InitialWindowSize(32<<20),
 			grpc.InitialConnWindowSize(64<<20),
+			// Keepalive：管理端重启后，旧连接是半开的（worker 的 Tunnel handler
+			// 阻塞在 ctx.Done 上、不读流，靠 TCP keepalive 默认 ~2h 才发现）。
+			// 这段时间死流留在池里把中继卡死。这里让服务端每 15s ping 一次空闲
+			// 连接、5s 无 ack 判死 → 死流在 ~20s 内被 revoke，borrow 跳过它。
+			grpc.KeepaliveParams(keepalive.ServerParameters{
+				Time:    15 * time.Second,
+				Timeout: 5 * time.Second,
+			}),
 			grpc.ChainUnaryInterceptor(authzMW.GRPCUnaryInterceptor()),
 			grpc.ChainStreamInterceptor(authzMW.GRPCStreamInterceptor()),
 		)

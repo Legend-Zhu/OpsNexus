@@ -107,13 +107,22 @@ func (c *Client) ServeTunnel(ctx context.Context, localBase string, relay RelayC
 // runOneTunnelStream opens one bidi stream and serves requests on it until it
 // ends, then reopens with exponential backoff. A stream that cannot be opened
 // (worker unreachable) keeps retrying rather than killing the pool.
+//
+// Each stream gets its own cancellable context. When serveOneStream returns the
+// context is canceled — this FULLY terminates the gRPC stream (CloseSend alone
+// only half-closes the client→server direction, which the worker can't observe
+// because it never reads a pooled stream until it borrows it for a relay). With
+// the cancel, the worker's Tunnel handler sees ctx.Done() and revokes the dead
+// stream from its pool; without it the stale stream stays borrowable and relay
+// requests sent on it hang until the caller times out (the "context canceled"
+// relay errors that accumulate over long uptime).
 func (c *Client) runOneTunnelStream(ctx context.Context, hcIdp, hcRegistry *http.Client, localBase string, relay RelayConfig, log *slog.Logger) {
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		streamCtx := ctx
+		streamCtx, streamCancel := context.WithCancel(ctx)
 		// gRPC bidi streams carry per-RPC metadata from the context; the auth
 		// token must be attached here (unary RPCs do it in callCtx, but streams
 		// open the context directly). Without it the Worker rejects with
@@ -123,10 +132,12 @@ func (c *Client) runOneTunnelStream(ctx context.Context, hcIdp, hcRegistry *http
 		}
 		stream, err := c.stub.Tunnel(streamCtx)
 		if err != nil {
+			streamCancel()
 			log.Warn("tunnel stream open failed, retrying", "target", c.target, "err", err)
 		} else {
 			err = c.serveOneStream(ctx, stream, hcIdp, hcRegistry, localBase, relay, log)
 			_ = stream.CloseSend()
+			streamCancel() // fully terminate so the worker revokes this stream from its pool
 			if err != nil && ctx.Err() == nil {
 				log.Debug("tunnel stream ended, reopening", "target", c.target, "err", err)
 			}

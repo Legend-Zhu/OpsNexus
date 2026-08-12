@@ -57,9 +57,13 @@ func (f *fakeTunnelStream) RecvMsg(any) error            { return nil }
 func (f *fakeTunnelStream) CloseSend() error             { return nil }
 
 // idleCount returns the number of idle streams currently in the pool. It is a
-// snapshot of the pool channel length (no lock needed; len on a channel is
-// safe). Used to assert Close/release put the stream back.
-func (m *TunnelManager) idleCount() int { return len(m.pool) }
+// snapshot of the idle slice length (under the pool mutex). Used to assert
+// Close/release put the stream back.
+func (m *TunnelManager) idleCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.idle)
+}
 
 // startTunnel registers one fake stream into a fresh manager's pool and waits
 // for it to attach. The stream's ctx is canceled at test end so the handler

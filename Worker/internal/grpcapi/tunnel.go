@@ -50,9 +50,10 @@ type TunnelManager struct {
 	poolSize int
 
 	mu     sync.Mutex
-	pool   chan *tunnelConn         // idle streams available for borrowing (cap = poolSize)
+	idle   []*tunnelConn          // idle streams available for borrowing (uncapped — never drops an offer)
 	live   map[*tunnelConn]struct{} // all attached streams (idle + in-flight); membership == alive
 	closed bool
+	notify chan struct{} // closed to wake blocked borrowers; replaced after each pool change
 	done   chan struct{} // closed when Detach is called, waking all borrowers
 }
 
@@ -77,10 +78,17 @@ func NewTunnelManager(log *slog.Logger, poolSize int) *TunnelManager {
 	return &TunnelManager{
 		log:      log,
 		poolSize: poolSize,
-		pool:     make(chan *tunnelConn, poolSize),
 		live:     map[*tunnelConn]struct{}{},
+		notify:   make(chan struct{}),
 		done:     make(chan struct{}),
 	}
+}
+
+// wake closes the current notify channel (waking every blocked borrower) and
+// substitutes a fresh one for the next pool change. Caller must hold m.mu.
+func (m *TunnelManager) wake() {
+	close(m.notify)
+	m.notify = make(chan struct{})
 }
 
 // Tunnel implements the gRPC bidi handler. One invocation per stream the
@@ -115,7 +123,11 @@ func (m *TunnelManager) Available() bool {
 	return !m.closed && len(m.live) > 0
 }
 
-// offer registers a freshly attached stream as idle in the pool.
+// offer registers a freshly attached stream as idle in the pool. The idle list
+// is uncapped so a freshly-(re)connected server's streams are NEVER dropped
+// even when stale streams from a previous connection still occupy the pool — a
+// capped channel silently dropped new offers in exactly that window (server
+// restart), clogging the pool with dead streams and hanging every relay.
 func (m *TunnelManager) offer(tc *tunnelConn) {
 	m.mu.Lock()
 	if m.closed {
@@ -123,26 +135,23 @@ func (m *TunnelManager) offer(tc *tunnelConn) {
 		return
 	}
 	m.live[tc] = struct{}{}
+	m.idle = append(m.idle, tc)
+	m.wake()
 	m.mu.Unlock()
-	select {
-	case m.pool <- tc:
-	default:
-		// Pool channel full: the server opened more streams than poolSize.
-		// This extra one stays live but unborrowable until something drains.
-		// Does not happen when both sides use the same configured size.
-	}
 }
 
-// revoke drops a stream from the live set. Stale copies still queued in the
-// pool channel are skipped by borrow's liveness check.
+// revoke drops a stream from the live set. The stale entry stays in idle until
+// a borrower skips it (liveness check); wake lets blocked borrowers re-evaluate
+// (they fail fast once no live stream remains).
 func (m *TunnelManager) revoke(tc *tunnelConn) {
 	m.mu.Lock()
 	delete(m.live, tc)
+	m.wake()
 	m.mu.Unlock()
 }
 
 // borrow takes an idle stream from the pool, skipping any that died while
-// queued. It fails fast when no stream is attached at all (tunnel down);
+// queued. It fails fast when no live stream is attached (tunnel down);
 // otherwise it blocks until a stream becomes idle or ctx/manager-close fires.
 func (m *TunnelManager) borrow(ctx context.Context) (*tunnelConn, error) {
 	for {
@@ -151,16 +160,21 @@ func (m *TunnelManager) borrow(ctx context.Context) (*tunnelConn, error) {
 			m.mu.Unlock()
 			return nil, errTunnelNotAttached
 		}
+		// Drain dead entries from the front of idle; return the first live one.
+		// (idle is uncapped, so dead entries never block a live offer.)
+		for len(m.idle) > 0 {
+			tc := m.idle[0]
+			m.idle = m.idle[1:]
+			if _, alive := m.live[tc]; alive {
+				m.mu.Unlock()
+				return tc, nil
+			}
+		}
+		notify := m.notify
 		m.mu.Unlock()
 		select {
-		case tc := <-m.pool:
-			m.mu.Lock()
-			_, alive := m.live[tc]
-			m.mu.Unlock()
-			if !alive {
-				continue // died while queued; discard and retry
-			}
-			return tc, nil
+		case <-notify:
+			// pool changed (offer/release/revoke); re-scan.
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-m.done:
@@ -175,16 +189,11 @@ func (m *TunnelManager) borrow(ctx context.Context) (*tunnelConn, error) {
 func (m *TunnelManager) release(tc *tunnelConn) {
 	m.mu.Lock()
 	_, alive := m.live[tc]
-	closed := m.closed
+	if alive && !m.closed {
+		m.idle = append(m.idle, tc)
+		m.wake()
+	}
 	m.mu.Unlock()
-	if !alive || closed {
-		return
-	}
-	select {
-	case m.pool <- tc:
-	default:
-		// Pool full (size mismatch); drop — revoke runs when the handler exits.
-	}
 }
 
 // teardown forces a borrowed stream's Tunnel handler to return, closing the
@@ -204,6 +213,7 @@ func (m *TunnelManager) Detach() {
 		return
 	}
 	m.closed = true
+	m.wake()
 	m.mu.Unlock()
 	close(m.done)
 	m.log.Info("tunnel pool detached")
