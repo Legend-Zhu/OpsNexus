@@ -82,6 +82,27 @@
           standalone-container 需同时填写容器所在节点的 hostname（node），用于定位并查询该容器
         </div>
         <div v-else class="inv-tip">host-service 填 IP 地址 + 端口（可多个），探活从 node 节点（留空 = 从 manager）发起</div>
+        <el-collapse class="inv-mon">
+          <el-collapse-item name="mon">
+            <template #title>
+              <span class="inv-mon-title">监控配置</span>
+              <el-tag v-if="it.monitoring?.enabled" size="small" type="success" effect="plain">已启用</el-tag>
+              <span v-else class="inv-mon-hint">可选：端口/HTTP/容器存活探测，保存后由 server 周期执行</span>
+            </template>
+            <el-input
+              v-model="it.__monDraft"
+              type="textarea"
+              :rows="5"
+              class="mono"
+              :placeholder="MON_PLACEHOLDER"
+            />
+            <div class="inv-tip">
+              monitoring YAML（enabled 须为 true 才会执行）；纳管对象支持 portChecks / httpChecks / 容器存活，
+              资源阈值与日志检查仅 swarm 服务由 Worker 执行
+            </div>
+            <div v-if="itemErrors[i]?.monitoring" class="inv-mon-error">{{ itemErrors[i].monitoring }}</div>
+          </el-collapse-item>
+        </el-collapse>
       </div>
       <el-empty v-if="!items.length" description="尚未声明任何纳管对象，点「添加条目」或「插入示例」开始" :image-size="60" />
     </template>
@@ -93,10 +114,10 @@
         type="textarea"
         :rows="14"
         class="mono"
-        placeholder="items:&#10;  - name: r-nacos&#10;    type: standalone-container&#10;    ref: r-nacos&#10;    node: node-01&#10;    ports: [8848, 9848, 9849]&#10;    category: middleware"
+        placeholder="items:&#10;  - name: r-nacos&#10;    type: standalone-container&#10;    ref: r-nacos&#10;    node: node-01&#10;    ports: [8848, 9848, 9849]&#10;    category: middleware&#10;    monitoring:&#10;      enabled: true&#10;      portChecks:&#10;        - { port: &quot;8848&quot;, interval: 30s }&#10;      httpChecks:&#10;        - { url: &quot;http://10.0.0.1:8848/nacos/v1/console/health/readiness&quot;, expectedStatus: [200], interval: 60s }&#10;  - name: grafana&#10;    type: host-service&#10;    ref: 10.0.0.10&#10;    ports: [3000]&#10;    category: middleware&#10;    monitoring:&#10;      enabled: true&#10;      portChecks:&#10;        - { port: &quot;3000&quot;, interval: 30s }"
         @blur="syncYamlToForm"
       />
-      <div class="inv-tip">YAML 结构：items 数组，每项含 name / type / ref / node（standalone 必填）/ category / desc；切换回表单时会解析并校验</div>
+      <div class="inv-tip">YAML 结构：items 数组，每项含 name / type / ref / node（standalone 必填）/ ports / category / desc / monitoring（可选，schema 同告警规则）；切换回表单时会解析并校验</div>
     </template>
   </div>
 </template>
@@ -106,7 +127,18 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, MagicStick, Plus } from '@element-plus/icons-vue'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
-import type { InventoryConfig, InventoryItem } from '@/types'
+import type { InventoryConfig, InventoryItem, Monitoring } from '@/types'
+
+/** 表单条目：InventoryItem + 监控配置草稿（__monDraft，textarea 绑定用；
+ * 保存时解析回 monitoring 字段，提交前剥离） */
+type FormItem = InventoryItem & { __monDraft?: string }
+
+/** 监控草稿 placeholder（与告警规则同 schema） */
+const MON_PLACEHOLDER = `enabled: true
+portChecks:
+  - { port: "8848", interval: 30s }
+httpChecks:
+  - { url: "http://10.0.0.1:8848/nacos/v1/console/health/readiness", expectedStatus: [200], interval: 60s }`
 
 const props = defineProps<{
   /** 当前清单（打开编辑器时的快照；null = 空清单） */
@@ -118,9 +150,9 @@ const emit = defineEmits<{
 }>()
 
 const mode = ref<'form' | 'yaml'>('form')
-const items = ref<InventoryItem[]>([])
+const items = ref<FormItem[]>([])
 const yamlText = ref('')
-/** 行级错误：{ [index]: { name?, type?, ref?, node?, category? } } */
+/** 行级错误：{ [index]: { name?, type?, ref?, node?, category?, monitoring? } } */
 const itemErrors = ref<Record<number, Record<string, string>>>({})
 
 const VALID_TYPES = new Set(['standalone-container', 'host-service'])
@@ -145,22 +177,34 @@ watch(
   { immediate: true },
 )
 
-function cloneItems(list: InventoryItem[]): InventoryItem[] {
-  return list.map((it) => ({ ...it }))
+function cloneItems(list: InventoryItem[]): FormItem[] {
+  return list.map((it) => {
+    const copy: FormItem = { ...it, monitoring: it.monitoring ? { ...it.monitoring } : undefined }
+    initMonDraft(copy)
+    return copy
+  })
 }
 
-function dumpItems(list: InventoryItem[]): string {
-  // 空 ports 数组不落 YAML（避免无意义的 `ports: []`）
+/** 监控草稿初始化：已有 monitoring → dump 成 YAML 供 textarea 编辑 */
+function initMonDraft(it: FormItem) {
+  it.__monDraft = it.monitoring ? yamlDump(it.monitoring, { indent: 2, lineWidth: 120 }).trimEnd() : ''
+}
+
+function dumpItems(list: FormItem[]): string {
+  // 空 ports 数组不落 YAML（避免无意义的 `ports: []`）；__monDraft 为表单
+  // 草稿不导出（YAML 模式以 monitoring 字段为准）
   const clean = list.map((it) => {
     const copy = { ...it }
+    delete copy.__monDraft
     if (!copy.ports?.length) delete copy.ports
+    if (!copy.monitoring) delete copy.monitoring
     return copy
   })
   return yamlDump({ items: clean }, { indent: 2, lineWidth: 120 })
 }
 
 function addItem() {
-  items.value.push({
+  const it: FormItem = {
     name: '',
     type: 'standalone-container',
     ref: '',
@@ -168,7 +212,9 @@ function addItem() {
     ports: [],
     category: '',
     desc: '',
-  })
+  }
+  initMonDraft(it)
+  items.value.push(it)
 }
 
 function removeItem(i: number) {
@@ -176,7 +222,9 @@ function removeItem(i: number) {
   delete itemErrors.value[i]
 }
 
-// 示例模板：一个 standalone 容器（r-nacos，多端口）+ 一个宿主机端口服务
+// 示例模板：一个 standalone 容器（r-nacos，多端口 + 端口/HTTP 探测）+
+// 一个宿主机端口服务（grafana，端口探测）。monitoring schema 同告警规则，
+// enabled: true 保存后由 server 侧周期探测执行。
 const SAMPLE: InventoryItem[] = [
   {
     name: 'r-nacos',
@@ -186,6 +234,16 @@ const SAMPLE: InventoryItem[] = [
     ports: ['8848', '9848', '9849'],
     category: 'middleware',
     desc: '注册中心（docker run 部署）',
+    monitoring: {
+      enabled: true,
+      portChecks: [
+        { port: '8848', interval: '30s' },
+        { port: '9848', interval: '30s' },
+      ],
+      httpChecks: [
+        { url: 'http://10.0.0.1:8848/nacos/v1/console/health/readiness', expectedStatus: [200], interval: '60s' },
+      ],
+    },
   },
   {
     name: 'grafana',
@@ -195,6 +253,10 @@ const SAMPLE: InventoryItem[] = [
     node: '',
     category: 'middleware',
     desc: '监控面板（宿主机端口探活）',
+    monitoring: {
+      enabled: true,
+      portChecks: [{ port: '3000', interval: '30s' }],
+    },
   },
 ]
 
@@ -202,7 +264,9 @@ function insertSample() {
   let added = 0
   for (const s of SAMPLE) {
     if (items.value.some((it) => it.name === s.name)) continue
-    items.value.push({ ...s })
+    const copy: FormItem = { ...s, monitoring: s.monitoring ? { ...s.monitoring } : undefined }
+    initMonDraft(copy)
+    items.value.push(copy)
     added++
   }
   if (added > 0) {
@@ -213,7 +277,7 @@ function insertSample() {
 }
 
 // ---- 校验 ----
-function validateItems(list: InventoryItem[]): string | null {
+function validateItems(list: FormItem[]): string | null {
   const seen = new Set<string>()
   for (let i = 0; i < list.length; i++) {
     const it = list[i]
@@ -232,6 +296,23 @@ function validateItems(list: InventoryItem[]): string | null {
     // 端口格式：数字 1-65535
     const badPort = (it.ports ?? []).find((p) => !/^\d{1,5}$/.test(p) || Number(p) < 1 || Number(p) > 65535)
     if (badPort) errs.ports = `端口 ${badPort} 非法（1-65535）`
+    // 监控草稿：非空 → 解析回 monitoring（对象才行）；置空 → 清除 monitoring
+    const draft = (it.__monDraft ?? '').trim()
+    if (draft) {
+      try {
+        const parsed = yamlLoad(draft)
+        if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          errs.monitoring = 'monitoring 须为 YAML 对象'
+        } else {
+          it.monitoring = parsed as Monitoring
+          if (!it.monitoring.enabled) errs.monitoring = 'enabled 须为 true（否则保存后不会执行探测）'
+        }
+      } catch (e: any) {
+        errs.monitoring = 'YAML 解析失败：' + (e?.message ?? String(e))
+      }
+    } else {
+      delete it.monitoring
+    }
     if (Object.keys(errs).length) itemErrors.value[i] = errs
     else delete itemErrors.value[i]
   }
@@ -245,19 +326,28 @@ function switchToYaml() {
   mode.value = 'yaml'
 }
 
-function parseYamlList(): InventoryItem[] | null {
+function parseYamlList(): FormItem[] | null {
   try {
     const obj = yamlLoad(yamlText.value) as { items?: unknown }
     const list = Array.isArray(obj?.items) ? (obj.items as InventoryItem[]) : []
-    return list.map((it) => ({
-      name: String(it.name ?? ''),
-      type: String(it.type ?? '') as InventoryItem['type'],
-      ref: String(it.ref ?? ''),
-      node: String(it.node ?? ''),
-      ports: normalizePorts(it.ports),
-      category: String(it.category ?? ''),
-      desc: String(it.desc ?? ''),
-    }))
+    return list.map((it) => {
+      const copy: FormItem = {
+        name: String(it.name ?? ''),
+        type: String(it.type ?? '') as InventoryItem['type'],
+        ref: String(it.ref ?? ''),
+        node: String(it.node ?? ''),
+        ports: normalizePorts(it.ports),
+        category: String(it.category ?? ''),
+        desc: String(it.desc ?? ''),
+        // monitoring 全字段保留（此前版本静默丢弃，YAML 往返会丢监控配置）
+        monitoring:
+          it.monitoring && typeof it.monitoring === 'object' && !Array.isArray(it.monitoring)
+            ? (it.monitoring as Monitoring)
+            : undefined,
+      }
+      initMonDraft(copy)
+      return copy
+    })
   } catch (e: any) {
     ElMessage.error('YAML 解析失败: ' + (e?.message ?? String(e)))
     return null
@@ -321,7 +411,13 @@ async function doSave() {
       return
     }
   }
-  emit('save', { items: items.value })
+  // 提交前剥离表单草稿字段（__monDraft 不属于 InventoryItem 契约）
+  const payload: InventoryItem[] = items.value.map((it) => {
+    const copy = { ...it }
+    delete copy.__monDraft
+    return copy
+  })
+  emit('save', { items: payload })
 }
 
 defineExpose({ doSave })
@@ -368,5 +464,25 @@ defineExpose({ doSave })
   color: var(--og-text-dim);
   line-height: 1.6;
   margin: 2px 0 10px;
+}
+.inv-mon {
+  margin-bottom: 12px;
+}
+.inv-mon-title {
+  font-size: 13px;
+  margin-right: 8px;
+}
+.inv-mon-hint {
+  font-size: 12px;
+  color: var(--og-text-dim);
+  font-weight: normal;
+}
+.inv-mon-error {
+  font-size: 12px;
+  color: var(--el-color-danger);
+  margin: 4px 0 10px;
+}
+.inv-mon :deep(.el-collapse-item__header) {
+  height: 36px;
 }
 </style>

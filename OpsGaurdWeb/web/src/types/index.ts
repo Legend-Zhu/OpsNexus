@@ -426,6 +426,8 @@ export interface InventoryView {
   desc?: string
   /** 仅 inventory 条目：standalone-container → 容器名；host-service → host:port */
   ref?: string
+  /** 仅 inventory 条目携带（来自清单声明）；swarm 服务的监控配置按名称关联告警规则 */
+  monitoring?: Monitoring
 }
 
 /** 用户（P6） */

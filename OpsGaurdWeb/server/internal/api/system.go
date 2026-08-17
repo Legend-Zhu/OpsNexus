@@ -189,13 +189,13 @@ type ruleRequest struct {
 	Monitoring store.Monitoring `json:"monitoring"`
 }
 
-// ListAlertRules godoc: GET /api/v1/alertrules
+// ListAlertRules godoc: GET /api/v1/alertrules?cluster=
 func (h *Handlers) ListAlertRules(c *gin.Context) {
 	if h.ruleSvc == nil {
 		fail(c, http.StatusServiceUnavailable, "alert rule service not initialized")
 		return
 	}
-	items, err := h.ruleSvc.List()
+	items, err := h.ruleSvc.List(c.Query("cluster"))
 	if err != nil {
 		fail(c, http.StatusInternalServerError, "list rules: "+err.Error())
 		return

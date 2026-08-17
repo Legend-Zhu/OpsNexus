@@ -24,14 +24,16 @@ func AlertTitle(cluster string, e *store.IngestEvent) string {
 		return fmt.Sprintf("[%s] 日志异常匹配：%s", cluster, e.Msg)
 	case store.EventResourceOver:
 		return fmt.Sprintf("[%s] 资源超限：%s", cluster, e.Msg)
+	case store.EventContainerDown:
+		return fmt.Sprintf("[%s] 容器不可用：%s", cluster, e.Msg)
 	default:
 		return fmt.Sprintf("[%s] %s：%s", cluster, e.Type, e.Msg)
 	}
 }
 
-// RecoverTypeOf 判断事件是否触发恢复（resource_recovered 或 info 级恢复语义）。
+// RecoverTypeOf 判断事件是否触发恢复（resource_recovered / recovered 通用恢复）。
 func RecoverTypeOf(e *store.IngestEvent) bool {
-	return e.Type == store.EventResourceRecover
+	return e.Type == store.EventResourceRecover || e.Type == store.EventRecovered
 }
 
 // Service 处理 webhook 推送并维护告警。

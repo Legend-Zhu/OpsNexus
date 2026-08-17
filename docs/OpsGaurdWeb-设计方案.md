@@ -159,6 +159,9 @@ server/internal/
 │                   #   + AI 报告 + 报告渠道投递 + 异常转告警闭环（✅ P5/P8）
 ├── notify/         # 通知：渠道（可配置不预设）/策略/记录 + 互联网代理转发 + 通用 Send（✅ P6/P8）
 ├── alertrule/      # 告警规则：管理 Worker monitoring config（决策⑦）+ 下发（✅ P6）
+│                   #   + 纳管对象下发（写入 InventoryItem.Monitoring）+ 清单↔规则双向同步
+├── invmonitor/     # 纳管对象监控调度器：对 inventory 条目的 monitoring 做 server 侧周期探测
+│                   #   （CheckPort/CheckHTTP/NodeContainers，状态翻转 → ingest 聚合成告警）
 ├── auth/           # 认证：本地用户（加盐哈希 + HMAC token）+ OIDC/SSO 抽象 + 中间件（✅ P6）
 ├── registry/       # 内嵌镜像仓库：OCI /v2（pull/push/catalog/tags/delete，basic auth）
 │                   #   + 页面传包构建（docker CLI，任务状态机）+ 保留策略/GC（✅ P9）
@@ -187,6 +190,15 @@ GET         /api/v1/clusters/:name/workloads/:service/logs   # SSE 流式（Work
 GET         /api/v1/clusters/:name/events       # 查询已入管理端的事件（由 gRPC SubscribeEvents 订阅落库）
 GET         /api/v1/clusters/:name/audit        # Worker /audit
 GET         /api/v1/clusters/:name/metrics      # 节点资源聚合（Worker /local/stats）
+
+# 告警规则（集群级监控配置管理；service = swarm 服务名或纳管对象名）
+GET         /api/v1/alertrules[?cluster=]       # 规则列表（可按集群过滤，集群详情页「告警规则」tab）
+PUT         /api/v1/alertrules                  # 保存规则（校验 monitoring）
+POST        /api/v1/alertrules/apply            # 下发：swarm → 合并进服务 config 推 Worker Update；
+                                                #       纳管对象 → 写入 InventoryItem.Monitoring，server 侧
+                                                #       invmonitor 调度器周期探测（CheckPort/CheckHTTP/容器存活，
+                                                #       状态翻转经 ingest 聚合成告警，恢复自动关闭）
+DELETE      /api/v1/alertrules/:cluster/:service
 
 # AiNexus 整合（内嵌网关，不单独起服务）
 GET         /api/v1/ainexus/health                # 内嵌网关健康（providers/models/tools/mcp）

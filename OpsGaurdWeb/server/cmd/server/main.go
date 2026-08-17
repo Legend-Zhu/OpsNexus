@@ -23,6 +23,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/idp"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/idptunnel"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/invmonitor"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/registry"
@@ -133,6 +134,14 @@ func main() {
 
 	// 告警规则服务（P6：管理 Worker monitoring config）
 	h.SetAlertRuleService(alertrule.New(st, clusterSvc))
+
+	// 纳管对象监控调度器：执行 inventory 条目（standalone-container /
+	// host-service）声明的 monitoring——经 workerproxy 一次性探测原语
+	// （CheckPort/CheckHTTP/NodeContainers）做周期探测，状态翻转事件走
+	// ingestSvc 同一管线聚合成告警。swarm 服务由 Worker 侧 monitor 负责。
+	invmonSvc := invmonitor.New(st, clusterSvc, ingestSvc, log)
+	invmonSvc.Start()
+	defer invmonSvc.Stop()
 
 	// 认证服务（P6：本地用户 + SSO/OIDC 抽象）
 	authSvc := auth.New(st, cfg.Auth.TokenSecret, parseDuration(cfg.Auth.TokenTTL, 24*time.Hour), oidcFromConfig(cfg.Auth.SSO))

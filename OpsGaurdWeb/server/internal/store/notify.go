@@ -128,6 +128,41 @@ type ResourceThreshold struct {
 	Action    string `json:"action,omitempty"`
 }
 
+// ValidateMonitoring 校验 monitoring 块基本约束（AlertRule 与 InventoryItem
+// 共用；调用方按需包装错误类型）。
+func ValidateMonitoring(m *Monitoring) error {
+	if m == nil {
+		return nil
+	}
+	for i, rc := range m.ResourceThresholds {
+		if rc.Metric != "cpu" && rc.Metric != "memory" {
+			return fmt.Errorf("resourceThresholds[%d].metric must be cpu|memory", i)
+		}
+		if rc.Threshold <= 0 || rc.Threshold > 100 {
+			return fmt.Errorf("resourceThresholds[%d].threshold must be 1-100", i)
+		}
+	}
+	for i, pc := range m.PortChecks {
+		if pc.Port == "" {
+			return fmt.Errorf("portChecks[%d].port is required", i)
+		}
+		if !validPort(pc.Port) {
+			return fmt.Errorf("portChecks[%d].port %q must be 1-65535", i, pc.Port)
+		}
+	}
+	for i, hc := range m.HTTPChecks {
+		if hc.URL == "" {
+			return fmt.Errorf("httpChecks[%d].url is required", i)
+		}
+	}
+	for i, lc := range m.LogChecks {
+		if lc.Pattern == "" {
+			return fmt.Errorf("logChecks[%d].pattern is required", i)
+		}
+	}
+	return nil
+}
+
 // --- 用户 ---
 
 // User 平台用户（本地 fallback；SSO 用户经 OIDC 同步）。
@@ -346,10 +381,14 @@ func (s *Store) DeleteAlertRule(cluster, service string) error {
 	return s.db.Delete([]byte(alertRuleKey(cluster, service)), nil)
 }
 
-// ListAlertRules 列出全部规则。
-func (s *Store) ListAlertRules() ([]*AlertRule, error) {
+// ListAlertRules 列出规则；cluster 非空时按 alertrule/<cluster>/ 前缀过滤。
+func (s *Store) ListAlertRules(cluster string) ([]*AlertRule, error) {
+	prefix := "alertrule/"
+	if cluster != "" {
+		prefix += cluster + "/"
+	}
 	var out []*AlertRule
-	err := s.iterate("alertrule/", func(_ string, value []byte) error {
+	err := s.iterate(prefix, func(_ string, value []byte) error {
 		var r AlertRule
 		if err := json.Unmarshal(value, &r); err != nil {
 			return fmt.Errorf("decode alert rule: %w", err)

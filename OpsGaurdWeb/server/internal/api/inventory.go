@@ -31,6 +31,9 @@ type InventoryView struct {
 	// Ref 仅 inventory 条目携带：standalone-container → 容器名；host-service → host:port。
 	// 前端"重启容器"等操作需要它（Name 只是展示名）。
 	Ref string `json:"ref,omitempty"`
+	// Monitoring 仅 inventory 条目携带（来自清单声明）。swarm 服务的监控配置
+	// 在 Worker 服务配置里，管理端副本见告警规则（alertrule），前端按名称关联。
+	Monitoring *store.Monitoring `json:"monitoring,omitempty"`
 }
 
 // GetInventory GET /api/v1/clusters/:name/inventory
@@ -113,7 +116,8 @@ func (h *Handlers) GetInventory(c *gin.Context) {
 // UpsertInventory PUT /api/v1/clusters/:name/inventory
 //
 // 整体替换集群纳管清单（外部对象声明）。校验通过后落库，返回更新后的
-// inventory 配置。
+// inventory 配置。保存后同步告警规则：带 monitoring 的条目各自 upsert 一条
+// 规则记录，使规则列表成为全集群监控配置的统一视图。
 func (h *Handlers) UpsertInventory(c *gin.Context) {
 	if h.clusters == nil {
 		fail(c, http.StatusServiceUnavailable, "cluster service not initialized")
@@ -124,7 +128,13 @@ func (h *Handlers) UpsertInventory(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid inventory: "+err.Error())
 		return
 	}
-	clusterRec, err := h.clusters.UpdateInventory(c.Request.Context(), c.Param("name"), &inv)
+	name := c.Param("name")
+	// 同步前抓旧清单（规则同步的 diff 基准）；读失败不阻断保存。
+	var oldInv *store.InventoryConfig
+	if rec, err := h.clusters.GetStatic(name); err == nil && rec != nil {
+		oldInv = rec.Inventory
+	}
+	clusterRec, err := h.clusters.UpdateInventory(c.Request.Context(), name, &inv)
 	if err != nil {
 		var nf cluster.ErrNotFound
 		if errors.As(err, &nf) {
@@ -133,6 +143,12 @@ func (h *Handlers) UpsertInventory(c *gin.Context) {
 		}
 		fail(c, http.StatusBadRequest, err.Error())
 		return
+	}
+	if h.ruleSvc != nil {
+		if err := h.ruleSvc.SyncFromInventory(name, oldInv, &inv); err != nil {
+			// 清单已落库，规则同步失败仅记录（下轮保存会再同步），不阻断响应。
+			_ = c.Error(fmt.Errorf("rule sync from inventory: %w", err))
+		}
 	}
 	ok(c, http.StatusOK, clusterRec.Public().Inventory)
 }
@@ -149,14 +165,15 @@ func probeInventoryItem(
 	item store.InventoryItem,
 ) InventoryView {
 	v := InventoryView{
-		Name:     item.Name,
-		Type:     item.Type,
-		Category: item.Category,
-		Source:   "inventory",
-		Node:     item.Node,
-		Ref:      item.Ref,
-		Desc:     item.Desc,
-		Status:   "unknown",
+		Name:       item.Name,
+		Type:       item.Type,
+		Category:   item.Category,
+		Source:     "inventory",
+		Node:       item.Node,
+		Ref:        item.Ref,
+		Desc:       item.Desc,
+		Monitoring: item.Monitoring,
+		Status:     "unknown",
 	}
 
 	switch item.Type {

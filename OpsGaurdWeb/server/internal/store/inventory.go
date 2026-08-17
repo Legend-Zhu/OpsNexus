@@ -74,6 +74,9 @@ func (item *InventoryItem) Validate() error {
 			return fmt.Errorf("inventory item %q: invalid port %q (want 1-65535)", item.Name, p)
 		}
 	}
+	if err := ValidateMonitoring(item.Monitoring); err != nil {
+		return fmt.Errorf("inventory item %q: monitoring: %w", item.Name, err)
+	}
 	return nil
 }
 

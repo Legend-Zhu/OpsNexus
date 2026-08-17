@@ -35,6 +35,12 @@ const (
 	EventLogMatch        EventType = "log_match"
 	EventResourceOver    EventType = "resource_over"
 	EventResourceRecover EventType = "resource_recovered"
+	// EventContainerDown 容器失联/停止（非 Worker 事件，由 server 侧 invmonitor
+	// 对 standalone-container 纳管对象做存活探测时产生）。
+	EventContainerDown EventType = "container_down"
+	// EventRecovered 通用恢复事件（非 Worker 事件，由 server 侧 invmonitor 在
+	// 纳管对象探测从失败翻转为成功时产生），触发对应服务告警关闭。
+	EventRecovered EventType = "recovered"
 	// EventPatrolFailed 巡检异常转告警（非 Worker 事件，由 patrol syncAlerts 产生，
 	// 告警 ID 用 AlertIDWithKey 按检查项细分）。
 	EventPatrolFailed EventType = "patrol_failed"

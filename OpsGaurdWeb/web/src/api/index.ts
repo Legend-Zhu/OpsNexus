@@ -152,9 +152,9 @@ export const notifyApi = {
   records: (limit = 50) => get<{ items: NotifyRecord[] }>('/v1/notify/records', { params: { limit } }),
 }
 
-// ---- 告警规则（P6） ----
+// ---- 告警规则（P6；list 可按集群过滤） ----
 export const alertRuleApi = {
-  list: () => get<{ items: AlertRule[] }>('/v1/alertrules'),
+  list: (cluster?: string) => get<{ items: AlertRule[] }>('/v1/alertrules', { params: cluster ? { cluster } : {} }),
   upsert: (body: Partial<AlertRule>) => put<AlertRule>('/v1/alertrules', body),
   apply: (body: Partial<AlertRule>) => post<AlertRule>('/v1/alertrules/apply', body),
   remove: (cluster: string, service: string) => del<{ deleted: string }>(`/v1/alertrules/${cluster}/${service}`),

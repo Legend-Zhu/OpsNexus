@@ -178,6 +178,12 @@
           </el-table-column>
           <el-table-column label="节点" prop="node" width="130" />
           <el-table-column label="端口" prop="ports" min-width="120" show-overflow-tooltip />
+          <el-table-column label="监控" width="80">
+            <template #default="{ row }">
+              <el-tag v-if="hasMonitoring(row)" size="small" type="success" effect="plain">已配置</el-tag>
+              <span v-else class="og-dim">—</span>
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="250" fixed="right">
             <template #default="{ row }">
               <template v-if="row.source === 'swarm'">
@@ -247,6 +253,69 @@
           <el-button :loading="eventsLoading" @click="loadEvents(true)">加载更多</el-button>
         </div>
       </el-tab-pane>
+
+      <!-- 告警规则：本集群全部监控配置的统一管理（swarm 服务 + 纳管对象） -->
+      <el-tab-pane :label="`告警规则 (${rules.length})`" name="rules">
+        <div class="tab-toolbar">
+          <span class="og-dim">swarm 服务「下发」推送 Worker 生效；纳管对象「下发」写入纳管清单，由 server 探测执行</span>
+          <div>
+            <el-button size="small" :icon="Refresh" @click="loadRules()">刷新</el-button>
+            <el-button size="small" type="primary" :icon="Plus" @click="openRule()">新增规则</el-button>
+          </div>
+        </div>
+        <el-table v-loading="rulesLoading" :data="rules" size="small" empty-text="暂无告警规则（点「新增规则」为本集群服务/纳管对象配置监控）">
+          <el-table-column label="服务/对象" min-width="130">
+            <template #default="{ row }">
+              <span class="mono">{{ row.service }}</span>
+              <el-tag size="small" effect="plain" :type="ruleSource(row) === 'inventory' ? 'warning' : 'info'" class="rule-src">
+                {{ ruleSource(row) === 'inventory' ? '纳管' : 'swarm' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="端口探测" min-width="110">
+            <template #default="{ row }">
+              <el-tag v-for="p in row.monitoring?.portChecks ?? []" :key="p.port" size="small" class="rule-tag">
+                :{{ p.port }}
+              </el-tag>
+              <span v-if="!row.monitoring?.portChecks?.length" class="og-dim">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="HTTP 检查" min-width="130">
+            <template #default="{ row }">
+              <el-tag v-for="h in row.monitoring?.httpChecks ?? []" :key="h.url" size="small" class="rule-tag">
+                {{ h.method ?? 'GET' }} {{ h.url }}
+              </el-tag>
+              <span v-if="!row.monitoring?.httpChecks?.length" class="og-dim">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="日志检查" min-width="110">
+            <template #default="{ row }">
+              <el-tag v-for="l in row.monitoring?.logChecks ?? []" :key="l.pattern" size="small" type="danger" effect="plain" class="rule-tag">
+                /{{ l.pattern }}/
+              </el-tag>
+              <span v-if="!row.monitoring?.logChecks?.length" class="og-dim">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="资源阈值" min-width="120">
+            <template #default="{ row }">
+              <el-tag v-for="r in row.monitoring?.resourceThresholds ?? []" :key="r.metric" size="small" type="warning" class="rule-tag">
+                {{ r.metric }}>{{ r.threshold }}%
+              </el-tag>
+              <span v-if="!row.monitoring?.resourceThresholds?.length" class="og-dim">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="更新时间" width="160">
+            <template #default="{ row }">{{ row.updated_at ? new Date(row.updated_at).toLocaleString() : '—' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="170" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openRule(row)">编辑</el-button>
+              <el-button link type="success" :loading="applyingRule === row.service" @click="applyRule(row)">下发</el-button>
+              <el-button link type="danger" @click="removeRule(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
     </el-tabs>
 
     <!-- 部署/编辑对话框 -->
@@ -282,7 +351,9 @@ monitoring:
     - { port: &quot;8080&quot; }"
           />
           <div v-if="deployMode === 'edit' && !deployHasSnapshot" class="edit-no-snapshot">
-            无历史配置快照（服务可能由外部创建）——保存将以当前输入整体替换服务配置，请谨慎填写
+            无历史配置快照（服务可能由外部创建）——保存将以当前输入整体替换服务配置，请谨慎填写{{
+              deployMonitoringRestored ? '；监控配置已从告警规则自动恢复，请确认后保存' : ''
+            }}
           </div>
         </el-form-item>
         <el-form-item>
@@ -319,6 +390,70 @@ monitoring:
         <el-button type="primary" :loading="deploying" @click="deploy">
           {{ deployMode === 'edit' ? '保存' : '部署' }}
         </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 告警规则编辑对话框（表单 / 高级 YAML 双模式） -->
+    <el-dialog v-model="ruleVisible" title="编辑告警规则" width="640px">
+      <el-form label-width="90px">
+        <el-form-item label="集群">
+          <el-tag>{{ clusterName }}</el-tag>
+        </el-form-item>
+        <el-form-item label="监控对象" required>
+          <el-select v-model="ruleForm.service" style="width: 100%" filterable placeholder="选择本集群的 swarm 服务或纳管对象">
+            <el-option-group label="swarm 服务">
+              <el-option v-for="v in ruleTargets.swarm" :key="v" :label="v" :value="v" />
+            </el-option-group>
+            <el-option-group label="纳管对象">
+              <el-option v-for="v in ruleTargets.inventory" :key="v" :label="v" :value="v" />
+            </el-option-group>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="配置方式">
+          <el-radio-group v-model="ruleMode">
+            <el-radio-button value="form">表单</el-radio-button>
+            <el-radio-button value="yaml">高级 YAML</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <template v-if="ruleMode === 'form'">
+          <el-form-item label="CPU 阈值 %">
+            <el-input-number v-model="ruleForm.cpuThreshold" :min="0" :max="100" />
+            <span class="og-dim rule-hint">0 = 不检查（纳管对象暂不执行，仅 swarm 服务）</span>
+          </el-form-item>
+          <el-form-item label="内存阈值 %">
+            <el-input-number v-model="ruleForm.memThreshold" :min="0" :max="100" />
+            <span class="og-dim rule-hint">0 = 不检查（同上）</span>
+          </el-form-item>
+          <el-form-item label="端口探测">
+            <el-input v-model="ruleForm.ports" placeholder="逗号分隔，如 8080,9090（空 = 不检查）" />
+          </el-form-item>
+          <el-form-item label="HTTP 检查">
+            <el-input v-model="ruleForm.httpUrl" placeholder="如 http://10.0.0.1:8080/health（空 = 不检查）" />
+          </el-form-item>
+        </template>
+        <el-form-item v-else label="monitoring" required>
+          <el-input
+            v-model="ruleYaml"
+            type="textarea"
+            :rows="12"
+            class="mono"
+            placeholder="完整 monitoring 块（YAML），示例：
+enabled: true
+portChecks:
+  - { port: &quot;8848&quot;, interval: 30s }
+httpChecks:
+  - { url: &quot;http://10.0.0.1:8848/nacos/v1/console/health/readiness&quot;, expectedStatus: [200], interval: 60s }
+logChecks:
+  - { pattern: &quot;ERROR|Exception&quot;, level: error, action: alert }
+resourceThresholds:
+  - { metric: memory, threshold: 85, action: alert }"
+          />
+          <div class="og-dim rule-hint">字段契约见部署对话框「配置字段说明」；logChecks 仅 swarm 服务由 Worker 执行</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="ruleVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingRule" @click="saveRule">保存</el-button>
       </template>
     </el-dialog>
 
@@ -406,8 +541,9 @@ import { useRoute } from 'vue-router'
 import { Back, Plus, Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import InventoryEditor from '@/components/InventoryEditor.vue'
-import { clusterApi, eventApi, inventoryApi, nodeApi, workloadApi } from '@/api'
-import type { ClusterNode, ClusterSummary, ContainerInfo, EventItem, InventoryConfig, InventoryView, LogLine, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
+import { alertRuleApi, clusterApi, eventApi, inventoryApi, nodeApi, workloadApi } from '@/api'
+import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
+import type { AlertRule, ClusterNode, ClusterSummary, ContainerInfo, EventItem, InventoryConfig, InventoryView, LogLine, Monitoring, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
 
 const route = useRoute()
 const clusterName = computed(() => route.params.name as string)
@@ -501,6 +637,137 @@ const eventsAfterSeq = ref(0)
 /** 事件 tab 最近一次加载时间（懒加载节流） */
 const eventsLoadedAt = ref(0)
 
+// ---- 告警规则（本集群监控配置统一管理） ----
+const rules = ref<AlertRule[]>([])
+const rulesLoading = ref(false)
+/** 规则 tab 最近一次加载时间（懒加载节流） */
+const rulesLoadedAt = ref(0)
+const ruleVisible = ref(false)
+const savingRule = ref(false)
+/** 正在下发的规则 service（空串 = 无） */
+const applyingRule = ref('')
+/** 编辑模式：form = 简表（阈值/端口/HTTP）；yaml = 完整 monitoring 块 */
+const ruleMode = ref<'form' | 'yaml'>('form')
+const ruleYaml = ref('')
+const ruleForm = reactive({
+  service: '',
+  cpuThreshold: 0,
+  memThreshold: 0,
+  ports: '',
+  httpUrl: '',
+})
+
+/** 规则监控对象下拉选项：本集群 swarm 服务 + 纳管对象（分组） */
+const ruleTargets = computed(() => ({
+  swarm: inventoryViews.value.filter((v) => v.source === 'swarm').map((v) => v.name),
+  inventory: inventoryViews.value.filter((v) => v.source === 'inventory').map((v) => v.name),
+}))
+
+/** 规则来源：service 名命中纳管清单 → inventory，否则视为 swarm 服务 */
+function ruleSource(rule: AlertRule): 'swarm' | 'inventory' {
+  return inventoryViews.value.some((v) => v.source === 'inventory' && v.name === rule.service) ? 'inventory' : 'swarm'
+}
+
+/** 服务列表「监控」列：swarm 行按规则关联，纳管行看清单声明 */
+function hasMonitoring(row: InventoryView): boolean {
+  if (row.source === 'inventory') return !!row.monitoring?.enabled
+  return rules.value.some((r) => r.service === row.name)
+}
+
+async function loadRules() {
+  rulesLoading.value = true
+  try {
+    const resp = await alertRuleApi.list(clusterName.value)
+    rules.value = resp.items ?? []
+    rulesLoadedAt.value = Date.now()
+  } catch {
+    rules.value = []
+  } finally {
+    rulesLoading.value = false
+  }
+}
+
+function openRule(row?: AlertRule) {
+  Object.assign(ruleForm, {
+    service: row?.service ?? '',
+    cpuThreshold: row?.monitoring?.resourceThresholds?.find((x) => x.metric === 'cpu')?.threshold ?? 0,
+    memThreshold: row?.monitoring?.resourceThresholds?.find((x) => x.metric === 'memory')?.threshold ?? 0,
+    ports: (row?.monitoring?.portChecks ?? []).map((p) => p.port).join(','),
+    httpUrl: row?.monitoring?.httpChecks?.[0]?.url ?? '',
+  })
+  ruleYaml.value = yamlDump(row?.monitoring ?? { enabled: true })
+  ruleMode.value = 'form'
+  ruleVisible.value = true
+}
+
+function buildRuleMonitoring(): Monitoring {
+  const monitoring: Monitoring = { enabled: true }
+  const thresholds: NonNullable<Monitoring['resourceThresholds']> = []
+  if (ruleForm.cpuThreshold > 0) thresholds.push({ metric: 'cpu', threshold: ruleForm.cpuThreshold })
+  if (ruleForm.memThreshold > 0) thresholds.push({ metric: 'memory', threshold: ruleForm.memThreshold })
+  if (thresholds.length) monitoring.resourceThresholds = thresholds
+  const ports = ruleForm.ports.split(',').map((s) => s.trim()).filter(Boolean)
+  if (ports.length) monitoring.portChecks = ports.map((port) => ({ port }))
+  if (ruleForm.httpUrl.trim()) {
+    monitoring.httpChecks = [{ url: ruleForm.httpUrl.trim(), expectedStatus: [200] }]
+  }
+  return monitoring
+}
+
+async function saveRule() {
+  if (!ruleForm.service.trim()) {
+    ElMessage.warning('请选择监控对象')
+    return
+  }
+  let monitoring: Monitoring
+  if (ruleMode.value === 'yaml') {
+    try {
+      const parsed = yamlLoad(ruleYaml.value)
+      if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        ElMessage.error('monitoring 须为 YAML 对象')
+        return
+      }
+      monitoring = parsed as Monitoring
+    } catch (e) {
+      ElMessage.error('YAML 解析失败：' + (e as Error).message)
+      return
+    }
+  } else {
+    monitoring = buildRuleMonitoring()
+  }
+  savingRule.value = true
+  try {
+    await alertRuleApi.upsert({ cluster: clusterName.value, service: ruleForm.service.trim(), monitoring })
+    ElMessage.success('已保存（点「下发」推送生效）')
+    ruleVisible.value = false
+    await loadRules()
+  } catch {
+    // 错误已由 http.ts 提示
+  } finally {
+    savingRule.value = false
+  }
+}
+
+async function applyRule(row: AlertRule) {
+  applyingRule.value = row.service
+  try {
+    await alertRuleApi.apply(row)
+    ElMessage.success(ruleSource(row) === 'inventory' ? '已下发：写入纳管清单，由 server 探测执行' : '已下发到 Worker')
+    await loadRules()
+  } catch {
+    // 错误已提示
+  } finally {
+    applyingRule.value = ''
+  }
+}
+
+async function removeRule(row: AlertRule) {
+  await ElMessageBox.confirm(`删除规则 ${row.service}？（不会改动服务当前已生效的监控配置）`, '删除规则', { type: 'warning' })
+  await alertRuleApi.remove(row.cluster, row.service)
+  ElMessage.success('已删除')
+  await loadRules()
+}
+
 // 部署/编辑/缩放/详情
 const deployVisible = ref(false)
 const deployConfig = ref('')
@@ -510,6 +777,8 @@ const deploying = ref(false)
 const deployMode = ref<'deploy' | 'edit'>('deploy')
 const deployTarget = ref('')
 const deployHasSnapshot = ref(false)
+/** 编辑时监控配置已从告警规则恢复（无快照场景），用于警告条文案 */
+const deployMonitoringRestored = ref(false)
 const scaleVisible = ref(false)
 const scaleReplicas = ref(1)
 const scaling = ref(false)
@@ -824,22 +1093,34 @@ function openDeploy() {
   deployMode.value = 'deploy'
   deployTarget.value = ''
   deployHasSnapshot.value = false
-  deployConfig.value = `service:\n  name: web\n  image: nginx:alpine\n  replicas: 1\n  labels:\n    category: ${deployCategory.value}\n  ports:\n    - { target: 80, published: 8080 }\n# monitoring:              # 可选：监控（端口/HTTP/日志/资源阈值）\n#   enabled: true\n#   portChecks:\n#     - { port: "8080" }\n#   httpChecks:\n#     - { url: "http://localhost:8080/health", expectedStatus: [200] }`
+  deployMonitoringRestored.value = false
+  deployConfig.value = `service:\n  name: web\n  image: nginx:alpine\n  replicas: 1\n  labels:\n    category: ${deployCategory.value}\n  ports:\n    - { target: 80, published: 8080 }\n# monitoring:                     # 可选：监控（异常进告警中心并按级别策略通知）\n#   enabled: true\n#   portChecks:                   # TCP 探测已发布端口，连续失败发 port_down\n#     - { port: "8080", interval: 10s, timeout: 3s, retries: 2 }\n#   httpChecks:                   # 发 http_unhealthy；url 用 localhost 自动重写为任务节点 IP\n#     - { url: "http://localhost:8080/health", expectedStatus: [200], interval: 15s, timeout: 5s }\n#   logChecks:                    # 日志匹配告警或自动重启\n#     - { pattern: "ERROR|Exception|panic", level: error, action: alert }\n#   resourceThresholds:           # 资源超限告警或自动重启\n#     - { metric: cpu, threshold: 80, action: alert }\n#     - { metric: memory, threshold: 85, action: alert }`
   deployVisible.value = true
 }
 
-// 编辑已有服务：预填最近一次部署/更新的配置快照（svccfg）
+// 编辑已有服务：预填最近一次部署/更新的配置快照（svccfg）。无快照时若该服务
+// 存在告警规则，把规则 monitoring 合并回配置——Worker Update 是整体替换语义，
+// 不带 monitoring 保存会把已生效监控静默清掉。
 async function openEditService(row: InventoryView) {
   deployMode.value = 'edit'
   deployTarget.value = row.name
   deployVisible.value = true
   deploying.value = true
+  deployMonitoringRestored.value = false
   try {
     const detail = await workloadApi.get(clusterName.value, row.name)
     deployHasSnapshot.value = !!detail.config
-    deployConfig.value =
+    let config =
       detail.config ??
       `service:\n  name: ${row.name}\n  image: ${row.image || ''}\n  replicas: 1\n# 无历史配置快照——将整体替换服务配置`
+    if (!detail.config) {
+      const rule = rules.value.find((r) => r.service === row.name)
+      if (rule && !/^\s*monitoring:/m.test(config)) {
+        config += '\n# 监控配置已从告警规则恢复（无配置快照，防止编辑后监控丢失）\n' + yamlDump({ monitoring: rule.monitoring }).trimEnd()
+        deployMonitoringRestored.value = true
+      }
+    }
+    deployConfig.value = config
     if (row.category) deployCategory.value = row.category
   } catch {
     deployHasSnapshot.value = false
@@ -1039,9 +1320,10 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-// 切 Tab 时按需加载：事件懒加载（30s 内不重复拉）；服务/中间件在 onMounted 预载
+// 切 Tab 时按需加载：事件/规则懒加载（30s 内不重复拉）；服务/中间件在 onMounted 预载
 watch(tab, (t) => {
   if (t === 'events' && Date.now() - eventsLoadedAt.value > 30_000) void loadEvents()
+  if (t === 'rules' && Date.now() - rulesLoadedAt.value > 30_000) void loadRules()
 })
 
 // 详情→详情直跳（路由参数变化）：重置全部数据并重载
@@ -1051,18 +1333,20 @@ watch(clusterName, async () => {
   eventsAfterSeq.value = 0
   eventsHasMore.value = false
   eventsLoadedAt.value = 0
+  rules.value = []
+  rulesLoadedAt.value = 0
   inventoryViews.value = []
   workloads.value = []
   nodes.value = []
-  await Promise.all([fetchCluster(), loadNodes(), loadWorkloads(), loadInventory()])
+  await Promise.all([fetchCluster(), loadNodes(), loadWorkloads(), loadInventory(), loadRules()])
   watchNodeStats()
 })
 
 onMounted(async () => {
   loading.value = true
-  // 并行加载集群信息 + 节点 + 工作负载 + 纳管清单（fetchCluster 含一次探测，
+  // 并行加载集群信息 + 节点 + 工作负载 + 纳管清单 + 告警规则（fetchCluster 含一次探测，
   // 不再串行阻塞首屏；离线时其余数据照常渲染）
-  await Promise.all([fetchCluster(), loadNodes(), loadWorkloads(), loadInventory()])
+  await Promise.all([fetchCluster(), loadNodes(), loadWorkloads(), loadInventory(), loadRules()])
   // base 节点列表已秒回（/nodes 不再 fan-out stats）；订阅 SSE 让各节点 stats
   // 逐个流入，慢节点不阻塞首屏。
   watchNodeStats()
@@ -1181,6 +1465,16 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--el-color-warning);
   line-height: 1.6;
+}
+.rule-tag {
+  margin-right: 4px;
+}
+.rule-src {
+  margin-left: 6px;
+}
+.rule-hint {
+  margin-left: 8px;
+  font-size: 12px;
 }
 .log-header {
   display: flex;
