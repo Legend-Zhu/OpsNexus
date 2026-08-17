@@ -47,17 +47,18 @@ func New(cli docker.Client, policy *agent.CommandPolicy, log *slog.Logger) *API 
 // Routes returns the local endpoint handlers.
 func (a *API) Routes() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
-		"GET /api/v1/local/stats":         a.stats,
-		"GET /api/v1/local/host-stats":    a.hostStats,
-		"GET /api/v1/local/processes":     a.processes,
-		"GET /api/v1/local/containers":    a.containers,
+		"GET /api/v1/local/stats":               a.stats,
+		"GET /api/v1/local/host-stats":          a.hostStats,
+		"GET /api/v1/local/processes":           a.processes,
+		"GET /api/v1/local/containers":          a.containers,
+		"POST /api/v1/local/containers/health":  a.containersHealth,
 		"POST /api/v1/local/containers/restart": a.restartContainer,
-		"POST /api/v1/local/exec":         a.exec,
-		"POST /api/v1/local/host":         a.host,
-		"GET /api/v1/local/logs":          a.logs,
-		"GET /api/v1/local/check/port":    a.checkPort,
-		"POST /api/v1/local/check/http":   a.checkHTTP,
-		"POST /api/v1/local/check/flow":   a.checkFlow,
+		"POST /api/v1/local/exec":               a.exec,
+		"POST /api/v1/local/host":               a.host,
+		"GET /api/v1/local/logs":                a.logs,
+		"GET /api/v1/local/check/port":          a.checkPort,
+		"POST /api/v1/local/check/http":         a.checkHTTP,
+		"POST /api/v1/local/check/flow":         a.checkFlow,
 	}
 }
 

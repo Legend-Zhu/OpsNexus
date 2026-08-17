@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/audit"
@@ -376,21 +377,22 @@ func (o *Orchestrator) Inspect(ctx context.Context, name string) (ServiceDetail,
 		return ServiceDetail{}, err
 	}
 	d := ServiceDetail{Service: svc, Tasks: tasks}
+	hasHealth := serviceHasHealth(svc)
+	var candidates []docker.Task
 	for _, t := range tasks {
 		if t.DesiredState == "running" {
 			d.Desired++
 			if t.Status.State == "running" {
 				d.Running++
-				if !serviceHasHealth(svc) {
+				if !hasHealth {
 					d.Healthy++
-				} else if cid := t.Status.ContainerStatus.ContainerID; cid != "" {
-					if ci, err := o.cli.ContainerInspect(ctx, cid); err == nil && ci.State.Health != nil && ci.State.Health.Status == "healthy" {
-						d.Healthy++
-					}
+				} else if t.Status.ContainerStatus.ContainerID != "" {
+					candidates = append(candidates, t)
 				}
 			}
 		}
 	}
+	d.Healthy += o.countHealthy(ctx, candidates)
 	return d, nil
 }
 
@@ -412,16 +414,15 @@ func (o *Orchestrator) computeReady(ctx context.Context, serviceID string, hasHe
 		return readyState{}, err
 	}
 	rs := readyState{}
+	var candidates []docker.Task
 	for _, t := range tasks {
 		if t.DesiredState == "running" {
 			rs.desired++
 			if t.Status.State == "running" {
 				rs.running++
 				if hasHealth {
-					if cid := t.Status.ContainerStatus.ContainerID; cid != "" {
-						if ci, err := o.cli.ContainerInspect(ctx, cid); err == nil && ci.State.Health != nil && ci.State.Health.Status == "healthy" {
-							rs.healthy++
-						}
+					if t.Status.ContainerStatus.ContainerID != "" {
+						candidates = append(candidates, t)
 					}
 				} else {
 					rs.healthy++
@@ -432,6 +433,7 @@ func (o *Orchestrator) computeReady(ctx context.Context, serviceID string, hasHe
 			rs.taskErrors = append(rs.taskErrors, fmt.Sprintf("task %s state=%s err=%s", t.ID, t.Status.State, t.Status.Err))
 		}
 	}
+	rs.healthy += o.countHealthy(ctx, candidates)
 	return rs, nil
 }
 
@@ -537,6 +539,89 @@ func configHasHealth(cfg *config.Config) bool {
 func serviceHasHealth(svc docker.Service) bool {
 	hc := svc.Spec.TaskTemplate.ContainerSpec.Healthcheck
 	return hc != nil && len(hc.Test) > 0
+}
+
+// healthyNodeTimeout bounds one node worker's batch health lookup during
+// cross-node aggregation (aligned with StreamNodeStats' per-node timeout): a
+// slow or unreachable node must not stall the others or the caller.
+const healthyNodeTimeout = 5 * time.Second
+
+// countHealthy counts healthy containers among the given tasks: local tasks
+// go through the local engine, remote tasks are grouped by node and queried
+// in one batch request per node worker (fan-out with a per-node timeout).
+// tasks must be pre-filtered to DesiredState=running && Status.State=running
+// && ContainerID != "". Unreachable nodes, timeouts, and node workers without
+// the health endpoint all count their tasks as not healthy (the pre-existing
+// behavior); this function never returns an error.
+func (o *Orchestrator) countHealthy(ctx context.Context, tasks []docker.Task) int {
+	if len(tasks) == 0 {
+		return 0
+	}
+	// Fall back to all-local when the self node can't be identified (matches
+	// the old single-engine behavior, which is the whole path on single-node
+	// swarms anyway).
+	selfID, err := o.SelfNodeID(ctx)
+	if err != nil {
+		o.log.Warn("countHealthy: self node unknown, inspecting all tasks locally", "err", err)
+	}
+	var local []docker.Task
+	remote := map[string][]string{} // nodeID -> container IDs
+	for _, t := range tasks {
+		cid := t.Status.ContainerStatus.ContainerID
+		if err != nil || t.NodeID == "" || t.NodeID == selfID {
+			local = append(local, t)
+		} else {
+			remote[t.NodeID] = append(remote[t.NodeID], cid)
+		}
+	}
+
+	healthy := 0
+	for _, t := range local {
+		cid := t.Status.ContainerStatus.ContainerID
+		if ci, err := o.cli.ContainerInspect(ctx, cid); err == nil && ci.State.Health != nil && ci.State.Health.Status == "healthy" {
+			healthy++
+		}
+	}
+	if len(remote) == 0 {
+		return healthy
+	}
+
+	addrs, err := o.nodeAddrs(ctx)
+	if err != nil {
+		o.log.Warn("countHealthy: node addresses unavailable, remote tasks count as not healthy", "err", err)
+		return healthy
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for nodeID, cids := range remote {
+		addr, ok := addrs[nodeID]
+		if !ok {
+			o.log.Warn("countHealthy: no address for node, its tasks count as not healthy", "node", nodeID, "containers", len(cids))
+			continue
+		}
+		wg.Add(1)
+		go func(nodeID, addr string, cids []string) {
+			defer wg.Done()
+			nctx, cancel := context.WithTimeout(ctx, healthyNodeTimeout)
+			defer cancel()
+			health, err := o.NodeClientByAddr(addr).ContainerHealth(nctx, cids)
+			if err != nil {
+				o.log.Warn("countHealthy: node health lookup failed, its tasks count as not healthy", "node", nodeID, "addr", addr, "err", err)
+				return
+			}
+			n := 0
+			for _, cid := range cids {
+				if health[cid] == "healthy" {
+					n++
+				}
+			}
+			mu.Lock()
+			healthy += n
+			mu.Unlock()
+		}(nodeID, addr, cids)
+	}
+	wg.Wait()
+	return healthy
 }
 
 // modeString reduces a ServiceMode struct to "replicated" | "global" | "".

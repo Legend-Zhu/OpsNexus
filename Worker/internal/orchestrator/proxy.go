@@ -241,6 +241,25 @@ type NodeContainerInfo struct {
 	Ports   string `json:"ports"`
 }
 
+// ContainerHealthResp mirrors nodeagent.containersHealthResp (POST
+// /api/v1/local/containers/health).
+type ContainerHealthResp struct {
+	Node   string            `json:"node"`
+	Health map[string]string `json:"health"` // containerID -> healthy|unhealthy|starting
+}
+
+// ContainerHealth batch-queries container health on the node (one round trip
+// per node when aggregating a service's healthy count across the swarm).
+// Containers without a healthcheck or that failed to inspect are absent from
+// the map; the caller treats any missing id as not healthy.
+func (n *NodeClient) ContainerHealth(ctx context.Context, ids []string) (map[string]string, error) {
+	var out ContainerHealthResp
+	if err := n.postJSON(ctx, "/api/v1/local/containers/health", map[string][]string{"ids": ids}, &out); err != nil {
+		return nil, err
+	}
+	return out.Health, nil
+}
+
 // RestartContainer restarts a container on the node via
 // POST /api/v1/local/containers/restart (docker restart).
 func (n *NodeClient) RestartContainer(ctx context.Context, name string) error {
