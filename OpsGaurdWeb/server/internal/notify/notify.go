@@ -180,7 +180,8 @@ func (s *Service) Records(limit int) ([]*store.NotifyRecord, error) {
 // --- 发送 ---
 
 // NotifyAlert 按告警级别匹配策略，逐渠道发送并记录。
-// 无匹配策略 = 静默（不报错）。
+// 无匹配策略 = 静默（不报错）。至少一个渠道投递成功时回写告警的
+// 「已通知」标记（NotifyCount/LastNotifyAt，前端列表据此展示）。
 func (s *Service) NotifyAlert(ctx context.Context, alert *store.Alert, subject string) error {
 	policy, err := s.st.GetPolicy(string(alert.Level))
 	if err != nil {
@@ -189,6 +190,7 @@ func (s *Service) NotifyAlert(ctx context.Context, alert *store.Alert, subject s
 	if policy == nil || len(policy.ChannelIDs) == 0 {
 		return nil
 	}
+	sent := 0
 	for _, cid := range policy.ChannelIDs {
 		ch, err := s.st.GetChannel(cid)
 		if err != nil {
@@ -197,13 +199,18 @@ func (s *Service) NotifyAlert(ctx context.Context, alert *store.Alert, subject s
 		if ch == nil || !ch.Enabled {
 			continue
 		}
-		s.sendAndRecord(ctx, ch, alert, subject)
+		if s.sendAndRecord(ctx, ch, alert, subject) == nil {
+			sent++
+		}
+	}
+	if sent > 0 {
+		_ = s.st.MarkAlertNotified(alert.ID)
 	}
 	return nil
 }
 
-// sendAndRecord 发送并记录结果。
-func (s *Service) sendAndRecord(ctx context.Context, ch *store.NotifyChannel, alert *store.Alert, subject string) {
+// sendAndRecord 发送并记录结果，返回发送错误（nil 表示投递成功）。
+func (s *Service) sendAndRecord(ctx context.Context, ch *store.NotifyChannel, alert *store.Alert, subject string) error {
 	rec := &store.NotifyRecord{
 		ID:        fmt.Sprintf("nr-%d", time.Now().UnixNano()),
 		TS:        time.Now().UTC(),
@@ -213,16 +220,18 @@ func (s *Service) sendAndRecord(ctx context.Context, ch *store.NotifyChannel, al
 		Target:    ch.Name,
 		Status:    "success",
 	}
-	if err := s.send(ctx, ch, subject, alert); err != nil {
+	sendErr := s.send(ctx, ch, subject, alert)
+	if sendErr != nil {
 		rec.Status = "failed"
-		rec.Error = err.Error()
+		rec.Error = sendErr.Error()
 	}
 	seq, err := s.st.NextSeq("notify")
 	if err != nil {
-		return
+		return sendErr
 	}
 	rec.Seq = seq
 	_ = s.st.SaveNotifyRecord(rec)
+	return sendErr
 }
 
 // Send 向指定渠道发送任意内容（巡检报告等非告警场景）。

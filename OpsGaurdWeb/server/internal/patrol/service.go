@@ -829,7 +829,11 @@ func (s *Service) syncAlerts(ctx context.Context, p *store.Patrol, cur *store.Pa
 			continue
 		}
 		id := store.AlertIDWithKey(a.Cluster, a.Service, store.EventPatrolFailed, a.Check+"|"+a.Node)
-		_, _ = s.st.SetAlertStatus(id, store.AlertRecovered, "patrol")
+		recovered, err := s.st.SetAlertStatus(id, store.AlertRecovered, "patrol")
+		if err == nil && recovered != nil && s.notify != nil {
+			subject := fmt.Sprintf("[%s] 巡检「%s」异常已恢复：%s", a.Cluster, p.Name, a.Check)
+			_ = s.notify.NotifyAlert(ctx, recovered, subject)
+		}
 	}
 }
 

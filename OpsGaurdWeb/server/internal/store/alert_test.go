@@ -37,14 +37,18 @@ func TestAlertAggregation(t *testing.T) {
 		Level: LevelError, Title: "[dev] port down", Status: AlertActive,
 		Count: 1, FirstTS: time.Now().UTC(), LastTS: time.Now().UTC(), LastEventID: "e1",
 	}
-	if err := s.UpsertAlert(a); err != nil {
-		t.Fatalf("upsert 1: %v", err)
+	if _, created, err := s.UpsertAlert(a); err != nil || !created {
+		t.Fatalf("upsert 1: created=%v err=%v", created, err)
 	}
 	a2 := *a
 	a2.LastTS = time.Now().UTC()
 	a2.LastEventID = "e2"
-	if err := s.UpsertAlert(&a2); err != nil {
-		t.Fatalf("upsert 2: %v", err)
+	merged, created, err := s.UpsertAlert(&a2)
+	if err != nil || created {
+		t.Fatalf("upsert 2: created=%v err=%v", created, err)
+	}
+	if merged.Count != 2 {
+		t.Fatalf("upsert 2: merged count=%d, want 2", merged.Count)
 	}
 
 	got, err := s.GetAlert(id)
@@ -79,7 +83,7 @@ func TestAlertAckRecover(t *testing.T) {
 		Type: EventHTTPUnhealthy, Level: LevelWarn, Title: "t",
 		Status: AlertActive, Count: 1, FirstTS: now, LastTS: now, LastEventID: "e1",
 	}
-	if err := s.UpsertAlert(a); err != nil {
+	if _, _, err := s.UpsertAlert(a); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -126,7 +130,7 @@ func TestAlertClusterFilter(t *testing.T) {
 			Level: LevelError, Title: "t", Status: AlertActive, Count: 1,
 			FirstTS: now, LastTS: now, LastEventID: "e",
 		}
-		if err := s.UpsertAlert(a); err != nil {
+		if _, _, err := s.UpsertAlert(a); err != nil {
 			t.Fatalf("upsert %s: %v", c, err)
 		}
 	}
@@ -135,6 +139,72 @@ func TestAlertClusterFilter(t *testing.T) {
 	}
 	if items, _ := s.ListAlerts("", "prod"); len(items) != 1 || items[0].Cluster != "prod" {
 		t.Fatalf("prod filter: %+v", items)
+	}
+}
+
+// TestUpsertAlertCreatedFlag created 三态：新建=true、合并=false、recovered 复发=true（换新 id）。
+func TestUpsertAlertCreatedFlag(t *testing.T) {
+	s := newTestStore(t)
+	mk := func() *Alert {
+		now := time.Now().UTC()
+		return &Alert{
+			ID: AlertID("dev", "web", EventLogMatch), Cluster: "dev", Service: "web",
+			Type: EventLogMatch, Level: LevelWarn, Title: "t", Status: AlertActive,
+			Count: 1, FirstTS: now, LastTS: now,
+		}
+	}
+	stored, created, err := s.UpsertAlert(mk())
+	if err != nil || !created || stored == nil {
+		t.Fatalf("create: stored=%+v created=%v err=%v", stored, created, err)
+	}
+	origID := stored.ID
+
+	stored, created, err = s.UpsertAlert(mk())
+	if err != nil || created {
+		t.Fatalf("merge: created=%v err=%v", created, err)
+	}
+	if stored.ID != origID || stored.Count != 2 {
+		t.Fatalf("merge: stored=%+v, want id=%s count=2", stored, origID)
+	}
+
+	if _, err := s.SetAlertStatus(origID, AlertRecovered, "admin"); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	stored, created, err = s.UpsertAlert(mk())
+	if err != nil || !created {
+		t.Fatalf("reactivate: created=%v err=%v", created, err)
+	}
+	if stored.ID == origID || stored.Count != 1 || stored.Status != AlertActive {
+		t.Fatalf("reactivate: stored=%+v, want new id count=1 active", stored)
+	}
+}
+
+// TestMarkAlertNotified 通知回写：次数累加 + 最近通知时间；告警不存在静默成功。
+func TestMarkAlertNotified(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+	a := &Alert{
+		ID: AlertID("dev", "web", EventPortDown), Cluster: "dev", Service: "web",
+		Type: EventPortDown, Level: LevelError, Title: "t", Status: AlertActive,
+		Count: 1, FirstTS: now, LastTS: now,
+	}
+	if _, _, err := s.UpsertAlert(a); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := s.MarkAlertNotified(a.ID); err != nil {
+			t.Fatalf("mark %d: %v", i, err)
+		}
+	}
+	got, err := s.GetAlert(a.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.NotifyCount != 2 || got.LastNotifyAt == nil {
+		t.Fatalf("unexpected notify mark: %+v", got)
+	}
+	if err := s.MarkAlertNotified("al-nonexistent"); err != nil {
+		t.Fatalf("missing alert should be silent: %v", err)
 	}
 }
 

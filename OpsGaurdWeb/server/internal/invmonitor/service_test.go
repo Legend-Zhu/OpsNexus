@@ -17,7 +17,7 @@ func newTestService(t *testing.T) (*Service, *store.Store) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	return New(st, nil, ingest.New(st), nil), st
+	return New(st, nil, ingest.New(st, nil), nil), st
 }
 
 func portSpec() checkSpec {

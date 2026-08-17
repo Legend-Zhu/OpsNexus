@@ -97,6 +97,10 @@ type Alert struct {
 	// 关联）：告警列表展示「已排查」标记，形成告警→排查闭环。
 	Investigations      int    `json:"investigations,omitempty"`
 	LastInvestigationID string `json:"last_investigation_id,omitempty"`
+	// NotifyCount/LastNotifyAt 通知回写：至少成功投递一个渠道后由 notify 标记，
+	// 告警列表展示「已通知」。
+	NotifyCount  int        `json:"notify_count,omitempty"`
+	LastNotifyAt *time.Time `json:"last_notified_at,omitempty"`
 	// LastEventID 最近一次归并事件的 id（订阅消费者幂等去重用，不对外返回）。
 	LastEventID string `json:"-"`
 }
@@ -252,19 +256,21 @@ func (s *Store) ListAlerts(status AlertStatus, cluster string) ([]*Alert, error)
 
 // SaveEvent + upsert alert 的原子入口：ingest 服务用。
 // UpsertAlert 不存在则创建，存在则累加 count/更新 last_ts/合并事件。
-func (s *Store) UpsertAlert(a *Alert) error {
+// 返回最终落库的告警与 created（新建或 recovered 复发重激活为 true，调用方
+// 据此决定是否通知；合并计数时可通过返回告警的 Count 做里程碑判断）。
+func (s *Store) UpsertAlert(a *Alert) (*Alert, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	existing, err := s.get(alertKey(a.ID))
 	if err != nil && err != leveldb.ErrNotFound {
-		return err
+		return nil, false, err
 	}
 	if err == leveldb.ErrNotFound || len(existing) == 0 {
-		return s.putAlertLocked(a)
+		return a, true, s.putAlertLocked(a)
 	}
 	var old Alert
 	if err := json.Unmarshal(existing, &old); err != nil {
-		return fmt.Errorf("decode existing alert: %w", err)
+		return nil, false, fmt.Errorf("decode existing alert: %w", err)
 	}
 	// 合并：保留旧状态，累加计数，更新时间与最近事件
 	if old.Status == AlertActive || old.Status == AlertAcked {
@@ -278,13 +284,13 @@ func (s *Store) UpsertAlert(a *Alert) error {
 		}
 		old.Title = a.Title
 		old.LastEventID = a.LastEventID
-		return s.putAlertLocked(&old)
+		return &old, false, s.putAlertLocked(&old)
 	}
 	// recovered 的告警再收到新事件 → 重新激活（新 id）
 	a.ID = newAlertID()
 	a.Status = AlertActive
 	a.Count = 1
-	return s.putAlertLocked(a)
+	return a, true, s.putAlertLocked(a)
 }
 
 // UpsertKeyedAlert 以 a.ID 为确定键 upsert 告警（巡检按检查项维护生命周期用）。
@@ -343,6 +349,21 @@ func (s *Store) MarkAlertInvestigated(id, invID string) error {
 	}
 	a.Investigations++
 	a.LastInvestigationID = invID
+	return s.putAlertLocked(a)
+}
+
+// MarkAlertNotified 回写告警的通知标记（次数+1、最近通知时间）。
+// 告警不存在时静默成功（告警可能已被清理，不阻断通知流程）。
+func (s *Store) MarkAlertNotified(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, err := s.GetAlert(id)
+	if err != nil || a == nil {
+		return err
+	}
+	a.NotifyCount++
+	now := time.Now().UTC()
+	a.LastNotifyAt = &now
 	return s.putAlertLocked(a)
 }
 

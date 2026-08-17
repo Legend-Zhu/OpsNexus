@@ -196,6 +196,9 @@ export interface Alert {
   /** 排查回写：关联排查会话次数 / 最近一次排查 id */
   investigations?: number
   last_investigation_id?: string
+  /** 通知回写：成功投递次数 / 最近一次通知时间（列表展示「已通知」） */
+  notify_count?: number
+  last_notified_at?: string
 }
 
 /** 排查会话（对话式 troubleshoot 落库） */

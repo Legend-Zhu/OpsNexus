@@ -34,6 +34,9 @@
       <el-table-column label="标题" min-width="220" show-overflow-tooltip>
         <template #default="{ row }">
           <span>{{ row.title }}</span>
+          <el-tooltip v-if="row.notify_count" :content="`已推送 ${row.notify_count} 次，最近：${formatTime(row.last_notified_at)}`" placement="top">
+            <el-tag size="small" type="primary" effect="plain" class="ml">已通知</el-tag>
+          </el-tooltip>
           <el-tag v-if="row.investigations" size="small" type="success" effect="plain" class="ml">
             已排查{{ row.investigations > 1 ? `×${row.investigations}` : '' }}
           </el-tag>
@@ -99,6 +102,8 @@ function typeText(t: string) {
     log_match: '日志匹配',
     resource_over: '资源超限',
     resource_recovered: '资源恢复',
+    container_down: '容器不可用',
+    recovered: '已恢复',
     patrol_failed: '巡检异常',
   }
   return map[t] ?? t

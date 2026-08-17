@@ -66,10 +66,17 @@ func main() {
 	clusterSvc := cluster.New(st)
 	h.SetClusterService(clusterSvc)
 
-	// 告警 ingest 服务（P3：事件落库 + 告警聚合）。事件经 gRPC SubscribeEvents
-	// 流从各 Worker 拉取（ingest.Manager 管理每集群一个订阅 goroutine），
-	// 替代了原 Worker→server webhook 推送（单向网络策略下不可用）。
-	ingestSvc := ingest.New(st)
+	// 通知服务（P6：渠道/策略/记录）。需先于 ingest 创建——告警产生/恢复
+	// 时的自动通知由 ingest 经 notifySvc 异步分发。
+	notifySvc := notify.New(st)
+	h.SetNotifyService(notifySvc)
+
+	// 告警 ingest 服务（P3：事件落库 + 告警聚合 + 告警通知分发）。事件经
+	// gRPC SubscribeEvents 流从各 Worker 拉取（ingest.Manager 管理每集群
+	// 一个订阅 goroutine），替代了原 Worker→server webhook 推送（单向网络
+	// 策略下不可用）。
+	ingestSvc := ingest.New(st, notifySvc)
+	defer ingestSvc.Stop()
 
 	// 内嵌 AiNexus 网关（与管理端同进程，无独立服务/端口）。配置可在
 	// 页面「系统设置 → AI 排查网关」在线修改并热重载（无需重启）；首次保存
@@ -80,10 +87,6 @@ func main() {
 		os.Exit(1)
 	}
 	h.SetAINexusRT(ainexusRT)
-
-	// 通知服务（P6：渠道/策略/记录）
-	notifySvc := notify.New(st)
-	h.SetNotifyService(notifySvc)
 
 	// 内嵌镜像仓库(OCI /v2 + 页面传包构建;构建 push 走本机 loopback)
 	if cfg.Registry.Enabled {

@@ -77,6 +77,10 @@ func (h *Handlers) RecoverAlert(c *gin.Context) {
 		fail(c, http.StatusNotFound, "alert not found")
 		return
 	}
+	// 恢复通知（与 ack 通知对齐）
+	if h.notifySvc != nil {
+		_ = h.notifySvc.NotifyAlert(c.Request.Context(), a, fmt.Sprintf("[%s/%s] 告警已恢复（手动）：%s", a.Cluster, a.Service, a.Title))
+	}
 	ok(c, http.StatusOK, a)
 }
 
