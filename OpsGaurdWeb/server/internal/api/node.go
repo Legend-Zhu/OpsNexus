@@ -10,6 +10,8 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy"
 )
 
 // ListNodes godoc: GET /api/v1/clusters/:name/nodes
@@ -63,7 +65,10 @@ func (h *Handlers) StreamNodes(c *gin.Context) {
 		var data []byte
 		switch upd.GetKind() {
 		case "init":
-			data, _ = json.Marshal(upd.GetNodes())
+			// 经 NodeFromPB 转成 camelCase JSON 视图：pb 结构体的 json tag
+			// 是 snake_case + omitempty，直接 marshal 会让前端读不到
+			// cpuCores/memBytes（节点详情显示 “—” / “0 B”）。
+			data, _ = json.Marshal(workerproxy.NodesFromPB(upd.GetNodes()))
 		case "node":
 			data, _ = json.Marshal(map[string]any{
 				"nodeId":         upd.GetNodeId(),

@@ -391,7 +391,30 @@ func (c *Client) RestartContainer(ctx context.Context, nodeID, container string)
 	return nil
 }
 
-// ListNodes 获取集群节点列表。
+// NodeFromPB 把 gRPC Node 消息映射为 JSON 视图（camelCase tag）。SSE init
+// 事件也用它——直接 json.Marshal pb 结构体产出的是 snake_case 键
+// (cpu_cores/mem_bytes)，前端 ClusterNode 的 cpuCores/memBytes 会读成
+// undefined（详情抽屉显示 “—” / “0 B”）。
+func NodeFromPB(n *pb.Node) Node {
+	return Node{
+		ID: n.GetId(), Hostname: n.GetHostname(), Role: n.GetRole(), State: n.GetState(),
+		Availability: n.GetAvailability(), Addr: n.GetAddr(), Leader: n.GetLeader(),
+		ManagerReach: n.GetManagerReach(), Reachable: n.GetReachable(),
+		CPUCores: n.GetCpuCores(), MemBytes: n.GetMemBytes(),
+		CPUPercent: n.GetCpuPercent(), MemPercent: n.GetMemPercent(),
+		ContainerCount: int(n.GetContainerCount()),
+	}
+}
+
+// NodesFromPB 批量映射（顺序保持）。
+func NodesFromPB(list []*pb.Node) []Node {
+	out := make([]Node, 0, len(list))
+	for _, n := range list {
+		out = append(out, NodeFromPB(n))
+	}
+	return out
+}
+
 // ListNodes 获取集群节点列表。启用缓存时先返回缓存快照（避免页面白屏），
 // 后台刷新并更新缓存。
 func (c *Client) ListNodes(ctx context.Context) ([]Node, error) {
@@ -409,17 +432,7 @@ func (c *Client) ListNodes(ctx context.Context) ([]Node, error) {
 	if err != nil {
 		return nil, c.wrapErr(err)
 	}
-	out := make([]Node, 0, len(resp.GetNodes()))
-	for _, n := range resp.GetNodes() {
-		out = append(out, Node{
-			ID: n.GetId(), Hostname: n.GetHostname(), Role: n.GetRole(), State: n.GetState(),
-			Availability: n.GetAvailability(), Addr: n.GetAddr(), Leader: n.GetLeader(),
-			ManagerReach: n.GetManagerReach(), Reachable: n.GetReachable(),
-			CPUCores: n.GetCpuCores(), MemBytes: n.GetMemBytes(),
-			CPUPercent: n.GetCpuPercent(), MemPercent: n.GetMemPercent(),
-			ContainerCount: int(n.GetContainerCount()),
-		})
-	}
+	out := NodesFromPB(resp.GetNodes())
 	if c.cache != nil {
 		if raw, err := json.Marshal(out); err == nil {
 			_ = c.cache.PutClusterCache(c.clusterName, "nodes", raw)
