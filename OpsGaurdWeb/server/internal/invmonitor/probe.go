@@ -20,20 +20,33 @@ type checkSpec struct {
 	run      func(ctx context.Context) (ok bool, msg string, err error)
 }
 
-// runItem 执行一个纳管条目的到期检查，返回该条目全部检查 key（含未到期）。
-func (s *Service) runItem(ctx context.Context, clusterName string, cli *workerproxy.Client, item *store.InventoryItem) []string {
+// checkIDs 返回条目全部检查 id（配置视角，与探测执行无关，供状态清理对账）。
+func checkIDs(item *store.InventoryItem) []string {
+	m := item.Monitoring
+	var ids []string
+	if item.Type == store.InvStandaloneContainer {
+		ids = append(ids, "container")
+	}
+	for _, pc := range m.PortChecks {
+		ids = append(ids, "port:"+pc.Port)
+	}
+	for _, hc := range m.HTTPChecks {
+		ids = append(ids, "http:"+hc.URL)
+	}
+	return ids
+}
+
+// runItem 执行一个纳管条目的到期检查。
+func (s *Service) runItem(ctx context.Context, clusterName string, cli *workerproxy.Client, item *store.InventoryItem) {
 	specs := s.buildChecks(ctx, cli, item)
-	keys := make([]string, 0, len(specs))
 	for _, spec := range specs {
 		key := clusterName + "/" + item.Name + "/" + spec.id
-		keys = append(keys, key)
 		if !s.due(key, spec.interval) {
 			continue
 		}
 		ok, msg, rpcErr := spec.run(ctx)
 		s.recordResult(clusterName, item.Name, spec, ok, msg, rpcErr)
 	}
-	return keys
 }
 
 // buildChecks 按条目类型展开检查列表：

@@ -12,7 +12,9 @@ package invmonitor
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +42,7 @@ type Service struct {
 
 	mu      sync.Mutex
 	states  map[string]*checkState // key: cluster/item/checkID
+	seq     uint64                 // 事件 ID 序号（低时钟分辨率平台防同 tick 碰撞）
 	stopCh  chan struct{}
 	wg      sync.WaitGroup
 	running bool
@@ -112,8 +115,9 @@ func (s *Service) runCycle(ctx context.Context) {
 		s.log.Error("invmonitor: list clusters failed", "err", err)
 		return
 	}
+	// active 集合按配置生成（与探测是否执行无关）——worker 不可达的集群本轮
+	// 跳过探测，但其检查状态必须保留，避免被误判为"已移除"而错误恢复。
 	active := map[string]bool{}
-	var activeMu sync.Mutex
 	var wg sync.WaitGroup
 	for _, c := range clusters {
 		if c.Inventory == nil {
@@ -124,6 +128,9 @@ func (s *Service) runCycle(ctx context.Context) {
 			item := c.Inventory.Items[i]
 			if item.Monitoring != nil && item.Monitoring.Enabled {
 				items = append(items, item)
+				for _, id := range checkIDs(&item) {
+					active[c.Name+"/"+item.Name+"/"+id] = true
+				}
 			}
 		}
 		if len(items) == 0 {
@@ -139,25 +146,43 @@ func (s *Service) runCycle(ctx context.Context) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				keys := s.runItem(ctx, c.Name, cli, &item)
-				activeMu.Lock()
-				for _, k := range keys {
-					active[k] = true
-				}
-				activeMu.Unlock()
+				s.runItem(ctx, c.Name, cli, &item)
 			}()
 		}
 	}
 	wg.Wait()
 
-	// 清单中已删除/禁用监控的检查，状态一并清除（下次重新加入时按新检查处理）。
+	// 清单中已删除/禁用监控的检查，状态一并清除；清除时若处于失败态，补发
+	// 恢复事件关闭其遗留告警（配置变更不应留下永不恢复的幽灵告警）。
+	var orphans [][2]string // (cluster, service)
 	s.mu.Lock()
-	for k := range s.states {
+	for k, st := range s.states {
 		if !active[k] {
+			if st.failing {
+				parts := strings.SplitN(k, "/", 3)
+				if len(parts) == 3 {
+					orphans = append(orphans, [2]string{parts[0], parts[1]})
+				}
+			}
 			delete(s.states, k)
 		}
 	}
 	s.mu.Unlock()
+	for _, o := range orphans {
+		s.mu.Lock()
+		s.seq++
+		seq := s.seq
+		s.mu.Unlock()
+		if err := s.ingest.HandleEvent(o[0], &store.IngestEvent{
+			ID:      fmt.Sprintf("invmon-orphan/%s/%s/%d-%d", o[0], o[1], time.Now().UnixNano(), seq),
+			Service: o[1],
+			Type:    store.EventRecovered,
+			Level:   store.LevelInfo,
+			Msg:     "监控配置变更/检查已移除，自动关闭遗留告警",
+		}); err != nil {
+			s.log.Error("invmonitor: orphan recover failed", "cluster", o[0], "service", o[1], "err", err)
+		}
+	}
 }
 
 // recordResult 记录一次确定性探测结果，仅在状态翻转时向 ingest 发事件：
@@ -193,7 +218,15 @@ func (s *Service) recordResult(clusterName, service string, spec checkSpec, ok b
 		evType = store.EventRecovered
 		msg = "检查恢复正常：" + spec.id
 	}
+	// ID 显式携带检查标识 + 自增序号：ingest 按事件 ID 去重（10 分钟窗），
+	// 空 ID 走 ev-<纳秒> 生成在低时钟分辨率平台会同 tick 碰撞，恢复事件可能
+	// 被误去重（Windows 实测 ~0.5ms 分辨率下同 key 两次翻转同 tick）。
+	s.mu.Lock()
+	s.seq++
+	seq := s.seq
+	s.mu.Unlock()
 	if err := s.ingest.HandleEvent(clusterName, &store.IngestEvent{
+		ID:      fmt.Sprintf("invmon/%s/%d-%d", key, time.Now().UnixNano(), seq),
 		Service: service,
 		Type:    evType,
 		Level:   level,
