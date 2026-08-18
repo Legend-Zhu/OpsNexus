@@ -15,6 +15,11 @@
 ├── 10.60.171.249 (NXYJGLT-YJ-b-3, docker 27.3.1)  node 角色
 ├── 10.60.171.253 (NXYJGLT-YJ-4,   docker 20.10.24) node 角色
 └── 10.60.171.231 (NXYJGLT-YJ-5,   docker 20.10.24) node 角色
+
+安责险集群（3×裸机，2026-08-14 新装，Worker 端口 6060/6061）
+├── 10.60.185.66 (NXYJGLT-AZBX-1, Kylin V10, docker 27.5.1)  swarm Leader + Worker manager 角色
+├── 10.60.185.89 (NXYJGLT-AZBX-2, Kylin V10, docker 27.5.1)  node 角色
+└── 10.60.185.86 (NXYJGLT-AZBX-3, Kylin V10, docker 27.5.1)  node 角色
 ```
 
 ## 文件
@@ -30,6 +35,9 @@
 | ../../OpsGaurdWeb/deploy/config.docker.yaml | /opt/opsguard/server/config.yaml | 管理端配置（:8080、认证已开、registry 已开） |
 | agent-config.disaster.yaml | 灾害集群 5 台 /etc/opsguard/agent-config.yaml | Worker 策略（auth enabled + token，5 台一致） |
 | stack.disaster.yml | 232:/opt/opsguard/stack.disaster.yml | 灾害集群 Worker（6060/6061，global，mode:host，含 IdP 隧道 env） |
+| agent-config.azbx.yaml | 安责险 3 台 /etc/opsguard/agent-config.yaml | Worker 策略（auth enabled + 独立 token） |
+| stack.azbx.yml | 66:/opt/opsguard/stack.azbx.yml | 安责险集群 Worker（6060/6061，global，mode:host，镜像 1.2.5） |
+| install-docker-noinit.sh | 安责险 worker 节点 /opt/opsguard/offline/ | docker 离线安装（不做 swarm init，装完 join manager） |
 
 ### 灾害集群（5 节点）部署记录与要点
 
@@ -156,6 +164,55 @@
       + OCI 分块协议开销；in-process bench 单流 926MB/s / 池并发 1012MB/s；真实
       多层并发拉取聚合更高。）
     - **回滚**：旧镜像 server 1.2.6 / worker 1.2.1（灾害）·1.1.0（本地）均保留。
+13. **纳管监控 + 节点统计修复（2026-08-18，server 1.2.9→1.2.10 / worker 灾害
+    1.2.5→1.2.6、本地 1.2.3→1.2.6）**：提交 `e877ac2`（集群告警规则 tab +
+    invmonitor）、`36d2fe1`（告警产生/恢复自动通知）、`74a542e`（幽灵告警治理）、
+    及此前未发的 worker 修复 `8b18833/f55a0f7/01f6cb0/c2ba0a6`（SSE camelCase、
+    healthy 跨节点、中继陈旧流、LocalStats 超时——**节点全 unreachable 的根治**）。
+    - **重打方式**同记录 12（本地交叉编译 + FROM 旧镜像 COPY 二进制）；server
+      镜像额外 `COPY web/ /app/web/`（前端不内嵌二进制，**重打必须带新 dist**）。
+    - **分发顺序**：先 worker（灾害 5 节点经 232:6060 中继 pull+tag →
+      `service update --image opsguard-worker:1.2.6`），再 189.6 本地 worker，
+      最后 server 容器（顺序兼容：新 worker + 旧 server 可用）。
+    - **已验证**：SSE `nodes/stream` 五节点 `reachable:true` 且 CPU/内存/容器数
+      实时流入（此前全 0）；invmonitor 端到端冒烟（host-service 指向关闭端口
+      → 20s 内 `port_down` 告警；清单↔规则自动同步增删）；告警手动恢复 API。
+    - **坑③ aishell 终端显示卡死但命令照跑**：189.6 的 SSH 终端刮屏冻结
+      （list-timers 输出截断后不再刷新），命令实际正常执行——用 `touch` 副作用
+      + SFTP 查证后，全程改「脚本上传 + 日志回传」盲操作完成部署。
+
+### 安责险集群（3 节点）部署记录（2026-08-14）
+
+新纳管集群，3×裸机（无 K8s 共存），麒麟 V10 / x86_64，全部从零安装。
+66（AZBX-1）为 swarm manager，89（AZBX-2）/86（AZBX-3）为 worker 节点。
+
+1. **docker 安装**：66 用原版 install-docker.sh（含 swarm init）；86/89 用
+   **install-docker-noinit.sh**（去掉 init，装完直接 `docker swarm join
+   --token … 10.60.185.66:2377`）。daemon.json 的 insecure-registries 为
+   `["10.60.189.6:8080", "10.60.185.66:6060"]`（后者=本集群 worker 中继）。
+2. **坑① git autocrlf 脚本 CRLF**：工作区 checkout 的 install-docker.sh 带
+   CRLF，bash 报 `set: pipefail：无效的选项名`。上传后
+   `sed -i 's/\r$//' install-docker.sh` 修复；noinit 版为 LF 不受影响。
+3. **坑② swarm 不自动创建 bind mount 源目录**：stack 引用
+   `/var/lib/opsguard` 不存在时任务 Rejected（`bind source path does not
+   exist`）。**全节点先 `mkdir -p /var/lib/opsguard`**；且 restart_policy
+   max_attempts=3 耗尽后不再自愈，需 `docker service update --force
+   opsguard_worker` 重新调度。
+4. **worker 直接上 1.2.5**（新集群无旧包袱）：本地交叉编译二进制
+   （.deploytmp/worker-1.2.5）→ 三台 load 1.1.0 tar → 66 上
+   `FROM opsguard-worker:1.1.0 + COPY worker-1.2.5 + RUN chmod +x` 重打 →
+   `docker save` → **66 起临时 HTTP（python3 -m http.server 18099）** →
+   86/89 内网 curl 拉取 load（内网 67MB 秒级）。镜像引用 opsguard-worker:1.2.5。
+5. **已验证**：3 节点 swarm Ready；`docker service logs` 确认 66
+   `worker role=manager`（隧道池 streams=16、中继缓存 2048MB、反向隧道
+   env 生效）、86/89 `role=node`；三台 `:6060/healthz` 全部 ok；
+   auth enabled（token 见 agent-config.azbx.yaml，server 纳管注册时填）。
+6. **纳管完成（2026-08-14）**：189.6 → 66 的 6060-6064/tcp 策略开通后，
+   管理端页面注册 `azbx-cluster`（gRPC `http://10.60.185.66:6061` + token，
+   归属应急厅项目）即在线；详情页 3 节点全部「可达」，CPU/内存指标实时
+   上报；**中继验证**：66 `curl :6060/v2/` → 200（隧道打通，集群节点可经
+   `10.60.185.66:6060/<repo>:<tag>` 从管理端内嵌仓库拉镜像，daemon.json
+   已预置该 insecure-registries 条目）。
 
 ## 部署步骤（已完成，供重建参考）
 
