@@ -274,10 +274,9 @@ func (s *Service) sendAndRecordGeneric(ctx context.Context, ch *store.NotifyChan
 	}
 	seq, serr := s.st.NextSeq("notify")
 	if serr == nil {
-		return err
+		rec.Seq = seq
+		_ = s.st.SaveNotifyRecord(rec)
 	}
-	rec.Seq = seq
-	_ = s.st.SaveNotifyRecord(rec)
 	return err
 }
 

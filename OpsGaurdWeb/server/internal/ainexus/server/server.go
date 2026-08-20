@@ -22,6 +22,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/mcp"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/provider"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/tool"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/usage"
 )
 
 // Server 内嵌 AI 网关（无独立 HTTP 层）
@@ -35,11 +36,24 @@ type Server struct {
 
 	openaiH    *handler.OpenAIHandler
 	anthropicH *handler.AnthropicHandler
+
+	// usageSink 底层调用计量 sink（nil = 不计量；见 WithUsageSink）。
+	usageSink usage.Sink
+}
+
+// Option 内嵌网关构建选项。
+type Option func(*Server)
+
+// WithUsageSink 为网关所有底层 LLM 调用挂共享计量 sink（nil = 不计量）。
+// sink 生命周期由管理端运行时服务持有：热重载构建新网关实例时复用同一
+// sink，保证配置切换前后计量不中断。
+func WithUsageSink(sink usage.Sink) Option {
+	return func(s *Server) { s.usageSink = sink }
 }
 
 // New 创建内嵌网关
-func New(cfg *ainexuscfg.Config) *Server {
-	return &Server{
+func New(cfg *ainexuscfg.Config, opts ...Option) *Server {
+	s := &Server{
 		config:      cfg,
 		providers:   make([]provider.Provider, 0),
 		modelRoutes: make(map[string]provider.Provider),
@@ -47,6 +61,10 @@ func New(cfg *ainexuscfg.Config) *Server {
 		mcpMgr:      mcp.NewManager(log.New(os.Stderr, "[OpsGaurdWeb.AiNexus.MCP] ", log.LstdFlags|log.Lshortfile)),
 		logger:      log.New(os.Stderr, "[OpsGaurdWeb.AiNexus] ", log.LstdFlags|log.Lshortfile),
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Initialize 初始化所有模块（providers → tools → MCP servers → handlers）
@@ -95,6 +113,12 @@ func (s *Server) initProviders() error {
 			p = provider.NewAnthropicProvider(pc.Name, pc.BaseURL, pc.APIKey, modelNames)
 		default:
 			return fmt.Errorf("unsupported provider type: %s", pc.Type)
+		}
+
+		// 计量包装：每次底层调用（非流式一次/流式一整条）产生一条记录；
+		// 上下文无计量元数据时自动透传不记录。
+		if s.usageSink != nil {
+			p = usage.NewMetered(p, s.usageSink)
 		}
 
 		s.providers = append(s.providers, p)
@@ -169,7 +193,9 @@ func (s *Server) Summarize(model, prompt string) (string, error) {
 	conv := agent.NewConversation(model)
 	conv.AddSystemMessage("你是智能运维巡检报告助手。基于巡检检查结果，给出简明、结构化的报告：异常概况、逐项说明、处置建议。不要编造数据。")
 	conv.AddUserMessage(prompt)
-	resp, err := ag.Run(context.Background(), conv)
+	// 巡检报告调用归属 patrol_report 场景（计量 operation 起点）
+	ctx := usage.NewOperation(context.Background(), usage.ScenarioPatrolReport, "summarize")
+	resp, err := ag.Run(ctx, conv)
 	if err != nil {
 		return "", fmt.Errorf("summarize: %w", err)
 	}

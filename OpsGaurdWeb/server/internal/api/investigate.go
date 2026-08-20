@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/usage"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy"
@@ -44,6 +45,8 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 		fail(c, http.StatusServiceUnavailable, "cluster service not initialized")
 		return
 	}
+	// 计量入口：本次深度排查的全部底层 LLM 调用归属 scenario=investigate
+	c.Request = c.Request.WithContext(usage.NewOperation(c.Request.Context(), usage.ScenarioInvestigate, "/api/v1/ainexus/investigate"))
 	var req investigateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())

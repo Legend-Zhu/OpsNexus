@@ -1,9 +1,12 @@
 package store
 
 import (
+	"encoding/binary"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/syndtr/goleveldb/leveldb"
 )
 
 // TestClusterCRUD 集群注册表增删改查 + 持久化（重开库后数据仍在）。
@@ -134,5 +137,40 @@ func TestMigrationVersion(t *testing.T) {
 	}
 	if v != schemaVersion {
 		t.Fatalf("expected version %d, got %d", schemaVersion, v)
+	}
+}
+
+// TestMigrationFromV2 旧库（版本 2）打开后自动迁移到 schemaVersion。
+// schema 3 只新增 MLOps bucket 前缀、无数据转换，但 migration 条目必须
+// 存在——否则旧库启动报 "no migration for version 3"。
+func TestMigrationFromV2(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ogw-v2")
+
+	// 手工构造一个版本 2 的旧库
+	db, err := leveldb.OpenFile(path, nil)
+	if err != nil {
+		t.Fatalf("open raw leveldb: %v", err)
+	}
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], 2)
+	if err := db.Put([]byte(BucketMeta+"/version"), buf[:], nil); err != nil {
+		t.Fatalf("seed version: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw: %v", err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("open v2 store: %v", err)
+	}
+	defer s.Close()
+	v, err := s.getVersion()
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if v != schemaVersion {
+		t.Fatalf("expected migration to %d, got %d", schemaVersion, v)
 	}
 }

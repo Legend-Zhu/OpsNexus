@@ -56,6 +56,31 @@ type ModelConfig struct {
 	DisplayName string  `yaml:"display_name,omitempty"` // 显示名称（可选），如 "GLM 5.1"
 	MaxTokens   int     `yaml:"max_tokens,omitempty"`   // 默认最大输出 token
 	Temperature float64 `yaml:"temperature,omitempty"`  // 默认温度
+	// Enabled 模型级启停（MLOps 运营层，P3 生效）。旧配置不含该字段 = 启用；
+	// 仅显式 `enabled: false` 才禁用（见 UnmarshalYAML 归一化）。
+	Enabled bool `yaml:"enabled,omitempty"`
+}
+
+// UnmarshalYAML 把缺失的 enabled 归一化为 true：bool 零值无法区分「未配置」
+// 与「显式 false」，旧 runtime YAML（无 enabled 字段）直接反序列化会把全部
+// 模型误判为禁用。ModelConfig 新增字段时需同步维护此处的 raw 结构。
+func (mc *ModelConfig) UnmarshalYAML(node *yaml.Node) error {
+	var raw struct {
+		Name        string   `yaml:"name"`
+		DisplayName string   `yaml:"display_name"`
+		MaxTokens   int      `yaml:"max_tokens"`
+		Temperature float64  `yaml:"temperature"`
+		Enabled     *bool    `yaml:"enabled"`
+	}
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	mc.Name = raw.Name
+	mc.DisplayName = raw.DisplayName
+	mc.MaxTokens = raw.MaxTokens
+	mc.Temperature = raw.Temperature
+	mc.Enabled = raw.Enabled == nil || *raw.Enabled
+	return nil
 }
 
 // ToolsConfig 内置工具配置

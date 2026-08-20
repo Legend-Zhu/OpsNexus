@@ -268,7 +268,11 @@ func (p *AnthropicProvider) ChatCompletionStream(ctx context.Context, req *ChatR
 	return ch, nil
 }
 
-// processStream 处理 Anthropic SSE 流
+// processStream 处理 Anthropic SSE 流。
+// usage 语义：input_tokens 在 message_start、output_tokens 在
+// message_delta 送达；EventDone 统一在 message_stop（或流意外结束）时只发
+// 送一次，携带合并 usage——不在 message_delta 提前发送，避免同一调用产生
+// 重复完成事件。
 func (p *AnthropicProvider) processStream(body io.ReadCloser, ch chan<- StreamEvent) {
 	defer close(ch)
 	defer body.Close()
@@ -278,6 +282,9 @@ func (p *AnthropicProvider) processStream(body io.ReadCloser, ch chan<- StreamEv
 
 	toolCallsMap := make(map[int]*ToolCall)
 	var currentEventType string
+	var inputTokens, outputTokens int
+	finishReason := ""
+	doneSent := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -294,7 +301,18 @@ func (p *AnthropicProvider) processStream(body io.ReadCloser, ch chan<- StreamEv
 
 		switch currentEventType {
 		case "message_start":
-			// 消息开始，忽略 metadata
+			// input tokens 在消息开始时已知
+			var event struct {
+				Message struct {
+					Usage *anthropicUsage `json:"usage"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(data), &event); err == nil && event.Message.Usage != nil {
+				inputTokens = event.Message.Usage.InputTokens
+				if event.Message.Usage.OutputTokens > 0 {
+					outputTokens = event.Message.Usage.OutputTokens
+				}
+			}
 
 		case "content_block_start":
 			var event struct {
@@ -355,27 +373,27 @@ func (p *AnthropicProvider) processStream(body io.ReadCloser, ch chan<- StreamEv
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
 				continue
 			}
-			finishReason := event.Delta.StopReason
-			if finishReason == "tool_use" {
-				finishReason = "tool_calls"
+			if event.Delta.StopReason != "" {
+				finishReason = event.Delta.StopReason
 			}
-			ch <- StreamEvent{
-				Type:         EventDone,
-				FinishReason: finishReason,
-				Usage: func() *UsageInfo {
-					if event.Usage == nil {
-						return nil
-					}
-					return &UsageInfo{
-						PromptTokens:     event.Usage.InputTokens,
-						CompletionTokens: event.Usage.OutputTokens,
-						TotalTokens:      event.Usage.InputTokens + event.Usage.OutputTokens,
-					}
-				}(),
+			if event.Usage != nil {
+				if event.Usage.InputTokens > 0 {
+					inputTokens = event.Usage.InputTokens
+				}
+				if event.Usage.OutputTokens > 0 {
+					outputTokens = event.Usage.OutputTokens
+				}
 			}
 
 		case "message_stop":
-			ch <- StreamEvent{Type: EventDone}
+			if !doneSent {
+				doneSent = true
+				ch <- StreamEvent{
+					Type:         EventDone,
+					FinishReason: normalizeFinishReason(finishReason),
+					Usage:        mergedUsage(inputTokens, outputTokens),
+				}
+			}
 
 		case "error":
 			ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("anthropic stream error: %s", data)}
@@ -386,6 +404,36 @@ func (p *AnthropicProvider) processStream(body io.ReadCloser, ch chan<- StreamEv
 
 	if err := scanner.Err(); err != nil {
 		ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("read stream: %w", err)}
+		return
+	}
+
+	// 流意外结束（无 message_stop）→ 兜底发送一次完成事件
+	if !doneSent {
+		ch <- StreamEvent{
+			Type:         EventDone,
+			FinishReason: normalizeFinishReason(finishReason),
+			Usage:        mergedUsage(inputTokens, outputTokens),
+		}
+	}
+}
+
+// normalizeFinishReason 把 Anthropic 的 tool_use 归一为通用 tool_calls。
+func normalizeFinishReason(reason string) string {
+	if reason == "tool_use" {
+		return "tool_calls"
+	}
+	return reason
+}
+
+// mergedUsage 合并输入/输出 token（均为 0 时返回 nil，视同 usage 缺失）。
+func mergedUsage(in, out int) *UsageInfo {
+	if in == 0 && out == 0 {
+		return nil
+	}
+	return &UsageInfo{
+		PromptTokens:     in,
+		CompletionTokens: out,
+		TotalTokens:      in + out,
 	}
 }
 

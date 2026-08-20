@@ -17,6 +17,7 @@ import (
 
 	ainexuscfg "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
 	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/usage"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 )
@@ -30,6 +31,10 @@ type Service struct {
 	mu  sync.RWMutex
 	cfg *ainexuscfg.Config    // 当前生效配置（含已保存的 api_key）
 	srv *ainexusserver.Server // 当前内嵌网关（nil = 未启用）
+
+	// usageSink 共享计量 sink：独立于网关实例存活，热重载构建新网关时
+	// 复用同一实例（须在 Init 之前注入）。
+	usageSink usage.Sink
 }
 
 // New 创建运行时网关配置服务。fileCfg 来自 config.yaml 的 ainexus 块，
@@ -41,6 +46,15 @@ func New(st *store.Store, clusters *cluster.Service, fileCfg *ainexuscfg.Config)
 		logger:   log.New(os.Stderr, "[OpsGaurdWeb.AiNexusRT] ", log.LstdFlags|log.Lshortfile),
 		cfg:      cloneConfig(fileCfg),
 	}
+}
+
+// SetUsageSink 注入共享计量 sink（须在 Init 之前调用）。sink 独立于网关
+// 实例存活：热重载关闭旧网关不影响 sink，新网关构建时挂载同一实例，
+// 保证配置切换前后计量不中断。
+func (s *Service) SetUsageSink(sink usage.Sink) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.usageSink = sink
 }
 
 // Init 加载运行时配置并构建网关：
@@ -66,7 +80,7 @@ func (s *Service) Init(ctx context.Context) error {
 		}
 	}
 
-	next, err := build(ctx, s.cfg)
+	next, err := build(ctx, s.cfg, s.usageSink)
 	if err != nil {
 		return err
 	}
@@ -104,7 +118,7 @@ func (s *Service) Update(ctx context.Context, cfg *ainexuscfg.Config) error {
 		return err
 	}
 
-	next, err := build(ctx, cfg)
+	next, err := build(ctx, cfg, s.usageSink)
 	if err != nil {
 		return err
 	}
@@ -145,15 +159,15 @@ func (s *Service) Config() *ainexuscfg.Config {
 }
 
 // build 按配置构建内嵌网关；enabled=false 返回 (nil, nil)。校验失败返回
-// 错误（新网关不会生效，旧网关不受影响）。
-func build(ctx context.Context, cfg *ainexuscfg.Config) (*ainexusserver.Server, error) {
+// 错误（新网关不会生效，旧网关不受影响）。sink 为共享计量 sink（可为 nil）。
+func build(ctx context.Context, cfg *ainexuscfg.Config, sink usage.Sink) (*ainexusserver.Server, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("ainexus config invalid: %w", err)
 	}
-	srv := ainexusserver.New(cfg)
+	srv := ainexusserver.New(cfg, ainexusserver.WithUsageSink(sink))
 	if err := srv.Initialize(ctx); err != nil {
 		return nil, fmt.Errorf("ainexus initialize: %w", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/usage"
 )
 
 // --- AiNexus 整合（内嵌网关，非独立服务） ---
@@ -31,6 +32,8 @@ func (h *Handlers) AINexusChat(c *gin.Context) {
 		fail(c, http.StatusServiceUnavailable, "ainexus gateway is not enabled in config")
 		return
 	}
+	// 计量入口：本次请求的全部底层 LLM 调用归属 scenario=chat
+	c.Request = c.Request.WithContext(usage.NewOperation(c.Request.Context(), usage.ScenarioChat, "/api/v1/ainexus/chat"))
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		fail(c, http.StatusBadRequest, "read body: "+err.Error())
@@ -116,6 +119,7 @@ func (h *Handlers) EmbedOpenAIHandler(c *gin.Context) {
 		fail(c, http.StatusServiceUnavailable, "ainexus gateway is not enabled in config")
 		return
 	}
+	c.Request = c.Request.WithContext(usage.NewOperation(c.Request.Context(), usage.ScenarioNativeChat, "/ainexus/v1/chat/completions"))
 	srv.OpenAIHandler().ChatCompletions(c)
 }
 
@@ -126,6 +130,7 @@ func (h *Handlers) EmbedAnthropicHandler(c *gin.Context) {
 		fail(c, http.StatusServiceUnavailable, "ainexus gateway is not enabled in config")
 		return
 	}
+	c.Request = c.Request.WithContext(usage.NewOperation(c.Request.Context(), usage.ScenarioNativeChat, "/ainexus/v1/messages"))
 	srv.AnthropicHandler().Messages(c)
 }
 

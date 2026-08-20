@@ -671,17 +671,17 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 
 ## 十、实施分期与验收
 
-### P0：兼容性和计量基础
+### P0：兼容性和计量基础（已完成，2026-08-20）
 
-- [ ] 增加 schema migration 3；
-- [ ] 旧 YAML 的 `Enabled` 缺失值归一化为 true；
-- [ ] 修复 OpenAI stream usage 丢弃和跨 finish 合并；
-- [ ] 统一 Anthropic/OpenAI stream 完成事件和错误状态；
-- [ ] 修复压缩器模型名、context 和 scenario；
-- [ ] 设计 operation/call/call_id、context metadata 和共享 UsageSink；
-- [ ] 修复热重载时 sink/resolver 生命周期；
-- [ ] 修复通用通知成功记录缺失；
-- [ ] 增加 P0 回归测试。
+- [x] 增加 schema migration 3；
+- [x] 旧 YAML 的 `Enabled` 缺失值归一化为 true；
+- [x] 修复 OpenAI stream usage 丢弃和跨 finish 合并；
+- [x] 统一 Anthropic/OpenAI stream 完成事件和错误状态；
+- [x] 修复压缩器模型名、context 和 scenario；
+- [x] 设计 operation/call/call_id、context metadata 和共享 UsageSink；
+- [x] 修复热重载时 sink 生命周期（PromptResolver 随 P1 落地）；
+- [x] 修复通用通知成功记录缺失；
+- [x] 增加 P0 回归测试。
 
 验收：旧 runtime YAML 可正常启动；旧模型默认可用；OpenAI/Anthropic 流式 usage 可读取；Agent 多轮和压缩调用各有 call 记录；热重载前后计量不中断。
 

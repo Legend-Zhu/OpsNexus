@@ -147,6 +147,32 @@ func TestSendFailureRecorded(t *testing.T) {
 	}
 }
 
+// TestSendGenericRecordsSuccess 通用发送（非告警路径）成功也必须落发送记录
+// ——预算通知复用该路径；回归 sendAndRecordGeneric 在 NextSeq 成功时提前
+// return、跳过 SaveNotifyRecord 的缺陷。
+func TestSendGenericRecordsSuccess(t *testing.T) {
+	svc := newTestNotify(t)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	ch, err := svc.CreateChannel(store.ChannelWebhook, "gen", map[string]any{"url": ts.URL}, false, "", true)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := svc.Send(context.Background(), []string{ch.ID}, "预算提醒", "本月已用 80%"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	records, err := svc.Records(10)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("records: %v len=%d", err, len(records))
+	}
+	if records[0].Status != "success" || records[0].AlertID != "" || records[0].Title != "预算提醒" {
+		t.Fatalf("unexpected record: %+v", records[0])
+	}
+}
+
 func jsonDecode(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }

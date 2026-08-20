@@ -2,9 +2,13 @@ package ainexusrt
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 
 	ainexuscfg "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/usage"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 )
@@ -195,11 +199,86 @@ func TestPersistence(t *testing.T) {
 func TestConfigCopyIsolated(t *testing.T) {
 	svc := newTestService(t)
 	if err := svc.Update(context.Background(), validConfig(true)); err != nil {
-		t.Fatalf("update: %v", err)
+		t.Fatalf("first update: %v", err)
 	}
 	got := svc.Config()
 	got.Providers[0].Models = nil
 	if cfg := svc.Config(); len(cfg.Providers[0].Models) != 1 {
 		t.Fatal("mutating returned config leaked into internal state")
+	}
+}
+
+// openaiStub 最小 OpenAI 兼容 /chat/completions 应答（非流式，带 usage）。
+func openaiStub(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"r1","model":"m1","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}`))
+	}))
+}
+
+// TestUsageSinkSurvivesHotReload 计量 sink 由外层服务持有：热重载换新网关
+// 实例后，同一 sink 继续收到底层调用记录，场景归属 patrol_report。
+func TestUsageSinkSurvivesHotReload(t *testing.T) {
+	stub := openaiStub(t)
+	defer stub.Close()
+
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	cfg := validConfig(true)
+	cfg.Providers[0].BaseURL = stub.URL
+	cfg.Agent = ainexuscfg.AgentConfig{MaxToolRounds: 2}
+
+	var mu sync.Mutex
+	var records []usage.Record
+	sink := usage.SinkFunc(func(r usage.Record) {
+		mu.Lock()
+		defer mu.Unlock()
+		records = append(records, r)
+	})
+
+	svc := New(st, cluster.New(st), &ainexuscfg.Config{})
+	svc.SetUsageSink(sink)
+	if err := svc.Init(context.Background()); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := svc.Update(context.Background(), cfg); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+
+	srv := svc.Server()
+	if _, err := srv.Summarize("m1", "巡检报告素材"); err != nil {
+		t.Fatalf("summarize: %v", err)
+	}
+
+	// 热重载（同配置再保存）→ 新网关实例，sink 不变
+	if err := svc.Update(context.Background(), cfg); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	srv2 := svc.Server()
+	if srv == srv2 {
+		t.Fatal("expected a new gateway instance after reload")
+	}
+	if _, err := srv2.Summarize("m1", "再次巡检"); err != nil {
+		t.Fatalf("summarize after reload: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(records) != 2 {
+		t.Fatalf("expected 2 usage records across reload, got %d", len(records))
+	}
+	for _, r := range records {
+		if r.Scenario != usage.ScenarioPatrolReport || r.Model != "m1" || !r.OK || !r.UsagePresent {
+			t.Fatalf("unexpected record: %+v", r)
+		}
+	}
+	if records[0].OperationID == "" || records[0].OperationID == records[1].OperationID {
+		t.Fatalf("each summarize should be its own operation: %q vs %q",
+			records[0].OperationID, records[1].OperationID)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/provider"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/usage"
 )
 
 // SummaryMode 摘要提取的语义类别（对应提示词中的分类维度）。
@@ -42,7 +43,9 @@ func NewLLMCompressor(p provider.Provider, maxIn int) *LLMCompressor {
 }
 
 // Compress 实现 Compressor 接口：摘要一段消息。
-func (c *LLMCompressor) Compress(messages []provider.ChatMessage) string {
+// ctx 传递取消信号与计量场景（派生 compress 子场景，归属同一 operation）；
+// model 须为对话实际模型——此前写死 "summary" 会被模型池外名字拒绝或错路由。
+func (c *LLMCompressor) Compress(ctx context.Context, model string, messages []provider.ChatMessage) string {
 	if c == nil || c.p == nil || len(messages) == 0 {
 		return ""
 	}
@@ -68,11 +71,14 @@ func (c *LLMCompressor) Compress(messages []provider.ChatMessage) string {
 	prompt := strings.Replace(summaryPromptTemplate, "%d", "80", 1)
 	prompt = strings.Replace(prompt, "%s", b.String(), 1)
 
-	// 单次同步调用，压缩失败返回空串 → 上层退化为硬删
-	conv := NewConversation("summary")
+	// 单次同步调用，压缩失败返回空串 → 上层退化为硬删。
+	// ctx 继承调用方取消语义（此前 context.Background() 导致无法随请求取消），
+	// 并派生 compress 计量场景（费用口径独立可查）。
+	ctx = usage.NewChild(ctx, usage.ScenarioCompress)
+	conv := NewConversation(model)
 	conv.AddSystemMessage(prompt)
 	conv.AddUserMessage("请压缩上面这段对话。")
-	resp, err := c.p.ChatCompletion(context.Background(), conv.ToRequest(nil, false))
+	resp, err := c.p.ChatCompletion(ctx, conv.ToRequest(nil, false))
 	if err != nil || resp == nil || len(resp.Choices) == 0 {
 		return ""
 	}

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -124,7 +125,7 @@ type fakeCompressor struct {
 	calls int
 }
 
-func (f *fakeCompressor) Compress(msgs []provider.ChatMessage) string {
+func (f *fakeCompressor) Compress(_ context.Context, _ string, msgs []provider.ChatMessage) string {
 	f.calls++
 	return "root cause: port conflict; commands: probe; observations: cpu 95%"
 }
@@ -143,7 +144,7 @@ func TestCompressSummarisesOldRounds(t *testing.T) {
 	conv.AddUserMessage("继续排查")
 
 	fc := &fakeCompressor{}
-	conv.Compress(fc, 6000, 2)
+	conv.Compress(context.Background(), fc, 6000, 2)
 
 	// 摘要被调用（有旧轮次可压缩）
 	if fc.calls == 0 {
@@ -202,7 +203,7 @@ func TestCompressFallbackWhenCompressorFails(t *testing.T) {
 
 	// 压缩器总是失败
 	failing := &fakeCompressorFail{}
-	conv.Compress(failing, 3000, 1)
+	conv.Compress(context.Background(), failing, 3000, 1)
 
 	if conv.TokenCount() > 3000 {
 		t.Fatalf("over budget after fallback: %d", conv.TokenCount())
@@ -214,7 +215,7 @@ func TestCompressFallbackWhenCompressorFails(t *testing.T) {
 
 type fakeCompressorFail struct{}
 
-func (f *fakeCompressorFail) Compress(_ []provider.ChatMessage) string { return "" }
+func (f *fakeCompressorFail) Compress(_ context.Context, _ string, _ []provider.ChatMessage) string { return "" }
 
 // TestCompressNilCompressor 无压缩器 → 硬删（等价旧 Trim）。
 func TestCompressNilCompressor(t *testing.T) {
@@ -227,7 +228,7 @@ func TestCompressNilCompressor(t *testing.T) {
 	}
 	conv.AddUserMessage("继续")
 
-	conv.Compress(nil, 3000, 1)
+	conv.Compress(context.Background(), nil, 3000, 1)
 	if conv.TokenCount() > 3000 {
 		t.Fatalf("over budget: %d", conv.TokenCount())
 	}

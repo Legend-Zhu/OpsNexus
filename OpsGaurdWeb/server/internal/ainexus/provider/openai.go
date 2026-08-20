@@ -274,7 +274,11 @@ func (p *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *ChatRequ
 	return ch, nil
 }
 
-// processStream 处理 SSE 流
+// processStream 处理 SSE 流。
+// usage 语义：stream_options.include_usage 模式下 usage 通常在
+// finish_reason 之后、[DONE] 之前以独立 chunk（choices 为空）送达——因此
+// EventDone 统一延迟到流真正结束（[DONE] 或 EOF）才发送一次，并携带合并
+// 后的最终 usage；不在 finish_reason 到达时提前结束，避免丢失 usage chunk。
 func (p *OpenAIProvider) processStream(body io.ReadCloser, ch chan<- StreamEvent) {
 	defer close(ch)
 	defer body.Close()
@@ -283,31 +287,37 @@ func (p *OpenAIProvider) processStream(body io.ReadCloser, ch chan<- StreamEvent
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	toolCallsMap := make(map[int]*ToolCall)
-	streamDone := false // 标记流是否已结束
+	var usage *UsageInfo
+	finishReason := ""
+	doneSent := false
 
 	for scanner.Scan() {
-		if streamDone {
-			break
-		}
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
-			// 发送所有累积的工具调用结束事件
-			for _, tc := range toolCallsMap {
-				ch <- StreamEvent{Type: EventToolCallEnd, ToolCall: tc}
-			}
-			ch <- StreamEvent{Type: EventDone}
-			streamDone = true
-			continue
+			doneSent = true
+			flushToolCallEnds(toolCallsMap, ch)
+			ch <- StreamEvent{Type: EventDone, FinishReason: finishReason, Usage: usage}
+			return
 		}
 
 		var chunk openaiStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("unmarshal stream chunk: %w", err)}
 			return
+		}
+
+		// 用量信息：任何时点到达都记录（finish 前后均可）
+		if chunk.Usage != nil {
+			u := UsageInfo{
+				PromptTokens:     chunk.Usage.PromptTokens,
+				CompletionTokens: chunk.Usage.CompletionTokens,
+				TotalTokens:      chunk.Usage.TotalTokens,
+			}
+			usage = &u
 		}
 
 		for _, choice := range chunk.Choices {
@@ -341,33 +351,29 @@ func (p *OpenAIProvider) processStream(body io.ReadCloser, ch chan<- StreamEvent
 				}
 			}
 
-			// finish_reason（只在收到 stop 或 tool_calls 时触发 EventDone）
-			if choice.FinishReason != nil {
-				reason := *choice.FinishReason
-				if reason == "tool_calls" {
-					for _, tc := range toolCallsMap {
-						ch <- StreamEvent{Type: EventToolCallEnd, ToolCall: tc}
-					}
-				}
-				ch <- StreamEvent{Type: EventDone, FinishReason: reason}
-				streamDone = true
+			// finish_reason 只记录，不立即结束流（usage 可能尚未到达）
+			if choice.FinishReason != nil && *choice.FinishReason != "" {
+				finishReason = *choice.FinishReason
 			}
 		}
-
-		// 用量信息（独立发送，不重复触发 EventDone）
-		if chunk.Usage != nil && !streamDone {
-			// usage 单独出现时只更新，不发 EventDone
-			_ = chunk.Usage
-		}
-	}
-
-	if !streamDone {
-		// 流意外结束，确保发送完成事件
-		ch <- StreamEvent{Type: EventDone}
 	}
 
 	if err := scanner.Err(); err != nil {
 		ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("read stream: %w", err)}
+		return
+	}
+
+	// 流意外结束（无 [DONE]）→ 兜底发送一次完成事件，确保调用方可结算
+	if !doneSent {
+		flushToolCallEnds(toolCallsMap, ch)
+		ch <- StreamEvent{Type: EventDone, FinishReason: finishReason, Usage: usage}
+	}
+}
+
+// flushToolCallEnds 在流结束时统一发送累积的工具调用结束事件（一次）。
+func flushToolCallEnds(toolCallsMap map[int]*ToolCall, ch chan<- StreamEvent) {
+	for _, tc := range toolCallsMap {
+		ch <- StreamEvent{Type: EventToolCallEnd, ToolCall: tc}
 	}
 }
 

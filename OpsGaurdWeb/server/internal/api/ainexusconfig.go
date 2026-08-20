@@ -328,6 +328,9 @@ func (req *ainexusConfigRequest) toConfig() (*ainexuscfg.Config, error) {
 				DisplayName: m.DisplayName,
 				MaxTokens:   m.MaxTokens,
 				Temperature: m.Temperature,
+				// 页面 DTO 尚未携带 enabled（P3 统一 DTO 时补），保存时显式
+				// 归一化为启用，避免落盘语义依赖加载期默认值。
+				Enabled: true,
 			})
 		}
 		cfg.Providers = append(cfg.Providers, pc)

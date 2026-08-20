@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"unicode/utf8"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/provider"
@@ -11,8 +12,9 @@ import (
 // 内容,替代硬删除;摘要本身也计入 token 预算,避免摘要膨胀。
 type Compressor interface {
 	// Compress 压缩 messages 为一段纪要文本；返回空串表示压缩失败（调用方
-	// 退化回硬删）。
-	Compress(messages []provider.ChatMessage) string
+	// 退化回硬删）。ctx 传递取消信号与计量场景（派生 scenario=compress）；
+	// model 为对话实际模型（压缩调用沿用同一模型）。
+	Compress(ctx context.Context, model string, messages []provider.ChatMessage) string
 }
 
 // Conversation 对话上下文
@@ -105,7 +107,7 @@ func (c *Conversation) TokenCount() int {
 // keepRounds 个工具轮次 + 最新一条非 system 消息。system 消息永不删除。
 // 若保底区间仍超预算（单条极长，罕见），截断最后一条普通消息内容兜底。
 func (c *Conversation) Trim(maxTokens, keepRounds int) {
-	c.Compress(nil, maxTokens, keepRounds)
+	c.Compress(context.Background(), nil, maxTokens, keepRounds)
 }
 
 // Compress 将对话裁剪到 maxTokens 预算内，优先用摘要压缩：
@@ -116,7 +118,7 @@ func (c *Conversation) Trim(maxTokens, keepRounds int) {
 //  3. 兜底：摘要仍超预算或摘要失败时，按完整轮次硬删；单条超长内容截断。
 //
 // compressor 为 nil 时直接走硬删（等价于旧 Trim 行为）。
-func (c *Conversation) Compress(compressor Compressor, maxTokens, keepRounds int) {
+func (c *Conversation) Compress(ctx context.Context, compressor Compressor, maxTokens, keepRounds int) {
 	if maxTokens <= 0 || len(c.Messages) == 0 {
 		return
 	}
@@ -181,7 +183,7 @@ func (c *Conversation) Compress(compressor Compressor, maxTokens, keepRounds int
 		var notes []string
 		for gi := first; gi < keepFrom; gi++ {
 			msgs := c.Messages[groups[gi].start:groups[gi].end]
-			if note := compressor.Compress(msgs); note != "" {
+			if note := compressor.Compress(ctx, c.Model, msgs); note != "" {
 				notes = append(notes, note)
 			}
 		}

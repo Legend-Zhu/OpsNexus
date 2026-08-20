@@ -10,6 +10,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/provider"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/tool"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/usage"
 )
 
 // AgentEventType Agent 事件类型
@@ -60,19 +61,19 @@ func New(p provider.Provider, registry *tool.Registry, cfg config.AgentConfig, l
 
 // trimContext 在每次请求前把对话裁剪到上下文预算内。
 // 优先摘要压缩（保留根因/关键操作/观测），未配置预算或摘要失败则硬删。
-func (a *Agent) trimContext(conv *Conversation) {
+func (a *Agent) trimContext(ctx context.Context, conv *Conversation) {
 	if a.config.MaxContextTokens > 0 {
-		conv.Compress(a.compressor, a.config.MaxContextTokens, a.config.KeepToolRounds)
+		conv.Compress(ctx, a.compressor, a.config.MaxContextTokens, a.config.KeepToolRounds)
 	}
 }
 
 // RunStream 流式运行 Agent，返回事件 channel
 func (a *Agent) RunStream(ctx context.Context, conv *Conversation) (<-chan AgentEvent, error) {
 	toolDefs := a.registry.ToolDefinitions()
-	a.trimContext(conv)
+	a.trimContext(ctx, conv)
 	req := conv.ToRequest(toolDefs, true)
 
-	eventCh, err := a.provider.ChatCompletionStream(ctx, req)
+	eventCh, err := a.provider.ChatCompletionStream(usage.WithRound(ctx, 0), req)
 	if err != nil {
 		return nil, fmt.Errorf("start stream: %w", err)
 	}
@@ -93,7 +94,8 @@ func (a *Agent) RunStream(ctx context.Context, conv *Conversation) (<-chan Agent
 				}
 			}
 		}()
-		a.reactLoop(ctx, conv, eventCh, outCh, 0)
+		total := &provider.UsageInfo{}
+		a.reactLoop(ctx, conv, eventCh, outCh, 0, total)
 	}()
 	return outCh, nil
 }
@@ -102,10 +104,11 @@ func (a *Agent) RunStream(ctx context.Context, conv *Conversation) (<-chan Agent
 func (a *Agent) Run(ctx context.Context, conv *Conversation) (*provider.ChatResponse, error) {
 	toolDefs := a.registry.ToolDefinitions()
 
+	var total provider.UsageInfo
 	for round := 0; round < a.config.MaxToolRounds; round++ {
-		a.trimContext(conv)
+		a.trimContext(ctx, conv)
 		req := conv.ToRequest(toolDefs, false)
-		resp, err := a.provider.ChatCompletion(ctx, req)
+		resp, err := a.provider.ChatCompletion(usage.WithRound(ctx, round), req)
 		if err != nil {
 			return nil, fmt.Errorf("chat completion round %d: %w", round, err)
 		}
@@ -114,10 +117,17 @@ func (a *Agent) Run(ctx context.Context, conv *Conversation) (*provider.ChatResp
 			return nil, fmt.Errorf("no choices in response")
 		}
 
+		// 多轮 usage 累计：最终响应的 usage 反映整次请求总量，而非仅最后
+		// 一轮（每轮底层调用另经 usage.Metered 单独计量）。
+		total.PromptTokens += resp.Usage.PromptTokens
+		total.CompletionTokens += resp.Usage.CompletionTokens
+		total.TotalTokens += resp.Usage.TotalTokens
+
 		choice := resp.Choices[0]
 
 		// 如果没有工具调用，直接返回
 		if len(choice.Message.ToolCalls) == 0 {
+			resp.Usage = total
 			return resp, nil
 		}
 
@@ -139,13 +149,13 @@ func (a *Agent) Run(ctx context.Context, conv *Conversation) (*provider.ChatResp
 }
 
 // reactLoop ReAct 循环（流式）
-// 注意：outCh 由 RunStream 中的 wrapper goroutine 负责关闭，此处不 close
-func (a *Agent) reactLoop(ctx context.Context, conv *Conversation, eventCh <-chan provider.StreamEvent, outCh chan<- AgentEvent, round int) {
+// 注意：outCh 由 RunStream 中的 wrapper goroutine 负责关闭，此处不 close；
+// total 跨轮累计 usage（最终 Done 事件携带整次请求总量）。
+func (a *Agent) reactLoop(ctx context.Context, conv *Conversation, eventCh <-chan provider.StreamEvent, outCh chan<- AgentEvent, round int, total *provider.UsageInfo) {
 	// 收集当前轮次的文本和工具调用
 	var currentText string
 	toolCallsMap := make(map[int]*provider.ToolCall) // key: toolCallIndex
 	var toolCallCounter int
-	var usage *provider.UsageInfo
 	doneReceived := false // 标记是否已收到 Provider 的流结束信号
 
 	for event := range eventCh {
@@ -196,7 +206,9 @@ func (a *Agent) reactLoop(ctx context.Context, conv *Conversation, eventCh <-cha
 			if !doneReceived {
 				doneReceived = true
 				if event.Usage != nil {
-					usage = event.Usage
+					total.PromptTokens += event.Usage.PromptTokens
+					total.CompletionTokens += event.Usage.CompletionTokens
+					total.TotalTokens += event.Usage.TotalTokens
 				}
 			}
 
@@ -221,7 +233,7 @@ func (a *Agent) reactLoop(ctx context.Context, conv *Conversation, eventCh <-cha
 			outCh <- AgentEvent{
 				Type:    AgentEventDone,
 				Content: currentText,
-				Usage:   usage,
+				Usage:   totalUsagePtr(total),
 			}
 		} else {
 			outCh <- AgentEvent{
@@ -254,9 +266,9 @@ func (a *Agent) reactLoop(ctx context.Context, conv *Conversation, eventCh <-cha
 
 	// 再次调用 Provider，继续 ReAct 循环
 	toolDefs := a.registry.ToolDefinitions()
-	a.trimContext(conv)
+	a.trimContext(ctx, conv)
 	req := conv.ToRequest(toolDefs, true)
-	newEventCh, err := a.provider.ChatCompletionStream(ctx, req)
+	newEventCh, err := a.provider.ChatCompletionStream(usage.WithRound(ctx, round+1), req)
 	if err != nil {
 		outCh <- AgentEvent{
 			Type:  AgentEventError,
@@ -266,7 +278,16 @@ func (a *Agent) reactLoop(ctx context.Context, conv *Conversation, eventCh <-cha
 	}
 
 	// 递归进入下一轮
-	a.reactLoop(ctx, conv, newEventCh, outCh, round+1)
+	a.reactLoop(ctx, conv, newEventCh, outCh, round+1, total)
+}
+
+// totalUsagePtr 返回跨轮累计 usage 的拷贝（整次请求未获得任何 usage 时为 nil）。
+func totalUsagePtr(total *provider.UsageInfo) *provider.UsageInfo {
+	if total == nil || (total.PromptTokens == 0 && total.CompletionTokens == 0 && total.TotalTokens == 0) {
+		return nil
+	}
+	u := *total
+	return &u
 }
 
 // toolCallResult 工具调用结果

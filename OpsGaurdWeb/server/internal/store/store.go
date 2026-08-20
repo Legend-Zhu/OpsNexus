@@ -45,7 +45,7 @@ const (
 )
 
 // schemaVersion 当前数据版本；每次不兼容变更 +1 并追加 migrate 函数。
-const schemaVersion = 2
+const schemaVersion = 3
 
 // Store 是 LevelDB 数据存储的门面。
 type Store struct {
@@ -104,6 +104,12 @@ var migrations = map[int]func(*Store) error{
 		// v2：新增 IdP bucket（client/authcode/atoken/rtoken/key/session）。
 		// 纯结构新增，无需迁移旧数据；仅推进版本号。
 		return s.putVersion(2)
+	},
+	3: func(s *Store) error {
+		// v3：新增 MLOps bucket（prompt/mlpricing/mlusage/mlusage_day/
+		// mlbudget/mlbinding/mlops_audit，均为纯 key 前缀）。无历史数据
+		// 转换，仅推进版本号。
+		return s.putVersion(3)
 	},
 }
 
