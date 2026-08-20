@@ -35,6 +35,8 @@ type Service struct {
 	// usageSink 共享计量 sink：独立于网关实例存活，热重载构建新网关时
 	// 复用同一实例（须在 Init 之前注入）。
 	usageSink usage.Sink
+	// promptSource 提示词场景模板来源（mlops 运营层；须在 Init 之前注入）。
+	promptSource ainexusserver.PromptSource
 }
 
 // New 创建运行时网关配置服务。fileCfg 来自 config.yaml 的 ainexus 块，
@@ -55,6 +57,14 @@ func (s *Service) SetUsageSink(sink usage.Sink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.usageSink = sink
+}
+
+// SetPromptSource 注入提示词场景模板来源（须在 Init 之前调用）。热重载
+// 构建新网关时复用同一来源。
+func (s *Service) SetPromptSource(src ainexusserver.PromptSource) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.promptSource = src
 }
 
 // Init 加载运行时配置并构建网关：
@@ -80,7 +90,7 @@ func (s *Service) Init(ctx context.Context) error {
 		}
 	}
 
-	next, err := build(ctx, s.cfg, s.usageSink)
+	next, err := build(ctx, s.cfg, s.usageSink, s.promptSource)
 	if err != nil {
 		return err
 	}
@@ -118,7 +128,7 @@ func (s *Service) Update(ctx context.Context, cfg *ainexuscfg.Config) error {
 		return err
 	}
 
-	next, err := build(ctx, cfg, s.usageSink)
+	next, err := build(ctx, cfg, s.usageSink, s.promptSource)
 	if err != nil {
 		return err
 	}
@@ -159,15 +169,18 @@ func (s *Service) Config() *ainexuscfg.Config {
 }
 
 // build 按配置构建内嵌网关；enabled=false 返回 (nil, nil)。校验失败返回
-// 错误（新网关不会生效，旧网关不受影响）。sink 为共享计量 sink（可为 nil）。
-func build(ctx context.Context, cfg *ainexuscfg.Config, sink usage.Sink) (*ainexusserver.Server, error) {
+// 错误（新网关不会生效，旧网关不受影响）。sink 为共享计量 sink（可 nil）。
+func build(ctx context.Context, cfg *ainexuscfg.Config, sink usage.Sink, promptSrc ainexusserver.PromptSource) (*ainexusserver.Server, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("ainexus config invalid: %w", err)
 	}
-	srv := ainexusserver.New(cfg, ainexusserver.WithUsageSink(sink))
+	srv := ainexusserver.New(cfg,
+		ainexusserver.WithUsageSink(sink),
+		ainexusserver.WithPromptSource(promptSrc),
+	)
 	if err := srv.Initialize(ctx); err != nil {
 		return nil, fmt.Errorf("ainexus initialize: %w", err)
 	}

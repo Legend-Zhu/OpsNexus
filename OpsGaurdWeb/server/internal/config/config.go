@@ -32,6 +32,25 @@ type Config struct {
 	// IdP 让 OpsGaurd 自身作为 OIDC 身份提供者，其他系统可跳转过来认证。
 	// nil 或 enabled=false = 不启用（默认）。详见 internal/idp。
 	IdP *IdPConfig `yaml:"idp,omitempty" json:"idp,omitempty"`
+	// Mlops MLOps 运营层（提示词/模型/费用，围绕内嵌 AiNexus 网关）。
+	// nil 或 enabled=false = 不启用：/api/v1/mlops/* 不注册，网关提示词
+	// 用代码内置默认，无计量。详见 docs/MLOps-方案.md。
+	Mlops *MlopsConfig `yaml:"mlops,omitempty" json:"mlops,omitempty"`
+}
+
+// MlopsConfig MLOps 运营层配置。
+type MlopsConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// UsageRetainDays 用量明细保留天数（默认 90；日聚合不受影响）。
+	UsageRetainDays int `yaml:"usage_retain_days" json:"usage_retain_days"`
+	// Timezone 业务时区（日/月边界口径；默认本机时区）。
+	Timezone string `yaml:"timezone" json:"timezone"`
+	// UsageQueueSize 计量异步队列容量（默认 2048；满则丢弃计数不阻塞响应）。
+	UsageQueueSize int `yaml:"usage_queue_size" json:"usage_queue_size"`
+	// UsageGCInterval 明细周期 GC 间隔（如 24h；默认 24h，启动先跑一次）。
+	UsageGCInterval string `yaml:"usage_gc_interval" json:"usage_gc_interval"`
+	// Currency 费用币种（当前仅支持 CNY，其余值回退 CNY 并告警）。
+	Currency string `yaml:"currency" json:"currency"`
 }
 
 // IdPConfig 是 OpsGaurd 作为 OIDC IdP 的配置（独立于 auth.sso，后者是作为 RP 对接上游）。

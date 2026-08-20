@@ -13,6 +13,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"text/template"
 
 	"github.com/gin-gonic/gin"
 
@@ -24,6 +26,21 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/tool"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/usage"
 )
+
+// ScenarioPatrolSystem 巡检报告提示词场景 key（与 mlops Prompt Hub 同名约定）。
+const ScenarioPatrolSystem = "patrol_system"
+
+// patrolSystemPrompt 巡检报告内置 system 消息（与 mlops 内置 v1 模板等价，
+// 由回归测试守护一致）。
+const patrolSystemPrompt = "你是智能运维巡检报告助手。基于巡检检查结果，给出简明、结构化的报告：异常概况、逐项说明、处置建议。不要编造数据。"
+
+// PromptSource 提示词场景模板来源（mlops 运营层注入；nil = 代码内置默认）。
+// 引擎只依赖此最小接口，不依赖 mlops 包。
+type PromptSource interface {
+	// ScenarioTemplate 返回场景 active 版本首条消息的模板原文；
+	// ok=false 表示未自定义（用内置默认）。
+	ScenarioTemplate(scenario string) (string, bool)
+}
 
 // Server 内嵌 AI 网关（无独立 HTTP 层）
 type Server struct {
@@ -39,6 +56,8 @@ type Server struct {
 
 	// usageSink 底层调用计量 sink（nil = 不计量；见 WithUsageSink）。
 	usageSink usage.Sink
+	// promptSource 提示词场景模板来源（nil = 代码内置默认；见 WithPromptSource）。
+	promptSource PromptSource
 }
 
 // Option 内嵌网关构建选项。
@@ -49,6 +68,12 @@ type Option func(*Server)
 // sink，保证配置切换前后计量不中断。
 func WithUsageSink(sink usage.Sink) Option {
 	return func(s *Server) { s.usageSink = sink }
+}
+
+// WithPromptSource 注入提示词场景模板来源（mlops 运营层；nil = 内置默认）。
+// 与 usageSink 同样由外层服务持有，热重载复用。
+func WithPromptSource(src PromptSource) Option {
+	return func(s *Server) { s.promptSource = src }
 }
 
 // New 创建内嵌网关
@@ -86,8 +111,8 @@ func (s *Server) Initialize(ctx context.Context) error {
 	}
 
 	// 构建 gin handlers（管理端路由直接挂载）
-	s.openaiH = handler.NewOpenAIHandler(s.modelRoutes, s.registry, *s.config, s.logger)
-	s.anthropicH = handler.NewAnthropicHandler(s.modelRoutes, s.registry, *s.config, s.logger)
+	s.openaiH = handler.NewOpenAIHandler(s.modelRoutes, s.registry, *s.config, s.logger, s.promptSource)
+	s.anthropicH = handler.NewAnthropicHandler(s.modelRoutes, s.registry, *s.config, s.logger, s.promptSource)
 
 	s.logger.Printf("AiNexus embedded: %d providers, %d models, %d tools, %d MCP servers",
 		len(s.providers), len(s.modelRoutes), s.registry.ToolCount(), len(s.mcpMgr.ServerNames()))
@@ -189,9 +214,9 @@ func (s *Server) Summarize(model, prompt string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("model %q not found", model)
 	}
-	ag := agent.New(p, s.registry, s.config.Agent, s.logger)
+	ag := agent.New(p, s.registry, s.config.Agent, s.logger, s.promptSource)
 	conv := agent.NewConversation(model)
-	conv.AddSystemMessage("你是智能运维巡检报告助手。基于巡检检查结果，给出简明、结构化的报告：异常概况、逐项说明、处置建议。不要编造数据。")
+	conv.AddSystemMessage(s.patrolSystemMessage())
 	conv.AddUserMessage(prompt)
 	// 巡检报告调用归属 patrol_report 场景（计量 operation 起点）
 	ctx := usage.NewOperation(context.Background(), usage.ScenarioPatrolReport, "summarize")
@@ -203,6 +228,35 @@ func (s *Server) Summarize(model, prompt string) (string, error) {
 		return "", fmt.Errorf("summarize: no response")
 	}
 	return resp.Choices[0].Message.Content, nil
+}
+
+// patrolSystemMessage 巡检报告 system 消息：mlops patrol_system 场景
+// active 模板优先（渲染失败回退内置并留痕），否则代码内置默认。
+func (s *Server) patrolSystemMessage() string {
+	if s.promptSource != nil {
+		if tpl, ok := s.promptSource.ScenarioTemplate(ScenarioPatrolSystem); ok {
+			txt, err := renderStaticTemplate(tpl)
+			if err == nil {
+				return txt
+			}
+			s.logger.Printf("patrol_system prompt render failed (%v), falling back to builtin", err)
+		}
+	}
+	return patrolSystemPrompt
+}
+
+// renderStaticTemplate 渲染无变量场景模板（任何模板动作都会执行失败，
+// 以此强制 patrol_system 保持纯文本）。
+func renderStaticTemplate(tplText string) (string, error) {
+	t, err := template.New("scenario").Parse(tplText)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	if err := t.Execute(&b, struct{}{}); err != nil {
+		return "", err
+	}
+	return b.String(), nil
 }
 
 // ResolveModel 解析模型名：空 → 配置的默认模型（DefaultModel）→ 首个可用。

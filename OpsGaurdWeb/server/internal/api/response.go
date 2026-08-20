@@ -11,6 +11,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/idp"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/mlops"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/registry"
@@ -45,8 +46,9 @@ type Handlers struct {
 	ruleSvc     *alertrule.Service
 	authSvc     *auth.Service
 	registrySvc *registry.Service
-	idpSvc      *idp.Service // OpsGaurd 作为 OIDC IdP（nil = 未启用）
-	AINexusRT   *ainexusrt.Service // 内嵌 AiNexus 网关运行时（热重载配置；Server() 为空 = 未启用）
+	idpSvc     *idp.Service       // OpsGaurd 作为 OIDC IdP（nil = 未启用）
+	AINexusRT  *ainexusrt.Service // 内嵌 AiNexus 网关运行时（热重载配置；Server() 为空 = 未启用）
+	mlopsSvc   *mlops.Service     // MLOps 运营层（P1 提示词；nil = 未启用）
 	// AuthMiddleware 认证中间件（P6；nil = 未启用认证）。
 	AuthMiddleware gin.HandlerFunc
 }
@@ -101,6 +103,12 @@ func (h *Handlers) SetIdPService(s *idp.Service) { h.idpSvc = s }
 
 // IdP 返回 IdP 服务（router 挂载 /api/v1/idp/* + discovery 用；nil = 未启用）。
 func (h *Handlers) IdP() *idp.Service { return h.idpSvc }
+
+// SetMlopsService wires the MLOps operational layer (nil = 未启用).
+func (h *Handlers) SetMlopsService(s *mlops.Service) { h.mlopsSvc = s }
+
+// MLOps 返回 MLOps 服务（router 挂载 /api/v1/mlops/* 用；nil = 未启用）。
+func (h *Handlers) MLOps() *mlops.Service { return h.mlopsSvc }
 
 // Registry 返回内嵌镜像仓库服务（router 挂载 /v2 用；nil = 未启用）。
 func (h *Handlers) Registry() *registry.Service { return h.registrySvc }

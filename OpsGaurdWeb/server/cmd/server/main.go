@@ -24,6 +24,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/idptunnel"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/invmonitor"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/mlops"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/registry"
@@ -81,12 +82,25 @@ func main() {
 	// 内嵌 AiNexus 网关（与管理端同进程，无独立服务/端口）。配置可在
 	// 页面「系统设置 → AI 排查网关」在线修改并热重载（无需重启）；首次保存
 	// 后以 LevelDB 中的运行时配置为准，之前回退 config.yaml 的 ainexus 块。
+	// MLOps 运营层（P1 提示词 / P2 用量费用）启用时注入场景模板源与
+	// 计量 sink——均须在 Init 之前调用；collector 随进程生命周期启停。
+	var mlopsSvc *mlops.Service
+	if cfg.Mlops != nil && cfg.Mlops.Enabled {
+		mlopsSvc = mlops.New(st)
+		mlopsSvc.StartUsage(usageSettingsFromConfig(cfg.Mlops, log))
+		defer mlopsSvc.StopUsage()
+	}
 	ainexusRT := ainexusrt.New(st, clusterSvc, &cfg.AINexus)
+	if mlopsSvc != nil {
+		ainexusRT.SetPromptSource(mlopsSvc)
+		ainexusRT.SetUsageSink(mlopsSvc)
+	}
 	if err := ainexusRT.Init(context.Background()); err != nil {
 		log.Error("ainexus embed init failed", "err", err)
 		os.Exit(1)
 	}
 	h.SetAINexusRT(ainexusRT)
+	h.SetMlopsService(mlopsSvc)
 
 	// 内嵌镜像仓库(OCI /v2 + 页面传包构建;构建 push 走本机 loopback)
 	if cfg.Registry.Enabled {
@@ -237,6 +251,34 @@ func main() {
 		log.Error("server exited", "err", err)
 		os.Exit(1)
 	}
+}
+
+// usageSettingsFromConfig 把 MlopsConfig 映射为计量 collector 配置。
+func usageSettingsFromConfig(c *config.MlopsConfig, log *slog.Logger) mlops.UsageSettings {
+	s := mlops.UsageSettings{
+		RetainDays: c.UsageRetainDays,
+		QueueSize:  c.UsageQueueSize,
+		Currency:   "CNY",
+		Timezone:   time.Local,
+	}
+	if c.Currency != "" && c.Currency != "CNY" {
+		log.Warn("mlops.currency only supports CNY, falling back", "configured", c.Currency)
+	}
+	if c.Timezone != "" {
+		if loc, err := time.LoadLocation(c.Timezone); err == nil {
+			s.Timezone = loc
+		} else {
+			log.Warn("mlops.timezone invalid, using local time", "timezone", c.Timezone, "err", err)
+		}
+	}
+	if c.UsageGCInterval != "" {
+		if d, err := time.ParseDuration(c.UsageGCInterval); err == nil && d > 0 {
+			s.GCInterval = d
+		} else {
+			log.Warn("mlops.usage_gc_interval invalid, using 24h", "value", c.UsageGCInterval)
+		}
+	}
+	return s
 }
 
 // parseDuration 解析时长字符串，失败回退默认值。

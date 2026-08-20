@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,6 +20,7 @@ import (
 	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/usage"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/mlops"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy"
 )
@@ -75,7 +77,7 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 
 	// 4. 组装注入上下文后的请求体，进程内 SSE 直通
 	model := srv.ResolveModel(req.Model)
-	messages := BuildInvestigateMessages(alert, events, audit, logs, useMCP)
+	messages := h.investigateMessages(alert, events, audit, logs, useMCP)
 	body, err := json.Marshal(map[string]any{
 		"model":    model,
 		"messages": messages,
@@ -137,6 +139,50 @@ func connectClusterMCP(srv *ainexusserver.Server, clusters *cluster.Service, clu
 		return false
 	}
 	return srv.AddMCPCluster(clusterName, url, tok) == nil
+}
+
+// investigateMessages 组装深度排查消息：MLOps 启用且任一 investigate 场景
+// 已自定义时走模板渲染（另一侧用内置 v1 模板，与代码默认字节等价）；
+// 未自定义/渲染失败回退代码内置组装（失败在 mlops 侧留痕，不阻断排查）。
+func (h *Handlers) investigateMessages(alert *store.Alert, events, audit json.RawMessage, logs []workerproxy.LogLine, useMCP bool) []map[string]any {
+	if h.mlopsSvc != nil {
+		if msgs, ok := h.mlopsSvc.InvestigateMessages(investigatePromptData(alert, events, audit, logs, useMCP)); ok {
+			return msgs
+		}
+	}
+	return BuildInvestigateMessages(alert, events, audit, logs, useMCP)
+}
+
+// investigatePromptData 把排查输入组装为模板渲染数据（格式化逻辑与
+// BuildInvestigateMessages 一致：prettyJSON、[ts/stream] 行、空段落省略）。
+func investigatePromptData(alert *store.Alert, events, audit json.RawMessage, logs []workerproxy.LogLine, useMCP bool) mlops.InvestigateData {
+	d := mlops.InvestigateData{
+		UseMCP: useMCP,
+		Alert: mlops.InvestigateAlert{
+			Cluster: alert.Cluster,
+			Service: alert.Service,
+			Type:    string(alert.Type),
+			Level:   string(alert.Level),
+			Title:   alert.Title,
+			Count:   alert.Count,
+			FirstTS: formatRFC3339(alert.FirstTS),
+			LastTS:  formatRFC3339(alert.LastTS),
+		},
+	}
+	if len(events) > 0 && string(events) != "null" {
+		d.Events = prettyJSON(events)
+	}
+	if len(audit) > 0 && string(audit) != "null" {
+		d.Audit = prettyJSON(audit)
+	}
+	if len(logs) > 0 {
+		var b strings.Builder
+		for _, l := range logs {
+			fmt.Fprintf(&b, "[%s/%s] %s\n", l.TS, l.Stream, l.Line)
+		}
+		d.Logs = b.String()
+	}
+	return d
 }
 
 // BuildInvestigateMessages 组装深度排查 prompt（纯函数，可测）。

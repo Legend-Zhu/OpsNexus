@@ -229,6 +229,37 @@ func New(h *api.Handlers) *gin.Engine {
 			ainexus.PUT("/config", h.UpdateAINexusConfig)
 			ainexus.POST("/config/test", h.TestAINexusProvider)
 		}
+
+		// MLOps 运营层（P1 Prompt Hub；P2 用量费用；mlops.enabled=false
+		// 时不挂载）。读操作普通认证；写操作与审计查询挂 admin 守卫。
+		if h.MLOps() != nil {
+			ml := v1.Group("/mlops")
+			{
+				ml.GET("/prompts", h.ListMLOpsPrompts)
+				ml.GET("/prompts/:id", h.GetMLOpsPrompt)
+				ml.POST("/prompts/:id/render", h.RenderMLOpsPrompt)
+
+				// 费用报表（读）：overview/trend/detail/operation 下钻/价格列表
+				ml.GET("/costs/overview", h.MLOpsCostsOverview)
+				ml.GET("/costs/trend", h.MLOpsCostsTrend)
+				ml.GET("/costs/detail", h.MLOpsCostsDetail)
+				ml.GET("/costs/operations/:id", h.MLOpsCostsOperation)
+				ml.GET("/costs/pricing", h.ListMLOpsPricing)
+
+				admin := ml.Group("")
+				if adminMW := h.AdminMiddleware(); adminMW != nil {
+					admin.Use(adminMW)
+				}
+				admin.GET("/audit", h.ListMLOpsAudits)
+				admin.POST("/prompts", h.CreateMLOpsPrompt)
+				admin.PUT("/prompts/:id", h.SaveMLOpsPromptVersion)
+				admin.POST("/prompts/:id/activate", h.ActivateMLOpsPrompt)
+				admin.POST("/prompts/:id/reset", h.ResetMLOpsPrompt)
+				admin.DELETE("/prompts/:id", h.DeleteMLOpsPrompt)
+				admin.PUT("/costs/pricing", h.SaveMLOpsPricing)
+				admin.DELETE("/costs/pricing", h.DeleteMLOpsPricing)
+			}
+		}
 	}
 
 	// 前端控制台静态托管（SPA）：dist/ 目录（存在时挂载），

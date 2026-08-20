@@ -41,20 +41,33 @@ type Agent struct {
 	config     config.AgentConfig
 	logger     *log.Logger
 	compressor Compressor // 旧轮次摘要压缩器（nil=仅硬删）
+	prompts    ScenarioTemplateSource
 }
 
-// New 创建 Agent
-func New(p provider.Provider, registry *tool.Registry, cfg config.AgentConfig, logger *log.Logger) *Agent {
+// ScenarioTemplateSource 提示词场景模板来源（mlops 运营层注入；nil =
+// 代码内置默认）。引擎不依赖 mlops 包，仅依赖此最小接口。
+type ScenarioTemplateSource interface {
+	// ScenarioTemplate 返回场景 active 版本首条消息的模板原文；
+	// ok=false 表示未自定义（用内置默认）。
+	ScenarioTemplate(scenario string) (string, bool)
+}
+
+// ScenarioCompressSystem 压缩提示词场景 key（与 mlops Prompt Hub 同名约定）。
+const ScenarioCompressSystem = "compress_system"
+
+// New 创建 Agent。prompts 为提示词模板来源（可为 nil）。
+func New(p provider.Provider, registry *tool.Registry, cfg config.AgentConfig, logger *log.Logger, prompts ScenarioTemplateSource) *Agent {
 	a := &Agent{
 		provider: p,
 		registry: registry,
 		config:   cfg,
 		logger:   logger,
+		prompts:  prompts,
 	}
 	// 配置了上下文预算 → 用同一 provider 做旧轮次摘要（类 Trae Memory）。
 	// 不额外消耗：仅在每次裁剪前调用；失败自动退化为硬删。
 	if cfg.MaxContextTokens > 0 && p != nil {
-		a.compressor = NewLLMCompressor(p, 6000)
+		a.compressor = NewLLMCompressor(p, 6000, prompts)
 	}
 	return a
 }

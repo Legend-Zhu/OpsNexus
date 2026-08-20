@@ -42,6 +42,14 @@ const (
 	BucketRefreshToken  = "idprtoken"  // refresh token（不透明随机串）
 	BucketSigningKey    = "idpkey"     // IdP JWT 签名 RSA 私钥
 	BucketIDPSession    = "idpsession" // IdP SSO 会话（cookie sid -> 记录）
+
+	// MLOps 运营层 bucket。v3 新增，无历史数据迁移。
+	BucketPrompt     = "prompt"      // 提示词模板（场景 + 版本历史）
+	BucketMLOpsAudit = "mlops_audit" // 管理操作审计（写操作留痕）
+	BucketMLUsage     = "mlusage"      // provider call 明细（固定宽度 seq 键，按保留策略 GC）
+	BucketMLUsageCall = "mlusage_call" // call_id -> seq 幂等索引（随明细一起 GC）
+	BucketMLUsageDay  = "mlusage_day"  // 日聚合（业务时区日期 + 编码 provider/model/scenario）
+	BucketMLPricing   = "mlpricing"    // 模型单价快照（编码 provider/model）
 )
 
 // schemaVersion 当前数据版本；每次不兼容变更 +1 并追加 migrate 函数。
@@ -106,9 +114,9 @@ var migrations = map[int]func(*Store) error{
 		return s.putVersion(2)
 	},
 	3: func(s *Store) error {
-		// v3：新增 MLOps bucket（prompt/mlpricing/mlusage/mlusage_day/
-		// mlbudget/mlbinding/mlops_audit，均为纯 key 前缀）。无历史数据
-		// 转换，仅推进版本号。
+		// v3：新增 MLOps bucket（prompt/mlpricing/mlusage/mlusage_call/
+		// mlusage_day/mlbudget/mlbinding/mlops_audit，均为纯 key 前缀）。
+		// 无历史数据转换，仅推进版本号。
 		return s.putVersion(3)
 	},
 }
@@ -173,25 +181,11 @@ type KV struct {
 }
 
 // NextSeq 原子递增并返回 seq/<kind> 序列号。
+// 已持锁的串行路径直接使用 nextSeqLocked（alert.go）。
 func (s *Store) NextSeq(kind string) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	key := BucketSeq + "/" + kind
-	raw, err := s.db.Get([]byte(key), nil)
-	var cur uint64
-	if err == nil {
-		cur = binary.BigEndian.Uint64(raw)
-	} else if err != leveldb.ErrNotFound {
-		return 0, err
-	}
-	cur++
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], cur)
-	if err := s.db.Put([]byte(key), buf[:], nil); err != nil {
-		return 0, err
-	}
-	return cur, nil
+	return s.nextSeqLocked(kind)
 }
 
 // iterate 遍历 prefix 下的所有 key（不含 dir 风格子前缀过滤，调用方自理）。

@@ -38,6 +38,10 @@
           <el-icon><MagicStick /></el-icon>
           <span>异常排查</span>
         </el-menu-item>
+        <el-menu-item index="/mlops">
+          <el-icon><Notebook /></el-icon>
+          <span>MLOps</span>
+        </el-menu-item>
         <el-menu-item index="/notify">
           <el-icon><Promotion /></el-icon>
           <span>通知中心</span>
@@ -102,7 +106,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Bell, Box, Calendar, FolderOpened, MagicStick, Odometer, Platform, Promotion, Setting,
+  Bell, Box, Calendar, FolderOpened, MagicStick, Notebook, Odometer, Platform, Promotion, Setting,
 } from '@element-plus/icons-vue'
 import { authApi } from '@/api'
 import { clearToken } from '@/api/http'

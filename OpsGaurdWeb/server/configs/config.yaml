@@ -93,6 +93,18 @@ ainexus:
     #   headers:
     #     Authorization: "Bearer <worker-token>"
 
+# MLOps 运营层（提示词/模型/费用管理，围绕内嵌 AiNexus 网关）
+# enabled=false：/api/v1/mlops/* 不注册路由，网关提示词走代码内置默认，
+# 也不挂载用量计量（不产生 mlusage 明细）。
+# 启用后可在「MLOps」页面管理提示词（版本/预览/回滚）与查看用量费用。
+mlops:
+  enabled: false
+  # usage_retain_days: 90        # 用量明细保留天数（默认 90；日聚合不受 GC 影响）
+  # timezone: Asia/Shanghai      # 业务时区（今日/本月口径；默认本机时区）
+  # usage_queue_size: 2048       # 计量异步队列容量（满则丢弃计数，不阻塞响应）
+  # usage_gc_interval: 24h       # 明细周期 GC 间隔（启动时先清理一次）
+  # currency: CNY                # 费用币种（当前仅支持 CNY）
+
 # 纳管的集群：name -> Worker 端点
 # 每个集群由部署在 swarm manager 上的 Worker 提供编排/监控/MCP 能力
 clusters:

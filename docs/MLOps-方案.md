@@ -580,9 +580,10 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 | Bucket | Key | 说明 |
 |---|---|---|
 | `prompt` | `prompt/<id>` | 结构化模板及版本历史 |
-| `mlpricing` | `mlpricing/<encoded-model>` | 单价、币种、价格版本 |
+| `mlpricing` | `mlpricing/<encoded-provider>/<encoded-model>` | 单价、币种、价格版本（P2 落地：按 provider+model 定位） |
 | `mlusage` | `mlusage/<fixed-seq>` | provider call 明细，按保留策略清理 |
-| `mlusage_day` | `mlusage_day/<date>/<encoded-model>/<encoded-scenario>` | 日聚合 |
+| `mlusage_call` | `mlusage_call/<call_id>` | call_id → seq 幂等索引，随明细一起 GC（P2 落地新增） |
+| `mlusage_day` | `mlusage_day/<date>/<encoded-provider>/<encoded-model>/<encoded-scenario>` | 日聚合 |
 | `mlbudget` | `mlbudget/<yyyy-mm>` | 月预算和通知档位 |
 | `mlbinding` | `mlbinding/<scenario>` | 场景模型绑定 |
 | `mlops_audit` | `mlops_audit/<fixed-seq>` | MLOps 管理操作审计 |
@@ -625,11 +626,12 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 | GET | `/mlops/models` | 当前网关模型池、provider、enabled、默认标记、价格和本月 usage |
 | PUT | `/mlops/models/:name/enable` | 通过 runtime service 热重载启用 |
 | PUT | `/mlops/models/:name/disable` | 通过 runtime service 热重载禁用 |
-| PUT | `/mlops/models/:name/pricing` | 修改价格快照配置 |
 | GET | `/mlops/models/health` | 最近健康缓存，不隐式调用 provider |
 | POST | `/mlops/models/:name/health` | 显式真实连通性测试 |
 | GET | `/mlops/bindings` | 场景模型绑定 |
 | PUT | `/mlops/bindings/:scenario` | 修改场景绑定 |
+
+（P2 落地调整：单价管理提前随费用实现，见 `/mlops/costs/pricing`，按 provider+model 定位，避免不同 provider 同名模型的单价混淆。）
 
 模型名需要 URL 编码；列表按 provider 配置顺序稳定返回。
 
@@ -641,6 +643,9 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 | GET | `/mlops/costs/trend` | 按业务时区的日序列；限制 `days` 上限 |
 | GET | `/mlops/costs/detail` | call 明细分页；支持 model/scenario/status/from/to/cursor |
 | GET | `/mlops/costs/operations/:id` | 一次业务 operation 下的所有 provider call |
+| GET | `/mlops/costs/pricing` | 单价列表（定点整数存储，DTO 十进制字符串） |
+| PUT | `/mlops/costs/pricing` | 保存/覆盖 (provider, model) 单价（admin，立即生效不回溯历史） |
+| DELETE | `/mlops/costs/pricing?provider=&model=` | 删除单价（admin） |
 | POST | `/mlops/budgets` | 新增或覆盖指定月份预算 |
 | GET | `/mlops/budgets` | 预算、实际金额、使用率、通知档位 |
 | DELETE | `/mlops/budgets/:month` | 删除预算 |
@@ -685,15 +690,15 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 
 验收：旧 runtime YAML 可正常启动；旧模型默认可用；OpenAI/Anthropic 流式 usage 可读取；Agent 多轮和压缩调用各有 call 记录；热重载前后计量不中断。
 
-### P1：结构化 Prompt Hub
+### P1：结构化 Prompt Hub（已完成，2026-08-20）
 
-- [ ] `prompt` bucket、结构化消息版本模型和 Store 原子操作；
-- [ ] Prompt Resolver、模板编译缓存、变量白名单和输出限制；
-- [ ] investigate system/user 接入，保证 MCP 开关和空证据行为不变；
-- [ ] compress system 接入；
-- [ ] patrol system 接入，保留 YAML `report.prompt` 作为业务输入；
-- [ ] Prompt API、admin 权限和管理审计；
-- [ ] 前端提示词 tab。
+- [x] `prompt` bucket、结构化消息版本模型和 Store 原子操作；
+- [x] Prompt Resolver、模板编译缓存、变量白名单和输出限制；
+- [x] investigate system/user 接入，保证 MCP 开关和空证据行为不变；
+- [x] compress system 接入；
+- [x] patrol system 接入，保留 YAML `report.prompt` 作为业务输入；
+- [x] Prompt API、admin 权限和管理审计；
+- [x] 前端提示词 tab。
 
 验收：
 
@@ -703,15 +708,15 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 - v1/v2 激活、回滚、并发冲突和恢复默认可验证；
 - 坏模板线上回退代码默认并产生可观测记录。
 
-### P2：provider-level usage 和费用
+### P2：provider-level usage 和费用（已完成，2026-08-20）
 
-- [ ] `mlusage`、`mlusage_day`、`mlpricing` Store 模型和迁移；
-- [ ] provider call 级 UsageSink；
-- [ ] operation 聚合和日聚合；
-- [ ] 价格版本、计价标记和金额舍入；
-- [ ] 明细分页、趋势、汇总和 operation 下钻；
-- [ ] 启动/周期 GC；
-- [ ] 费用 API 和前端费用 tab。
+- [x] `mlusage`、`mlusage_day`、`mlpricing`、`mlusage_call`（call_id 幂等索引）Store 模型（v3 migration 已覆盖，纯前缀新增无需再升版本）；
+- [x] provider call 级 UsageSink（异步有界队列，满则丢弃计数不阻塞响应；Stop 排空）；
+- [x] operation 聚合（明细按 operation_id 下钻 + 日聚合 Operations 当日去重估算）和日聚合（串行批处理原子读改写）；
+- [x] 价格版本（pv-&lt;unixnano&gt; 快照）、计价标记（免费=priced 且金额 0，无价=priced=false）和定点微元金额（整数截断到 1e-6 CNY）；
+- [x] 明细分页（before_seq 游标 + limit/offset，扫描上限 2 万）、趋势（≤92 天）、汇总（今日/本月/按模型/按场景）和 operation 下钻；
+- [x] 启动 + 周期 GC（默认 90 天/24h，限量分批 500 条，只删明细+索引不删日聚合）；
+- [x] 费用 API（`/mlops/costs/*`，读普通认证、价格写 admin+审计）和前端费用 tab（摘要卡片/按模型/按场景/趋势/明细/下钻/单价管理）。
 
 验收：
 

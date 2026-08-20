@@ -63,7 +63,7 @@ func TestRunAccumulatesUsageAcrossRounds(t *testing.T) {
 			Usage:   provider.UsageInfo{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
 		},
 	}}
-	ag := New(p, reg, config.AgentConfig{MaxToolRounds: 4}, log.New(io.Discard, "", 0))
+	ag := New(p, reg, config.AgentConfig{MaxToolRounds: 4}, log.New(io.Discard, "", 0), nil)
 	conv := NewConversation("m")
 	conv.AddUserMessage("go")
 
@@ -114,7 +114,7 @@ func TestRunStreamAccumulatesUsageAcrossRounds(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.MustRegister(echoTool{})
 	p := &scriptedStreamProvider{}
-	ag := New(p, reg, config.AgentConfig{MaxToolRounds: 4}, log.New(io.Discard, "", 0))
+	ag := New(p, reg, config.AgentConfig{MaxToolRounds: 4}, log.New(io.Discard, "", 0), nil)
 	conv := NewConversation("m")
 	conv.AddUserMessage("go")
 

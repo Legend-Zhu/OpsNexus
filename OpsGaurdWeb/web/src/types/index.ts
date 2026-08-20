@@ -563,3 +563,136 @@ export interface AINexusMCPServer {
   /** 集群 manager 的自动 MCP（服务端自动连接，页面只读） */
   cluster?: boolean
 }
+
+// ---- MLOps 提示词（/v1/mlops/prompts，P1） ----
+export interface MLOpsPromptMessage {
+  role: 'system' | 'user'
+  template: string
+}
+
+export interface MLOpsPromptVariable {
+  name: string
+  required: boolean
+  note?: string
+}
+
+export interface MLOpsPromptVersion {
+  version: number
+  messages: MLOpsPromptMessage[]
+  variables?: MLOpsPromptVariable[]
+  note?: string
+  created_at?: string
+  created_by?: string
+}
+
+export interface MLOpsPrompt {
+  id: string
+  scenario: string
+  name: string
+  active_version: number
+  builtin: boolean
+  /** 内置场景是否已落库（首次自定义时物化） */
+  materialized?: boolean
+  versions: MLOpsPromptVersion[]
+  created_at?: string
+  updated_at?: string
+}
+
+export interface MLOpsRenderedMessage {
+  role: string
+  content: string
+}
+
+// ---- MLOps 用量费用（/v1/mlops/costs/*，P2） ----
+
+/** 费用合计（金额为微元定点，前端格式化展示） */
+export interface MLOpsCostTotals {
+  calls: number
+  success_calls: number
+  error_calls: number
+  canceled_calls: number
+  unmetered_calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  priced_calls: number
+  unpriced_calls: number
+  cost_minor: number
+  operations: number
+}
+
+export interface MLOpsCollectorStats {
+  queue_len: number
+  queue_cap: number
+  dropped: number
+  deduped: number
+  failed: number
+  retain_days: number
+}
+
+export interface MLOpsCostModelRow {
+  provider: string
+  model: string
+  totals: MLOpsCostTotals
+}
+
+export interface MLOpsCostScenarioRow {
+  scenario: string
+  totals: MLOpsCostTotals
+}
+
+export interface MLOpsCostsOverview {
+  day: string
+  month: string
+  currency: string
+  timezone: string
+  today_totals: MLOpsCostTotals
+  month_totals: MLOpsCostTotals
+  by_model: MLOpsCostModelRow[]
+  by_scenario: MLOpsCostScenarioRow[]
+  collector: MLOpsCollectorStats
+}
+
+export interface MLOpsCostTrendRow {
+  day: string
+  totals: MLOpsCostTotals
+}
+
+/** 一次底层 provider 调用的计量明细 */
+export interface MLOpsUsageDetail {
+  seq: number
+  operation_id: string
+  call_id: string
+  provider: string
+  model: string
+  scenario: string
+  entry_point?: string
+  round?: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  usage_present: boolean
+  ok: boolean
+  status: string
+  error?: string
+  priced: boolean
+  currency?: string
+  cost_minor: number
+  pricing_version?: string
+  started_at: string
+  finished_at: string
+  latency_ms: number
+}
+
+export interface MLOpsPricing {
+  provider: string
+  model: string
+  currency: string
+  /** 元/百万 token（十进制字符串，最多 6 位小数） */
+  price_in_per_m: string
+  price_out_per_m: string
+  version: string
+  updated_at: string
+  updated_by?: string
+  note?: string
+}

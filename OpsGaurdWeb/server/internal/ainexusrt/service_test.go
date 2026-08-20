@@ -2,12 +2,16 @@ package ainexusrt
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	ainexuscfg "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
+	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/usage"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
@@ -209,12 +213,78 @@ func TestConfigCopyIsolated(t *testing.T) {
 }
 
 // openaiStub 最小 OpenAI 兼容 /chat/completions 应答（非流式，带 usage）。
-func openaiStub(t *testing.T) *httptest.Server {
+// capture 非 nil 时记录最近一次请求体。
+func openaiStubCapture(t *testing.T, capture *atomic.Value) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if capture != nil {
+			b, _ := io.ReadAll(r.Body)
+			capture.Store(string(b))
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"r1","model":"m1","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}`))
 	}))
+}
+
+// openaiStub 最小 OpenAI 兼容 /chat/completions 应答（非流式，带 usage）。
+func openaiStub(t *testing.T) *httptest.Server {
+	t.Helper()
+	return openaiStubCapture(t, nil)
+}
+
+// patrolSource 固定返回 patrol_system 场景模板。
+type patrolSource struct{ tpl string }
+
+func (s patrolSource) ScenarioTemplate(scenario string) (string, bool) {
+	if scenario == ainexusserver.ScenarioPatrolSystem {
+		return s.tpl, true
+	}
+	return "", false
+}
+
+// TestSummarizeUsesCustomPatrolPrompt 巡检报告使用注入的 patrol_system
+// 自定义模板；坏模板（含变量动作）回退代码内置默认。
+func TestSummarizeUsesCustomPatrolPrompt(t *testing.T) {
+	var body atomic.Value
+	stub := openaiStubCapture(t, &body)
+	defer stub.Close()
+
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	cfg := validConfig(true)
+	cfg.Providers[0].BaseURL = stub.URL
+	cfg.Agent = ainexuscfg.AgentConfig{MaxToolRounds: 2}
+
+	svc := New(st, cluster.New(st), &ainexuscfg.Config{})
+	svc.SetPromptSource(patrolSource{tpl: "自定义巡检提示词"})
+	if err := svc.Init(context.Background()); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := svc.Update(context.Background(), cfg); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if _, err := svc.Server().Summarize("m1", "素材"); err != nil {
+		t.Fatalf("summarize: %v", err)
+	}
+	if got, _ := body.Load().(string); !strings.Contains(got, "自定义巡检提示词") {
+		t.Fatalf("patrol system prompt not applied: %s", got)
+	}
+
+	// 坏模板（含 {{}} 动作，patrol 场景只允许纯文本）→ 回退内置默认
+	svc2 := New(st, cluster.New(st), &ainexuscfg.Config{})
+	svc2.SetPromptSource(patrolSource{tpl: "坏的 {{.Nope}}"})
+	if err := svc2.Update(context.Background(), cfg); err != nil {
+		t.Fatalf("enable2: %v", err)
+	}
+	if _, err := svc2.Server().Summarize("m1", "素材"); err != nil {
+		t.Fatalf("summarize2: %v", err)
+	}
+	if got, _ := body.Load().(string); !strings.Contains(got, "智能运维巡检报告助手") {
+		t.Fatalf("bad template must fall back to builtin: %s", got)
+	}
 }
 
 // TestUsageSinkSurvivesHotReload 计量 sink 由外层服务持有：热重载换新网关

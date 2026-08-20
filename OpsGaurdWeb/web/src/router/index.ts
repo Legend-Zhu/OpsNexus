@@ -80,6 +80,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '异常排查' },
       },
       {
+        path: 'mlops',
+        name: 'mlops',
+        component: () => import('@/views/mlops/Index.vue'),
+        meta: { title: 'MLOps' },
+      },
+      {
         path: 'notify',
         name: 'notify',
         component: () => import('@/views/notify/Index.vue'),

@@ -21,15 +21,18 @@ type AnthropicHandler struct {
 	registry    *tool.Registry
 	config      config.Config
 	logger      *log.Logger
+	promptSrc   agent.ScenarioTemplateSource
 }
 
-// NewAnthropicHandler 创建 Anthropic 格式处理器
-func NewAnthropicHandler(modelRoutes map[string]provider.Provider, registry *tool.Registry, cfg config.Config, logger *log.Logger) *AnthropicHandler {
+// NewAnthropicHandler 创建 Anthropic 格式处理器。promptSrc 为提示词场景
+// 模板来源（nil = 代码内置默认）。
+func NewAnthropicHandler(modelRoutes map[string]provider.Provider, registry *tool.Registry, cfg config.Config, logger *log.Logger, promptSrc agent.ScenarioTemplateSource) *AnthropicHandler {
 	return &AnthropicHandler{
 		modelRoutes: modelRoutes,
 		registry:    registry,
 		config:      cfg,
 		logger:      logger,
+		promptSrc:   promptSrc,
 	}
 }
 
@@ -73,7 +76,7 @@ func (h *AnthropicHandler) Messages(c *gin.Context) {
 		return
 	}
 
-	ag := agent.New(p, h.registry, h.config.Agent, h.logger)
+	ag := agent.New(p, h.registry, h.config.Agent, h.logger, h.promptSrc)
 
 	conv := agent.NewConversation(req.Model)
 	if req.System != "" {

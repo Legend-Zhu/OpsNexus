@@ -21,19 +21,22 @@ type OpenAIHandler struct {
 	registry     *tool.Registry
 	config       config.Config
 	logger       *log.Logger
+	promptSrc    agent.ScenarioTemplateSource
 	agentFactory func(provider.Provider) *agent.Agent
 }
 
-// NewOpenAIHandler 创建 OpenAI 格式处理器
-func NewOpenAIHandler(modelRoutes map[string]provider.Provider, registry *tool.Registry, cfg config.Config, logger *log.Logger) *OpenAIHandler {
+// NewOpenAIHandler 创建 OpenAI 格式处理器。promptSrc 为提示词场景模板
+// 来源（nil = 代码内置默认）。
+func NewOpenAIHandler(modelRoutes map[string]provider.Provider, registry *tool.Registry, cfg config.Config, logger *log.Logger, promptSrc agent.ScenarioTemplateSource) *OpenAIHandler {
 	h := &OpenAIHandler{
 		modelRoutes: modelRoutes,
 		registry:    registry,
 		config:      cfg,
 		logger:      logger,
+		promptSrc:   promptSrc,
 	}
 	h.agentFactory = func(p provider.Provider) *agent.Agent {
-		return agent.New(p, registry, cfg.Agent, logger)
+		return agent.New(p, registry, cfg.Agent, logger, promptSrc)
 	}
 	return h
 }

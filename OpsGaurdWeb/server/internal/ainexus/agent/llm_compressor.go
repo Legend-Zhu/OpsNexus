@@ -7,8 +7,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"strings"
+	"text/template"
 	"unicode/utf8"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/provider"
@@ -16,7 +19,10 @@ import (
 )
 
 // SummaryMode 摘要提取的语义类别（对应提示词中的分类维度）。
-const summaryPromptTemplate = `你是会话压缩器。把下面的对话轮次压缩成一段不超过 %d 字的纪要,
+// Go text/template 语法（{{.MaxWords}}/{{.Content}}）；mlops 注入
+// compress_system 场景 active 模板时可热替换，v1 与旧 %d/%s 版本逐字节等价
+// （由本包回归测试守护）。
+const summaryPromptTemplate = `你是会话压缩器。把下面的对话轮次压缩成一段不超过 {{.MaxWords}} 字的纪要,
 只保留对后续排查有用的信息,按类别组织:
 - 根因/结论:已确认或高度怀疑的根因
 - 关键操作:执行过的命令/工具调用(名称+简要结果)
@@ -25,21 +31,25 @@ const summaryPromptTemplate = `你是会话压缩器。把下面的对话轮次�
 丢弃寒暄、重复与无关内容。直接输出纪要,不要解释。
 
 对话轮次:
-%s
+{{.Content}}
 `
+
+// maxCompressRenderBytes 压缩提示词渲染输出上限（防坏模板放大输入）。
+const maxCompressRenderBytes = 1 << 20
 
 // LLMCompressor 用内嵌 LLM 摘要旧轮次。
 type LLMCompressor struct {
 	p     provider.Provider
 	maxIn int // 单轮参与摘要的最大字符（防超长轮次把摘要输入打爆）
+	prompts ScenarioTemplateSource
 }
 
-// NewLLMCompressor 创建摘要压缩器。
-func NewLLMCompressor(p provider.Provider, maxIn int) *LLMCompressor {
+// NewLLMCompressor 创建摘要压缩器。prompts 为提示词模板来源（可为 nil）。
+func NewLLMCompressor(p provider.Provider, maxIn int, prompts ScenarioTemplateSource) *LLMCompressor {
 	if maxIn <= 0 {
 		maxIn = 6000
 	}
-	return &LLMCompressor{p: p, maxIn: maxIn}
+	return &LLMCompressor{p: p, maxIn: maxIn, prompts: prompts}
 }
 
 // Compress 实现 Compressor 接口：摘要一段消息。
@@ -68,13 +78,16 @@ func (c *LLMCompressor) Compress(ctx context.Context, model string, messages []p
 		return ""
 	}
 
-	prompt := strings.Replace(summaryPromptTemplate, "%d", "80", 1)
-	prompt = strings.Replace(prompt, "%s", b.String(), 1)
-
 	// 单次同步调用，压缩失败返回空串 → 上层退化为硬删。
 	// ctx 继承调用方取消语义（此前 context.Background() 导致无法随请求取消），
 	// 并派生 compress 计量场景（费用口径独立可查）。
 	ctx = usage.NewChild(ctx, usage.ScenarioCompress)
+
+	// 提示词模板：mlops 注入的 compress_system active 模板优先，否则内置默认
+	prompt, err := renderCompressPrompt(c.promptTemplate(), 80, b.String())
+	if err != nil {
+		return "" // 坏模板 → 压缩失败 → 上层退化为硬删
+	}
 	conv := NewConversation(model)
 	conv.AddSystemMessage(prompt)
 	conv.AddUserMessage("请压缩上面这段对话。")
@@ -87,6 +100,38 @@ func (c *LLMCompressor) Compress(ctx context.Context, model string, messages []p
 		return ""
 	}
 	return note
+}
+
+// compressPromptData 压缩提示词模板变量。
+type compressPromptData struct {
+	MaxWords int
+	Content  string
+}
+
+// promptTemplate 当前生效的压缩提示词模板（mlops active 优先，内置默认兜底）。
+func (c *LLMCompressor) promptTemplate() string {
+	if c.prompts != nil {
+		if tpl, ok := c.prompts.ScenarioTemplate(ScenarioCompressSystem); ok {
+			return tpl
+		}
+	}
+	return summaryPromptTemplate
+}
+
+// renderCompressPrompt 渲染压缩提示词（语法/执行失败返回错误）。
+func renderCompressPrompt(tplText string, maxWords int, content string) (string, error) {
+	t, err := template.New("compress").Parse(tplText)
+	if err != nil {
+		return "", fmt.Errorf("parse compress prompt: %w", err)
+	}
+	var b bytes.Buffer
+	if err := t.Execute(&b, compressPromptData{MaxWords: maxWords, Content: content}); err != nil {
+		return "", fmt.Errorf("exec compress prompt: %w", err)
+	}
+	if b.Len() > maxCompressRenderBytes {
+		return "", fmt.Errorf("compress prompt output exceeds %d bytes", maxCompressRenderBytes)
+	}
+	return b.String(), nil
 }
 
 // stringifyMessage 把一条消息转为可摘要文本。

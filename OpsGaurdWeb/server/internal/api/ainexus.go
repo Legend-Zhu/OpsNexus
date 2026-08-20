@@ -66,7 +66,7 @@ func (h *Handlers) AINexusChat(c *gin.Context) {
 		}
 		events, audit, logs := gatherEvidence(c.Request.Context(), cli, alert.Service, 20, 50)
 		mcpOK := useMCP && connectClusterMCP(srv, h.clusters, alert.Cluster)
-		seed := BuildInvestigateMessages(alert, events, audit, logs, mcpOK)
+		seed := h.investigateMessages(alert, events, audit, logs, mcpOK)
 		// 证据前缀 + 客户端消息（首轮客户端消息可空 → 仅种子即完整提问）
 		var msgs []any
 		for _, m := range seed {

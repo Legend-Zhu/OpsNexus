@@ -16,6 +16,13 @@ import type {
   InventoryConfig,
   InventoryView,
   Investigation,
+  MLOpsCostsOverview,
+  MLOpsCostTrendRow,
+  MLOpsPrompt,
+  MLOpsPromptMessage,
+  MLOpsPricing,
+  MLOpsRenderedMessage,
+  MLOpsUsageDetail,
   Me,
   NodeStats,
   NotifyChannel,
@@ -233,4 +240,51 @@ export const registryApi = {
   // 上传构建包（multipart，大文件放宽超时到 10 分钟）
   submitBuild: (form: FormData) =>
     post<BuildTask>('/v1/registry/builds', form, { timeout: 600000 }),
+}
+
+// ---- MLOps（提示词管理，P1；启用需 server 配置 mlops.enabled=true） ----
+export const mlopsApi = {
+  prompts: () => get<{ items: MLOpsPrompt[] }>('/v1/mlops/prompts'),
+  prompt: (id: string) => get<MLOpsPrompt>(`/v1/mlops/prompts/${id}`),
+  createPrompt: (body: { name: string; version: { messages: MLOpsPromptMessage[]; note?: string } }) =>
+    post<MLOpsPrompt>('/v1/mlops/prompts', body),
+  savePrompt: (
+    id: string,
+    body: { expected_active_version?: number; activate: boolean; version: { messages: MLOpsPromptMessage[]; note?: string } },
+  ) => put<MLOpsPrompt>(`/v1/mlops/prompts/${id}`, body),
+  renderPrompt: (id: string, body: { version?: number; data?: unknown }) =>
+    post<{ messages: MLOpsRenderedMessage[] }>(`/v1/mlops/prompts/${id}/render`, body),
+  activatePrompt: (id: string, body: { version: number; expected_active_version?: number }) =>
+    post<MLOpsPrompt>(`/v1/mlops/prompts/${id}/activate`, body),
+  resetPrompt: (id: string) => post<MLOpsPrompt>(`/v1/mlops/prompts/${id}/reset`),
+  deletePrompt: (id: string) => del<{ deleted: string }>(`/v1/mlops/prompts/${id}`),
+
+  // ---- 用量费用（P2） ----
+  costsOverview: () => get<MLOpsCostsOverview>('/v1/mlops/costs/overview'),
+  costsTrend: (params?: { from?: string; to?: string }) =>
+    get<{ items: MLOpsCostTrendRow[] }>('/v1/mlops/costs/trend', { params }),
+  costsDetail: (params?: {
+    from?: string
+    to?: string
+    provider?: string
+    model?: string
+    scenario?: string
+    status?: string
+    operation_id?: string
+    before_seq?: number
+    limit?: number
+    offset?: number
+  }) => get<{ items: MLOpsUsageDetail[]; total: number; truncated: boolean }>('/v1/mlops/costs/detail', { params }),
+  costsOperation: (id: string) =>
+    get<{ items: MLOpsUsageDetail[]; operation_id: string }>(`/v1/mlops/costs/operations/${id}`),
+  pricingList: () => get<{ items: MLOpsPricing[] }>('/v1/mlops/costs/pricing'),
+  pricingSave: (body: {
+    provider: string
+    model: string
+    price_in_per_m: string
+    price_out_per_m: string
+    note?: string
+  }) => put<MLOpsPricing>('/v1/mlops/costs/pricing', body),
+  pricingDelete: (provider: string, model: string) =>
+    del<{ deleted: string }>(`/v1/mlops/costs/pricing`, { params: { provider, model } }),
 }
