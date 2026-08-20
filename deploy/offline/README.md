@@ -36,7 +36,7 @@
 | agent-config.disaster.yaml | 灾害集群 5 台 /etc/opsguard/agent-config.yaml | Worker 策略（auth enabled + token，5 台一致） |
 | stack.disaster.yml | 232:/opt/opsguard/stack.disaster.yml | 灾害集群 Worker（6060/6061，global，mode:host，含 IdP 隧道 env） |
 | agent-config.azbx.yaml | 安责险 3 台 /etc/opsguard/agent-config.yaml | Worker 策略（auth enabled + 独立 token） |
-| stack.azbx.yml | 66:/opt/opsguard/stack.azbx.yml | 安责险集群 Worker（6060/6061，global，mode:host，镜像 1.2.5） |
+| stack.azbx.yml | 66:/opt/opsguard/stack-azbx.yml | 安责险集群 Worker（6060/6061，global，mode:host，镜像=中继引用 1.2.7） |
 | install-docker-noinit.sh | 安责险 worker 节点 /opt/opsguard/offline/ | docker 离线安装（不做 swarm init，装完 join manager） |
 
 ### 灾害集群（5 节点）部署记录与要点
@@ -269,6 +269,27 @@
    上报；**中继验证**：66 `curl :6060/v2/` → 200（隧道打通，集群节点可经
    `10.60.185.66:6060/<repo>:<tag>` 从管理端内嵌仓库拉镜像，daemon.json
    已预置该 insecure-registries 条目）。
+
+7. **worker 1.2.5→1.2.7（2026-08-21）**：补齐 push 大层 30s 502 修复
+   （灾害集群记录 15）及 1.2.6 的节点统计/SSE/中继陈旧流等修复。
+   - **首次尝试失败与教训**：无 SSH 通道时走了编排 API 全量替换（PUT
+     `workloads/opsguard_worker`）——swarm 的 `ContainerSpec.Command` 是
+     **完整可执行 argv**（不是 compose `command:` 那种拼在 ENTRYPOINT 后
+     的 CMD 语义），载荷把 flags 当 Command 传 → `exec "-agent-config"
+     not found` ×3 次重试耗尽 → 66 manager 任务挂死、集群失管约 20 分钟
+     （89/86 未轮到，rolling pause；镜像源=66 worker 自身中继也随之中断）。
+     API 全量替换另无法表达 hostname 模板。**该服务的 server 侧「编辑
+     预填」快照仍是这次失败留下的错误 config——UI 编辑保存前勿直接用，
+     用 CLI 管理**；待 translator 支持 hostname/完整 argv 后再修正。
+   - **恢复与正确升级路径**（SSH 66）：`docker stack deploy -c
+     /opt/opsguard/stack-azbx.yml opsguard` 还原原 spec（回 1.2.5、hostname
+     恢复、3/3 运行）→ 三台 `docker pull 10.60.185.66:6060/library/
+     opsguard-worker:1.2.7` 预拉（digest `7be086e4…` 与内嵌仓库一致）→
+     66 上 `docker service update --image <中继全引用>` → **3/3 收敛**。
+   - **镜像引用**改为中继全引用（swarm 按引用匹配本地已拉镜像，滚动期
+     零拉取依赖）；66 上 stack 文件与仓内 stack.azbx.yml 已同步更新。
+   - 已验证：三台启动日志 `version=1.2.7`（manager 隧道池 16 流 + 中继
+     缓存 2048MB）；节点 SSE 3/3 `reachable:true`；azbx-cluster 在线。
 
 ## 部署步骤（已完成，供重建参考）
 
