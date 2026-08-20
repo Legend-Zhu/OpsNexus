@@ -29,7 +29,7 @@
         <template #default="{ row }">{{ fmtTime(row.updated_at) }}</template>
       </el-table-column>
     </el-table>
-    <el-button class="mt" size="small" :icon="Plus" @click="openCreate">新建自定义提示词</el-button>
+    <el-button v-if="isAdmin" class="mt" size="small" :icon="Plus" @click="openCreate">新建自定义提示词</el-button>
 
     <!-- 详情：编辑 + 预览 + 版本历史 -->
     <div v-if="detail" class="detail">
@@ -37,8 +37,8 @@
         <h3>{{ detail.name }} <span class="mono muted">({{ detail.scenario }})</span></h3>
         <el-space>
           <el-tag v-if="detail.builtin" size="small" type="info" effect="plain">内置场景 · v1 为代码默认</el-tag>
-          <el-button v-if="detail.builtin && detail.materialized" size="small" @click="reset">还原默认</el-button>
-          <el-button v-if="!detail.builtin" size="small" type="danger" @click="removeCustom">删除</el-button>
+          <el-button v-if="isAdmin && detail.builtin && detail.materialized" size="small" @click="reset">还原默认</el-button>
+          <el-button v-if="isAdmin && !detail.builtin" size="small" type="danger" @click="removeCustom">删除</el-button>
         </el-space>
       </div>
 
@@ -50,23 +50,27 @@
         </el-tag>
       </div>
 
-      <!-- 编辑器（基于 active 版本拷贝，保存为新版本） -->
-      <el-divider content-position="left">编辑新版本（Go text/template 语法）</el-divider>
-      <div v-for="(m, i) in editor.messages" :key="i" class="msg-row">
-        <el-select v-model="m.role" size="small" style="width: 110px">
-          <el-option label="system" value="system" />
-          <el-option label="user" value="user" />
-        </el-select>
-        <el-input v-model="m.template" type="textarea" :rows="Math.min(12, Math.max(3, m.template.split('\n').length))"
-          class="mono msg-input" placeholder="模板正文，变量用 {{ '{{.Alert.Title}}' }} 形式引用" />
-        <el-button v-if="editor.messages.length > 1" link type="danger" :icon="Delete" @click="editor.messages.splice(i, 1)" />
-      </div>
-      <el-button size="small" :icon="Plus" @click="editor.messages.push({ role: 'user', template: '' })">添加消息</el-button>
-      <div class="save-bar">
-        <el-input v-model="editor.note" placeholder="版本备注（可选）" style="width: 320px" />
-        <el-checkbox v-model="editor.activate">保存后立即激活</el-checkbox>
-        <el-button type="primary" :loading="saving" @click="saveVersion">保存新版本 (v{{ detail.versions.length + 1 }})</el-button>
-      </div>
+      <!-- 编辑器（基于 active 版本拷贝，保存为新版本；非 admin 只读浏览） -->
+      <el-divider content-position="left">
+        编辑新版本（Go text/template 语法）{{ isAdmin ? '' : '（只读，写操作需管理员）' }}
+      </el-divider>
+      <template v-if="isAdmin">
+        <div v-for="(m, i) in editor.messages" :key="i" class="msg-row">
+          <el-select v-model="m.role" size="small" style="width: 110px">
+            <el-option label="system" value="system" />
+            <el-option label="user" value="user" />
+          </el-select>
+          <el-input v-model="m.template" type="textarea" :rows="Math.min(12, Math.max(3, m.template.split('\n').length))"
+            class="mono msg-input" placeholder="模板正文，变量用 {{ '{{.Alert.Title}}' }} 形式引用" />
+          <el-button v-if="editor.messages.length > 1" link type="danger" :icon="Delete" @click="editor.messages.splice(i, 1)" />
+        </div>
+        <el-button size="small" :icon="Plus" @click="editor.messages.push({ role: 'user', template: '' })">添加消息</el-button>
+        <div class="save-bar">
+          <el-input v-model="editor.note" placeholder="版本备注（可选）" style="width: 320px" />
+          <el-checkbox v-model="editor.activate">保存后立即激活</el-checkbox>
+          <el-button type="primary" :loading="saving" @click="saveVersion">保存新版本 (v{{ detail.versions.length + 1 }})</el-button>
+        </div>
+      </template>
 
       <!-- 预览 -->
       <el-divider content-position="left">渲染预览（data 为 JSON，按场景数据结构）</el-divider>
@@ -97,7 +101,7 @@
         </el-table-column>
         <el-table-column label="操作" width="90">
           <template #default="{ row }">
-            <el-button v-if="row.version !== detail.active_version" link type="primary" @click="activate(row.version)">
+            <el-button v-if="isAdmin && row.version !== detail.active_version" link type="primary" @click="activate(row.version)">
               {{ row.version === 1 && detail.builtin ? '还原默认' : '切换' }}
             </el-button>
           </template>
@@ -132,6 +136,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { mlopsApi } from '@/api'
+import { isAdmin, loadAdminFlag } from '@/composables/admin'
 import type { MLOpsPrompt, MLOpsPromptMessage, MLOpsRenderedMessage } from '@/types'
 
 const prompts = ref<MLOpsPrompt[]>([])
@@ -307,7 +312,10 @@ function fmtTime(t?: string): string {
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString()
 }
 
-onMounted(load)
+onMounted(() => {
+  void loadAdminFlag()
+  load()
+})
 </script>
 
 <style scoped>

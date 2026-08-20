@@ -18,7 +18,7 @@
     <!-- 月度预算（P3） -->
     <h4 class="panel-title">
       月度预算（超限只告警不拦截；档位经通知渠道各发一次）
-      <el-button size="small" class="ml8" type="primary" :icon="Plus" @click="openBudget">设置预算</el-button>
+      <el-button v-if="isAdmin" size="small" class="ml8" type="primary" :icon="Plus" @click="openBudget">设置预算</el-button>
     </h4>
     <el-table :data="budgets" size="small" class="mb" empty-text="未设置预算（在全部启用通知渠道上无预算告警）">
       <el-table-column prop="month" label="月份" width="100" />
@@ -38,7 +38,7 @@
       <el-table-column label="预警档位" width="90" align="right">
         <template #default="{ row }">{{ row.warn_at * 100 }}%</template>
       </el-table-column>
-      <el-table-column label="操作" width="80">
+      <el-table-column v-if="isAdmin" label="操作" width="80">
         <template #default="{ row }">
           <el-button link type="danger" @click="removeBudget(row)">删除</el-button>
         </template>
@@ -134,7 +134,7 @@
     <!-- 单价管理 -->
     <h4 class="panel-title">
       模型单价（元/百万 token）
-      <el-button size="small" class="ml8" type="primary" :icon="Plus" @click="openPricing">配置单价</el-button>
+      <el-button v-if="isAdmin" size="small" class="ml8" type="primary" :icon="Plus" @click="openPricing">配置单价</el-button>
     </h4>
     <el-table :data="pricings" size="small" class="mb" empty-text="未配置单价（调用只计 token，不计费用）">
       <el-table-column label="provider / model" min-width="220">
@@ -146,7 +146,7 @@
         <template #default="{ row }">{{ row.updated_at }}<span v-if="row.updated_by" class="muted"> · {{ row.updated_by }}</span></template>
       </el-table-column>
       <el-table-column prop="note" label="备注" min-width="120" show-overflow-tooltip />
-      <el-table-column label="操作" width="120">
+      <el-table-column v-if="isAdmin" label="操作" width="120">
         <template #default="{ row }">
           <el-button link type="primary" @click="editPricing(row)">编辑</el-button>
           <el-button link type="danger" @click="removePricing(row)">删除</el-button>
@@ -296,6 +296,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { mlopsApi } from '@/api'
+import { isAdmin, loadAdminFlag } from '@/composables/admin'
 import type { MLOpsBudgetView, MLOpsCostTrendRow, MLOpsCostsOverview, MLOpsPricing, MLOpsUsageDetail } from '@/types'
 
 const scenarios = ['chat', 'investigate', 'native_chat', 'patrol_report', 'compress', 'health']
@@ -537,6 +538,7 @@ async function removeBudget(row: MLOpsBudgetView) {
 }
 
 onMounted(() => {
+  void loadAdminFlag()
   void loadOverview()
   void loadTrend()
   void loadDetail(1)

@@ -1,10 +1,10 @@
 # MLOps 方案（提示词 / 模型 / 费用管理）
 
-> 版本：v0.4  
-> 日期：2026-08-19  
-> 状态：方案评审中（已按当前代码复核，待实施）  
-> 修订说明：v0.3 将 MLOps 定位为围绕内嵌 AiNexus 网关的运营管理。本版进一步按 `OpsGaurdWeb/server` 当前实现校准调用边界、存储迁移、流式 usage、Agent 多轮计量、提示词结构、模型热重载、权限审计和通知机制。  
-> 关联代码：`OpsGaurdWeb/server/internal/ainexus`、`internal/ainexusrt`、`internal/api/ainexusconfig.go`、`internal/api/ainexus.go`、`internal/api/investigate.go`、`internal/patrol/service.go`、`internal/store`、`internal/notify`。  
+> 版本：v0.5  
+> 日期：2026-08-20  
+> 状态：**已实施**——P0 兼容与计量基础、P1 结构化 Prompt Hub、P2 provider 级用量费用、P3 模型运营与预算、P4 前端与文档收尾全部落地（各分期验收项见 §十）；§十二待确认项仍开放。  
+> 修订说明：v0.3 将 MLOps 定位为围绕内嵌 AiNexus 网关的运营管理；v0.4 按当前实现校准调用边界/存储迁移/流式 usage/计量粒度/提示词结构/模型热重载/权限审计；v0.5 随实施回写实际 API 路径、bucket 布局与前端落地口径。  
+> 关联代码：`OpsGaurdWeb/server/internal/ainexus`、`internal/ainexusrt`、`internal/mlops`、`internal/api/mlops*.go`、`internal/api/ainexusconfig.go`、`internal/api/ainexus.go`、`internal/api/investigate.go`、`internal/patrol/service.go`、`internal/store`、`internal/notify`；前端 `web/src/views/mlops/`。  
 
 ---
 
@@ -656,22 +656,22 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 
 ---
 
-## 九、前端
+## 九、前端（已落地，P1–P4）
 
-新增导航入口“ MLOps ”，三个 tab：
+导航入口"MLOps"，三个 tab（模型/费用面板 lazy 按需加载）：
 
 1. **提示词**：场景列表、结构化 system/user 编辑器、变量 schema、语法校验、预览、版本历史、激活/回滚、恢复默认；
-2. **模型**：读取现有 AiNexus 配置的 provider/model，展示启停、默认模型、场景绑定、单价、usage、费用和最近健康结果；
-3. **费用**：今日/月度摘要、按模型/场景统计、日趋势、call 明细、operation 下钻、未计量/未计价筛选、预算。
+2. **模型**：读取现有 AiNexus 配置的 provider/model，展示启停、路由状态、默认/生效模型、场景绑定、本月用量、计价标记和最近健康结果；启停/健康测试/绑定为 admin 操作；
+3. **费用**：今日/月度摘要、按模型/场景统计、日趋势、call 明细、operation 下钻、未计量/未计价标识、单价管理、月度预算（使用率/已通知档位）。
 
-前端约束：
+前端约束（落地口径）：
 
-- provider/model 本体仍只有一个编辑来源；MLOps 模型 tab 不再提交整份 providers；
-- 现有“系统设置 → 模型配置”和“AI 排查网关”入口要么保留为唯一配置页，要么改为只读/跳转，不能双向覆盖；
+- provider/model 本体仍只有一个编辑来源（「系统设置 → 模型配置」提交模型池 providers，「AI 排查网关」提交网关设置，职责互补）；MLOps 模型 tab 不提交整份 providers，只做启停/绑定/健康运营操作；
+- per-model `enabled` 由 GET/PUT 全程保留，旧页面未提交字段时服务端按 provider+model 沿用已保存值，不存在双向覆盖；
 - 前后端沿用现有 `snake_case` JSON 契约和标准 response envelope；
-- 写操作前端根据当前用户角色隐藏或禁用，但后端 admin 守卫必须保留；
+- 写操作前端按当前用户角色隐藏（`composables/admin.ts`），后端 admin 守卫始终保留；
 - 费用明细显示 `usage_present`、`priced`、status、provider、model、scenario 和 operation_id；
-- 健康按钮明确显示“会发送一次真实测试请求”，不会由列表 GET 自动触发。
+- 健康按钮明确确认"会发送一次真实测试请求"，列表 GET 只读缓存不自动触发。
 
 ---
 
@@ -750,13 +750,13 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 - 热重载失败不影响旧网关；
 - 旧模型配置页面保存不会重置 enabled。
 
-### P4：前端和文档收尾
+### P4：前端和文档收尾（已完成，2026-08-20）
 
-- [ ] MLOps 导航和三 tab；
-- [ ] 清理重复配置入口或改为只读；
-- [ ] 标准 response envelope、分页、权限和错误提示；
-- [ ] 更新操作手册和本方案状态；
-- [ ] 前端 `npm run build`、服务端 `go test ./...` 和端到端回归。
+- [x] MLOps 导航和三 tab（提示词/模型/用量费用，模型/费用面板 lazy 按需加载）；
+- [x] 重复配置入口确认与收敛：「系统设置 → 模型配置」只提交模型池（providers），「AI 排查网关」只提交网关设置（启用/默认/工具/Agent/MCP），职责互补不互相覆盖；per-model `enabled` 在 GET/PUT 全程保留（旧页面未提交字段由服务端按 provider+model 沿用），模型配置页增加 MLOps 启停引导提示；
+- [x] 权限与提示：MLOps 全部写操作（提示词版本/激活/重置/删除、单价、预算、启停、健康测试、绑定）后端挂 admin 守卫，前端按当前用户角色隐藏写入口（`composables/admin.ts`，未启用认证时保持可见与后端行为一致）；报表/明细只读对普通认证开放；全部接口沿用标准 envelope、snake_case 与分页/时间范围上限；
+- [x] 文档与配置说明：本方案状态更新、`configs/config.yaml` mlops 块含全部配置项注释（无独立操作手册，方案文档即操作口径）；
+- [x] 前端 `npm run build`、服务端 `go test ./...`（19 包）全量通过。
 
 ---
 

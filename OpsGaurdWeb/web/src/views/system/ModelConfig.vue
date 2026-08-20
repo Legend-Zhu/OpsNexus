@@ -3,7 +3,7 @@
     <!-- 模型池：Provider + 模型清单（唯一配置模型的地方） -->
     <el-alert type="info" :closable="false" class="mb"
       title="模型池统一配置"
-      description="智能巡检、异常排查、AI 排查网关的模型都来自这里。新增 Provider 后可在「AI 排查网关」tab 选择默认模型。" />
+      description="智能巡检、异常排查、AI 排查网关的模型都来自这里。新增 Provider 后可在「AI 排查网关」tab 选择默认模型；模型的运营启停（禁用不断流）在「MLOps → 模型」页面。" />
 
     <div v-for="(p, i) in form.providers" :key="i" class="provider-box">
       <div class="provider-head">

@@ -59,9 +59,12 @@
       </el-table-column>
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="!row.enabled" link type="primary" :loading="toggling === row.model" @click="toggle(row, true)">启用</el-button>
-          <el-button v-else link type="danger" :loading="toggling === row.model" @click="toggle(row, false)">禁用</el-button>
-          <el-button link type="primary" :loading="testing === row.model" @click="testHealth(row)">健康测试</el-button>
+          <template v-if="isAdmin">
+            <el-button v-if="!row.enabled" link type="primary" :loading="toggling === row.model" @click="toggle(row, true)">启用</el-button>
+            <el-button v-else link type="danger" :loading="toggling === row.model" @click="toggle(row, false)">禁用</el-button>
+            <el-button link type="primary" :loading="testing === row.model" @click="testHealth(row)">健康测试</el-button>
+          </template>
+          <span v-else class="muted">只读（写操作需管理员）</span>
         </template>
       </el-table-column>
     </el-table>
@@ -76,7 +79,8 @@
       </el-table-column>
       <el-table-column label="绑定模型" min-width="240">
         <template #default="{ row }">
-          <el-select v-model="row.model" size="small" clearable placeholder="未绑定（用默认模型）" style="width: 260px" @change="saveBinding(row)">
+          <el-select v-model="row.model" size="small" clearable placeholder="未绑定（用默认模型）" style="width: 260px"
+            :disabled="!isAdmin" @change="saveBinding(row)">
             <el-option v-for="m in enabledModels" :key="m" :label="m" :value="m" />
           </el-select>
         </template>
@@ -92,6 +96,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { mlopsApi } from '@/api'
+import { isAdmin, loadAdminFlag } from '@/composables/admin'
 import type { MLOpsBinding, MLOpsHealthResult, MLOpsModelItem, MLOpsModelsView } from '@/types'
 
 const SCENARIOS = ['chat', 'investigate', 'native_chat', 'patrol_report']
@@ -196,7 +201,10 @@ async function saveBinding(row: { scenario: string; model: string }) {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  void loadAdminFlag()
+  load()
+})
 </script>
 
 <style scoped>
