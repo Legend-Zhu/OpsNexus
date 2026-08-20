@@ -26,8 +26,8 @@
 
 | 文件 | 部署位置 | 说明 |
 |---|---|---|
-| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.7，离线重打见记录 10/11/12） |
-| bundle/opsguard-worker-1.0.0.tar … opsguard-worker-1.1.0.tar | /opt/opsguard/images/ | Worker 镜像（当前线 = 1.2.2，离线重打/中继分发见记录 10/11/12） |
+| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.12，离线重打见记录 10/11/12/14/16） |
+| bundle/opsguard-worker-1.0.0.tar … opsguard-worker-1.1.0.tar | /opt/opsguard/images/ | Worker 镜像（当前线 = 1.2.7，离线重打/中继分发见记录 10/11/12/15） |
 | bundle/docker-27.5.1.tgz | /opt/opsguard/offline/ | docker 静态二进制 |
 | install-docker.sh / docker.service / containerd.service / daemon.json | /opt/opsguard/offline/ | 离线安装（含 swarm init、insecure-registries=10.60.189.6:8080） |
 | agent-config.yaml | /etc/opsguard/agent-config.yaml | Worker 策略（blacklist、关 host exec、webhook→:8080） |
@@ -177,9 +177,65 @@
     - **已验证**：SSE `nodes/stream` 五节点 `reachable:true` 且 CPU/内存/容器数
       实时流入（此前全 0）；invmonitor 端到端冒烟（host-service 指向关闭端口
       → 20s 内 `port_down` 告警；清单↔规则自动同步增删）；告警手动恢复 API。
-    - **坑③ aishell 终端显示卡死但命令照跑**：189.6 的 SSH 终端刮屏冻结
-      （list-timers 输出截断后不再刷新），命令实际正常执行——用 `touch` 副作用
-      + SFTP 查证后，全程改「脚本上传 + 日志回传」盲操作完成部署。
+
+14. **MLOps 运营层上线（2026-08-20，server 1.2.10→1.2.11）**：提交 `b5ec4ea`
+    （P0 计量与兼容性基础）、`bc0e4b3`（P1 结构化 Prompt Hub + P2 用量费用）、
+    `57487a2`（P3 模型运营与预算）、`36c5a67`（P4 前端与文档收尾）。仅 server +
+    前端（Worker 无改动，仍 1.2.6）。方案与操作口径见 `docs/MLOps-方案.md`（v0.5）。
+    - **重打方式**同记录 13：本地交叉编译 `server-1.2.11`（29MB）+ `web-1.2.11.tar.gz`
+      （530KB，含 MLOps 三 tab）上传 `/opt/opsguard/build/1.2.11/`（sha256 校验一致）；
+      `FROM opsguard-server:1.2.10 + COPY server + rm -rf /app/web/* + COPY web/` 重打。
+      注意：web tar 是平铺解包，构建前需把 `index.html`/`assets/` 归拢进 `web/` 子目录。
+    - **配置变更**：`/opt/opsguard/server/config.yaml` 追加 `mlops: enabled: true`
+      （备份 `config.yaml.bak-1.2.10`）；LevelDB 迁移 v2→v3 随启动自动完成（纯前缀新增）。
+    - **容器重建**：`docker rm -f` 后原样 run（data/config/docker.sock 三挂载不变）。
+    - **已验证**：healthz 200、首页 200（新 dist）、`/api/v1/mlops/*` 全路由挂载
+      （未认证 401）、三集群事件订阅 + IdP 隧道 + registry 重连正常、本地 worker 1/1。
+    - **回滚**：`docker rm -f opsguard-server` 后用 `opsguard-server:1.2.10` 原样
+      run + 还原 `config.yaml.bak-1.2.10`（mlops.enabled=false 时 bucket 保留只读）。
+    - 注意：AiNexus 网关未启用前（`ainexus_embedded=false`），MLOps 模型/费用无数据——
+      在「系统设置 → AI 排查网关」配 provider 后计量自动开始。
+
+15. **push 大层 30s 502 修复（2026-08-20，worker 1.2.6→1.2.7，server 无改动）**：
+    worker HTTP server 的 `ReadTimeout: 30s` 会掐死任何超过 30 秒的 blob 上传——
+    maxkb4j app 镜像 358MB 单层两次 push 均在 30s 边界 502。拉镜像的 WriteTimeout
+    早已为 0（流式 blob），推镜像的读侧同样放开：**ReadTimeout 0 + IdleTimeout
+    120s 兜底空闲连接**（`Worker/cmd/worker/main.go`）。
+    - **发版**：本地交叉编译（`-ldflags` stamp 版本号，启动日志 `worker starting
+      version=1.2.7` 可核）→ 189.6 重打（FROM 1.2.6 + COPY，同记录 12/13 模式）
+      → push 内嵌仓库 → 灾害 5 节点经 232:6060 中继 pull+tag → 232
+      `service update --image opsguard-worker:1.2.7`（global 5/5 收敛）→ 189.6
+      本地 worker 同步 1.2.7。
+    - **验证**：231 重推 `docker push 10.60.171.232:6060/maxkb4j/maxkb4j:latest`
+      成功（358MB 层完整入库，digest `sha256:50b498c1…`）；服务端 catalog 出现
+      `maxkb4j/maxkb4j`，manifest `Docker-Content-Digest` 与 push 端一致。
+    - **app 切换**：PUT `/api/v1/clusters/nxyj-cluster/workloads/maxkb4j-app`
+      配置快照 image 由 `10.60.171.253:20005/maxkb4j/maxkb4j:latest`（旧 Harbor）
+      换 `10.60.171.232:6060/maxkb4j/maxkb4j:latest`；钉节点约束
+      `node.hostname==NXYJGLT-YJ-5` 不变，滚动替换后 running/healthy 1/1。
+    - 注意：安责险集群 worker 仍 1.2.5，**未含此修复**——经 66:6060 push 大层
+      同样会 30s 502，下次发版需带上（本地交叉编译 + 66 重打分发同记录 4）。
+16. **账号安全收敛（2026-08-21，server 1.2.11→1.2.12 + 前端，worker 无改动）**：
+    改密自助 `PUT /api/v1/auth/password`（旧密码校验，输错返 400 不触发全局
+    登出）+ 管理员重置 `PUT /api/v1/users/:username/password`；用户管理
+    （列表/新增/重置）与 AiNexus 网关配置写/测试收敛 admin 角色；前端新增
+    ChangePasswordDialog、巡检报告页迁至 patrol/ReportDelivery 等。
+    - **重打方式**同记录 13/14：本地交叉编译 `server-1.2.12`（43MB）+
+      `web-1.2.12.tar.gz`（544KB，**tar 内带 web/ 前缀**，解包即 COPY 免归拢）
+      上传 `/opt/opsguard/build/1.2.12/`（sha256 校验一致）；
+      `FROM opsguard-server:1.2.11 + COPY server + chmod + rm -rf /app/web/* +
+      COPY web/` 重打 → `docker rm -f` 后原样 run（三挂载/8080/unless-stopped
+      不变）。
+    - **已验证**：healthz 200；`PUT /api/v1/auth/password` 未认证 401（新路由
+      挂载）；首页引用新 bundle（`index-FOKnJfhI.js`）；**LevelDB 会话跨重启
+      有效**（旧 token 复用）；三集群隧道重连（streams=16）；节点 SSE 5/5
+      可达；`go test` router/auth/api 包通过。
+    - **同晚事件备注（00:23-00:28 本地时间）**：worker 1.2.7 发版约 15 分钟后
+      集群出现一波任务重启风暴 + 232 内核 soft lockup（load 5min 峰值 14，
+      runc/JVM 线程卡死），期间节点全灰「不可达」。排查结论：**非 1.2.7 代码
+      回归**——审计无管理端编排操作、worker 均为收到 SIGTERM 干净退出（外部
+      swarm/docker 侧触发，疑似宿主机/docker 守护进程重启连锁），风暴后全部
+      自愈（5/5 reachable，资源指标正常）。
 
 ### 安责险集群（3 节点）部署记录（2026-08-14）
 
