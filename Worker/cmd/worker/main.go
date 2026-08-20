@@ -363,10 +363,16 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:         addr,
-		Handler:      authzMW.Wrap(mux),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 0, // registry relay streams blob bodies for minutes; a fixed write deadline would cut large pulls
+		Addr:    addr,
+		Handler: authzMW.Wrap(mux),
+		// registry relay streams blob bodies for minutes in BOTH directions:
+		// write side = large pulls, read side = docker push layer uploads
+		// (maxkb4j's 358MB layer blew past any fixed read deadline → 502 at
+		// the 30s boundary). No read/write deadlines; IdleTimeout reaps
+		// keep-alive connections instead.
+		ReadTimeout:  0,
+		WriteTimeout: 0,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	// Mutual TLS: when a CA is supplied, require and verify client certs.
