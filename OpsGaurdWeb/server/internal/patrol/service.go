@@ -869,11 +869,9 @@ func (s *Service) buildReport(p *store.Patrol, flow *Flow, anomalies []store.Ano
 	if s.ainxRT == nil {
 		return prompt // 无 AI 时返回结构化摘要
 	}
-	srv := s.ainxRT.Server()
-	if srv == nil {
-		return prompt
-	}
-	report, err := srv.Summarize(flow.Report.Model, prompt)
+	// 经运行时服务调用：flow 未指定模型时应用 patrol_report 场景绑定
+	//（mlops 运营层），绑定不可路由时回退网关默认可用。
+	report, err := s.ainxRT.Summarize(flow.Report.Model, prompt)
 	if err != nil {
 		return prompt + "\n（AI 报告生成失败：" + err.Error() + "）"
 	}

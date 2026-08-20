@@ -75,8 +75,14 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 	// 3. 可选：连接该集群 Worker MCP，供 ReAct Agent 采证
 	useMCP := req.UseMCP && connectClusterMCP(srv, h.clusters, alert.Cluster)
 
-	// 4. 组装注入上下文后的请求体，进程内 SSE 直通
-	model := srv.ResolveModel(req.Model)
+	// 4. 组装注入上下文后的请求体，进程内 SSE 直通。
+	// 显式指定被禁用的模型 → 明确 400（区别于未知模型）；未指定时按
+	// investigate 场景绑定（mlops）→ 网关默认可用。
+	if req.Model != "" && srv.IsModelDisabled(req.Model) {
+		fail(c, http.StatusBadRequest, "model "+req.Model+" is disabled by mlops operations")
+		return
+	}
+	model := h.AINexusRT.EffectiveModel(usage.ScenarioInvestigate, req.Model)
 	messages := h.investigateMessages(alert, events, audit, logs, useMCP)
 	body, err := json.Marshal(map[string]any{
 		"model":    model,

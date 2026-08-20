@@ -2,6 +2,7 @@ package mlops
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -69,6 +70,21 @@ type Service struct {
 
 	pricingMu    sync.RWMutex
 	pricingCache map[string]*store.MLPricing // 含 nil 值（未配价缓存负查）
+
+	// healthMu/health 最近一次显式模型健康测试缓存（内存，重启清空）。
+	healthMu sync.Mutex
+	health   map[string]HealthResult
+
+	// notifier 预算档位通知发送（nil = 只留日志不发）。渠道策略为当前
+	// 全部启用渠道（产品确认前默认，方案 §十二待确认项）。
+	notifier NotifySender
+}
+
+// NotifySender 预算通知发送抽象（notify.Service 适配），保留发送记录
+// 由 notify 侧完成（成功/失败均落 NotifyRecord）。
+type NotifySender interface {
+	EnabledChannelIDs() []string
+	Send(ctx context.Context, channelIDs []string, title, content string) error
 }
 
 // New 创建 MLOps 服务。

@@ -50,6 +50,8 @@ const (
 	BucketMLUsageCall = "mlusage_call" // call_id -> seq 幂等索引（随明细一起 GC）
 	BucketMLUsageDay  = "mlusage_day"  // 日聚合（业务时区日期 + 编码 provider/model/scenario）
 	BucketMLPricing   = "mlpricing"    // 模型单价快照（编码 provider/model）
+	BucketMLBinding   = "mlbinding"    // 场景模型绑定（scenario -> model，P3）
+	BucketMLBudget    = "mlbudget"     // 月度预算与通知档位（yyyy-mm，P3）
 )
 
 // schemaVersion 当前数据版本；每次不兼容变更 +1 并追加 migrate 函数。

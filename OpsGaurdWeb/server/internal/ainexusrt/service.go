@@ -37,6 +37,15 @@ type Service struct {
 	usageSink usage.Sink
 	// promptSource 提示词场景模板来源（mlops 运营层；须在 Init 之前注入）。
 	promptSource ainexusserver.PromptSource
+	// modelBinder 场景模型绑定来源（mlops 运营层；须在 Init 之前注入）。
+	// 场景未指定模型时按绑定选择；绑定模型不可路由时回退默认可用。
+	modelBinder ScenarioModelBinder
+}
+
+// ScenarioModelBinder 场景模型绑定来源（mlops.Service 实现；nil = 无绑定）。
+type ScenarioModelBinder interface {
+	// ScenarioModel 返回场景绑定的模型名；ok=false 表示未绑定。
+	ScenarioModel(scenario string) (string, bool)
 }
 
 // New 创建运行时网关配置服务。fileCfg 来自 config.yaml 的 ainexus 块，
@@ -65,6 +74,14 @@ func (s *Service) SetPromptSource(src ainexusserver.PromptSource) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.promptSource = src
+}
+
+// SetModelBinder 注入场景模型绑定来源（须在 Init 之前调用）。绑定不属于
+// 网关配置，热重载不重置。
+func (s *Service) SetModelBinder(b ScenarioModelBinder) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.modelBinder = b
 }
 
 // Init 加载运行时配置并构建网关：
@@ -159,6 +176,83 @@ func (s *Service) Server() *ainexusserver.Server {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.srv
+}
+
+// SetModelEnabled 模型启停（MLOps 运营层）：读当前配置 → 修改目标模型
+// enabled → 走 Update 全量热重载（构建校验成功才持久化并原子换网关）。
+// 禁用最后一个启用模型被拒绝（网关必须保留至少一个可用模型）。
+func (s *Service) SetModelEnabled(ctx context.Context, provider, model string, enabled bool) error {
+	next := s.Config() // 深拷贝，失败不影响当前配置
+	found := false
+	enabledCount := 0
+	for i := range next.Providers {
+		if next.Providers[i].Name != provider {
+			continue
+		}
+		for j := range next.Providers[i].Models {
+			m := &next.Providers[i].Models[j]
+			if m.Name != model {
+				continue
+			}
+			found = true
+			m.Enabled = enabled
+			s.logger.Printf("mlops model toggle: %s/%s enabled=%v", provider, model, enabled)
+		}
+		for _, m := range next.Providers[i].Models {
+			if m.Enabled {
+				enabledCount++
+			}
+		}
+	}
+	if !found {
+		return fmt.Errorf("model %q not found in provider %q", model, provider)
+	}
+	if !enabled && next.Enabled && enabledCount == 0 {
+		return fmt.Errorf("cannot disable the last enabled model %q (gateway needs at least one)", model)
+	}
+	return s.Update(ctx, next)
+}
+
+// Summarize 巡检报告入口：场景未指定模型时应用 patrol_report 场景绑定；
+// 绑定模型当前不可路由（被禁用/已移除）时回退网关默认可用并留痕。
+func (s *Service) Summarize(model, prompt string) (string, error) {
+	srv := s.Server()
+	if srv == nil {
+		return "", fmt.Errorf("ainexus gateway not enabled")
+	}
+	if model == "" {
+		s.mu.RLock()
+		binder := s.modelBinder
+		s.mu.RUnlock()
+		if binder != nil {
+			if m, ok := binder.ScenarioModel(usage.ScenarioPatrolReport); ok && m != "" {
+				if srv.IsModelRoutable(m) {
+					model = m
+				} else {
+					s.logger.Printf("patrol_report binding %q not routable, falling back to default model", m)
+				}
+			}
+		}
+	}
+	return srv.Summarize(model, prompt)
+}
+
+// EffectiveModel 场景模型解析（MLOps 报表/绑定校验用）：requested 非空
+// 原样返回；否则按场景绑定（可路由才生效）→ 网关默认可用。
+func (s *Service) EffectiveModel(scenario, requested string) string {
+	srv := s.Server()
+	if srv == nil || requested != "" {
+		return requested
+	}
+	s.mu.RLock()
+	binder := s.modelBinder
+	s.mu.RUnlock()
+	if binder != nil {
+		if m, ok := binder.ScenarioModel(scenario); ok && m != "" && srv.IsModelRoutable(m) {
+			return m
+		}
+	}
+	return srv.ResolveModel("")
 }
 
 // Config 返回当前生效配置的深拷贝（供 API 层脱敏视图/测试，避免与内部共享）。

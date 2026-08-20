@@ -42,6 +42,10 @@ type ainexusModelView struct {
 	DisplayName string  `json:"display_name,omitempty"`
 	MaxTokens   int     `json:"max_tokens,omitempty"`
 	Temperature float64 `json:"temperature,omitempty"`
+	// Enabled 模型级启停（MLOps 运营层）。视图如实回显；旧编辑页未提交
+	// 该字段时（写入侧 *bool 为 nil）服务端按 provider+model 沿用已保存值，
+	// 防止旧页面保存覆盖 MLOps 的启停状态。
+	Enabled bool `json:"enabled"`
 }
 
 type ainexusToolsView struct {
@@ -99,11 +103,21 @@ type ainexusConfigRequest struct {
 }
 
 type ainexusProviderRequest struct {
-	Name    string             `json:"name"`
-	Type    string             `json:"type"`
-	BaseURL string             `json:"base_url"`
-	APIKey  string             `json:"api_key"` // 留空 = 保持已保存值
-	Models  []ainexusModelView `json:"models"`
+	Name    string              `json:"name"`
+	Type    string              `json:"type"`
+	BaseURL string              `json:"base_url"`
+	APIKey  string              `json:"api_key"` // 留空 = 保持已保存值
+	Models  []ainexusModelRequest `json:"models"`
+}
+
+// ainexusModelRequest 模型写入项。Enabled 指针：nil = 未提交（旧页面），
+// 服务端沿用已保存值；显式 true/false 才更新。
+type ainexusModelRequest struct {
+	Name        string   `json:"name"`
+	DisplayName string   `json:"display_name,omitempty"`
+	MaxTokens   int      `json:"max_tokens,omitempty"`
+	Temperature float64  `json:"temperature,omitempty"`
+	Enabled     *bool    `json:"enabled,omitempty"`
 }
 
 type ainexusToolsRequest struct {
@@ -197,7 +211,7 @@ func (h *Handlers) UpdateAINexusConfig(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
-	cfg, err := req.toConfig()
+	cfg, err := req.toConfig(carryModelEnabled(h.AINexusRT.Config()))
 	if err != nil {
 		fail(c, http.StatusBadRequest, err.Error())
 		return
@@ -280,7 +294,9 @@ func probeProvider(ctx context.Context, ptype, name, baseURL, apiKey, model stri
 }
 
 // toConfig 把写入请求转换为网关配置；时长文本解析失败返回错误。
-func (req *ainexusConfigRequest) toConfig() (*ainexuscfg.Config, error) {
+// carryEnabled：旧编辑页未提交模型 enabled（nil）时按 provider+model
+// 沿用旧配置值，新模型默认启用。
+func (req *ainexusConfigRequest) toConfig(carryEnabled map[string]bool) (*ainexuscfg.Config, error) {
 	cfg := &ainexuscfg.Config{Enabled: req.Enabled, DefaultModel: req.DefaultModel}
 
 	commandTimeout, err := parseDur(req.Tools.Command.Timeout, 30*time.Second)
@@ -323,14 +339,18 @@ func (req *ainexusConfigRequest) toConfig() (*ainexuscfg.Config, error) {
 			APIKey:  p.APIKey,
 		}
 		for _, m := range p.Models {
+			enabled := true // 新模型默认启用
+			if m.Enabled != nil {
+				enabled = *m.Enabled
+			} else if carried, ok := carryEnabled[p.Name+"\x00"+m.Name]; ok {
+				enabled = carried // 旧页面未提交 → 沿用已保存的启停状态
+			}
 			pc.Models = append(pc.Models, ainexuscfg.ModelConfig{
 				Name:        m.Name,
 				DisplayName: m.DisplayName,
 				MaxTokens:   m.MaxTokens,
 				Temperature: m.Temperature,
-				// 页面 DTO 尚未携带 enabled（P3 统一 DTO 时补），保存时显式
-				// 归一化为启用，避免落盘语义依赖加载期默认值。
-				Enabled: true,
+				Enabled:     enabled,
 			})
 		}
 		cfg.Providers = append(cfg.Providers, pc)
@@ -353,6 +373,21 @@ func (req *ainexusConfigRequest) toConfig() (*ainexuscfg.Config, error) {
 		})
 	}
 	return cfg, nil
+}
+
+// carryModelEnabled 从当前配置提取 (provider, model) -> enabled，
+// 供 toConfig 在旧页面未提交 enabled 字段时沿用。
+func carryModelEnabled(cfg *ainexuscfg.Config) map[string]bool {
+	out := make(map[string]bool)
+	if cfg == nil {
+		return out
+	}
+	for _, p := range cfg.Providers {
+		for _, m := range p.Models {
+			out[p.Name+"\x00"+m.Name] = m.Enabled
+		}
+	}
+	return out
 }
 
 // parseDur 解析时长文本，空串回退默认值。
@@ -412,6 +447,7 @@ func buildAINexusView(cfg *ainexuscfg.Config, active bool) ainexusConfigView {
 				DisplayName: m.DisplayName,
 				MaxTokens:   m.MaxTokens,
 				Temperature: m.Temperature,
+				Enabled:     m.Enabled,
 			})
 		}
 		v.Providers = append(v.Providers, pv)

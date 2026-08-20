@@ -246,6 +246,12 @@ func New(h *api.Handlers) *gin.Engine {
 				ml.GET("/costs/operations/:id", h.MLOpsCostsOperation)
 				ml.GET("/costs/pricing", h.ListMLOpsPricing)
 
+				// 模型运营（读）：视图/健康缓存/绑定/预算
+				ml.GET("/models", h.ListMLOpsModels)
+				ml.GET("/models/health", h.ListMLOpsModelHealth)
+				ml.GET("/bindings", h.ListMLOpsBindings)
+				ml.GET("/budgets", h.ListMLOpsBudgets)
+
 				admin := ml.Group("")
 				if adminMW := h.AdminMiddleware(); adminMW != nil {
 					admin.Use(adminMW)
@@ -258,6 +264,13 @@ func New(h *api.Handlers) *gin.Engine {
 				admin.DELETE("/prompts/:id", h.DeleteMLOpsPrompt)
 				admin.PUT("/costs/pricing", h.SaveMLOpsPricing)
 				admin.DELETE("/costs/pricing", h.DeleteMLOpsPricing)
+				admin.POST("/models/enable", h.EnableMLOpsModel)
+				admin.POST("/models/disable", h.DisableMLOpsModel)
+				admin.POST("/models/health", h.TestMLOpsModelHealth)
+				admin.PUT("/bindings/:scenario", h.SaveMLOpsBinding)
+				admin.DELETE("/bindings/:scenario", h.DeleteMLOpsBinding)
+				admin.POST("/budgets", h.SaveMLOpsBudget)
+				admin.DELETE("/budgets/:month", h.DeleteMLOpsBudget)
 			}
 		}
 	}

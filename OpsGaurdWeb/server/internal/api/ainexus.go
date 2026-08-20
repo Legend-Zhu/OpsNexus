@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	ainexusrt "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexusrt"
 	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/usage"
 )
@@ -51,9 +52,14 @@ func (h *Handlers) AINexusChat(c *gin.Context) {
 	useMCP, _ := req["use_mcp"].(bool)
 	delete(req, "use_mcp")
 
-	// 模型兜底（显式指定优先，否则 default_model → 模型池首个）
+	// 模型兜底（显式指定优先，否则场景绑定（mlops）→ default_model →
+	// 模型池首个启用模型）。显式指定被禁用的模型 → 明确 400。
 	model, _ := req["model"].(string)
-	req["model"] = srv.ResolveModel(model)
+	if model != "" && srv.IsModelDisabled(model) {
+		fail(c, http.StatusBadRequest, "model "+model+" is disabled by mlops operations")
+		return
+	}
+	req["model"] = h.AINexusRT.EffectiveModel(usage.ScenarioChat, model)
 
 	if alertID != "" {
 		if h.clusters == nil {
@@ -120,6 +126,7 @@ func (h *Handlers) EmbedOpenAIHandler(c *gin.Context) {
 		return
 	}
 	c.Request = c.Request.WithContext(usage.NewOperation(c.Request.Context(), usage.ScenarioNativeChat, "/ainexus/v1/chat/completions"))
+	applyNativeModelBinding(c, srv, h.AINexusRT)
 	srv.OpenAIHandler().ChatCompletions(c)
 }
 
@@ -131,7 +138,41 @@ func (h *Handlers) EmbedAnthropicHandler(c *gin.Context) {
 		return
 	}
 	c.Request = c.Request.WithContext(usage.NewOperation(c.Request.Context(), usage.ScenarioNativeChat, "/ainexus/v1/messages"))
+	applyNativeModelBinding(c, srv, h.AINexusRT)
 	srv.AnthropicHandler().Messages(c)
+}
+
+// applyNativeModelBinding 原生兼容端点的模型解析：请求未带 model 时按
+// native_chat 场景绑定（mlops）注入；显式指定被禁用的模型返回 400。
+// 请求体原样透传（仅改写 model 字段），解析失败时不改写（交给网关报错）。
+func applyNativeModelBinding(c *gin.Context, srv *ainexusserver.Server, rt *ainexusrt.Service) {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return
+	}
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.Request.Body = io.NopCloser(bytes.NewReader(body)) // 原样恢复
+		c.Request.ContentLength = int64(len(body))
+		return
+	}
+	model, _ := req["model"].(string)
+	if model != "" {
+		if srv.IsModelDisabled(model) {
+			c.Request.Body = io.NopCloser(bytes.NewReader(body))
+			c.Request.ContentLength = int64(len(body))
+			fail(c, http.StatusBadRequest, "model "+model+" is disabled by mlops operations")
+			return
+		}
+		return // 显式指定，透传
+	}
+	req["model"] = rt.EffectiveModel(usage.ScenarioNativeChat, "")
+	newBody, err := json.Marshal(req)
+	if err != nil {
+		return
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(newBody))
+	c.Request.ContentLength = int64(len(newBody))
 }
 
 // EmbedModelsHandler godoc: GET /ainexus/v1/models

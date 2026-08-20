@@ -16,8 +16,12 @@ import type {
   InventoryConfig,
   InventoryView,
   Investigation,
+  MLOpsBinding,
+  MLOpsBudgetView,
   MLOpsCostsOverview,
   MLOpsCostTrendRow,
+  MLOpsHealthResult,
+  MLOpsModelsView,
   MLOpsPrompt,
   MLOpsPromptMessage,
   MLOpsPricing,
@@ -287,4 +291,24 @@ export const mlopsApi = {
   }) => put<MLOpsPricing>('/v1/mlops/costs/pricing', body),
   pricingDelete: (provider: string, model: string) =>
     del<{ deleted: string }>(`/v1/mlops/costs/pricing`, { params: { provider, model } }),
+
+  // ---- 模型运营（P3） ----
+  models: () => get<MLOpsModelsView>('/v1/mlops/models'),
+  modelHealth: () => get<{ items: MLOpsHealthResult[] }>('/v1/mlops/models/health'),
+  testModelHealth: (body: { provider: string; model: string }) =>
+    post<{ ok: boolean; latency_ms: number; model: string; error?: string }>('/v1/mlops/models/health', body),
+  enableModel: (body: { provider: string; model: string }) =>
+    post<{ enabled: boolean }>('/v1/mlops/models/enable', body),
+  disableModel: (body: { provider: string; model: string }) =>
+    post<{ enabled: boolean }>('/v1/mlops/models/disable', body),
+  bindings: () => get<{ items: MLOpsBinding[] }>('/v1/mlops/bindings'),
+  saveBinding: (scenario: string, model: string) =>
+    put<MLOpsBinding>(`/v1/mlops/bindings/${scenario}`, { model }),
+  deleteBinding: (scenario: string) => del<{ deleted: string }>(`/v1/mlops/bindings/${scenario}`),
+
+  // ---- 预算（P3） ----
+  budgets: () => get<{ items: MLOpsBudgetView[] }>('/v1/mlops/budgets'),
+  saveBudget: (body: { month: string; limit_minor: number; warn_at: number }) =>
+    post<MLOpsBudgetView>('/v1/mlops/budgets', body),
+  deleteBudget: (month: string) => del<{ deleted: string }>(`/v1/mlops/budgets/${month}`),
 }

@@ -156,6 +156,10 @@ func (s *Service) persistUsage(r usage.Record) {
 	}
 	if !saved {
 		s.usageDeduped.Add(1) // call_id 重复完成事件，幂等跳过
+		return
+	}
+	if rec.Priced {
+		s.maybeCheckBudget() // 已计价入账才推进预算对账（限频）
 	}
 }
 

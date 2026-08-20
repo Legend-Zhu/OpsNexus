@@ -3,6 +3,7 @@ package api
 import (
 	"testing"
 
+	ainexuscfg "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 )
@@ -56,7 +57,7 @@ func TestToConfigFiltersClusterMCP(t *testing.T) {
 			{Name: "custom-srv", Transport: "streamable-http", URL: "http://x:8080/mcp"},
 		},
 	}
-	cfg, err := req.toConfig()
+	cfg, err := req.toConfig(nil)
 	if err != nil {
 		t.Fatalf("toConfig: %v", err)
 	}
@@ -65,5 +66,50 @@ func TestToConfigFiltersClusterMCP(t *testing.T) {
 	}
 	if cfg.MCPServers[0].Name != "custom-srv" {
 		t.Fatalf("expected custom-srv to survive, got %q", cfg.MCPServers[0].Name)
+	}
+}
+
+// TestToConfigCarriesModelEnabled 旧编辑页未提交模型 enabled（nil）时
+// 沿用已保存的启停状态；显式提交以提交值为准；新模型默认启用。
+func TestToConfigCarriesModelEnabled(t *testing.T) {
+	old := &ainexuscfg.Config{
+		Providers: []ainexuscfg.ProviderConfig{{
+			Name: "p1",
+			Models: []ainexuscfg.ModelConfig{
+				{Name: "keep-off", Enabled: false},
+				{Name: "keep-on", Enabled: true},
+			},
+		}},
+	}
+	no := false
+	req := ainexusConfigRequest{
+		Providers: []ainexusProviderRequest{{
+			Name: "p1",
+			Models: []ainexusModelRequest{
+				{Name: "keep-off"},                  // 旧页面未提交 → 沿用 false
+				{Name: "keep-on"},                   // 旧页面未提交 → 沿用 true
+				{Name: "explicit-off", Enabled: &no}, // 显式提交 → 以提交为准
+				{Name: "new-model"},                 // 新模型 → 默认启用
+			},
+		}},
+	}
+	cfg, err := req.toConfig(carryModelEnabled(old))
+	if err != nil {
+		t.Fatalf("toConfig: %v", err)
+	}
+	models := cfg.Providers[0].Models
+	want := []struct {
+		name string
+		on   bool
+	}{
+		{"keep-off", false}, {"keep-on", true}, {"explicit-off", false}, {"new-model", true},
+	}
+	if len(models) != len(want) {
+		t.Fatalf("expected %d models, got %d", len(want), len(models))
+	}
+	for i, w := range want {
+		if models[i].Name != w.name || models[i].Enabled != w.on {
+			t.Fatalf("model %q: enabled=%v, want %v", models[i].Name, models[i].Enabled, w.on)
+		}
 	}
 }

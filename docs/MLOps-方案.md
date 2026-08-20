@@ -623,15 +623,16 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/mlops/models` | 当前网关模型池、provider、enabled、默认标记、价格和本月 usage |
-| PUT | `/mlops/models/:name/enable` | 通过 runtime service 热重载启用 |
-| PUT | `/mlops/models/:name/disable` | 通过 runtime service 热重载禁用 |
+| GET | `/mlops/models` | 当前网关模型池、provider、enabled、路由状态、默认标记、本月 usage 和计价标记 |
+| POST | `/mlops/models/enable` | 启用模型（body: provider+model；经 runtime service 热重载） |
+| POST | `/mlops/models/disable` | 禁用模型（body: provider+model；最后一个启用模型返回 409） |
 | GET | `/mlops/models/health` | 最近健康缓存，不隐式调用 provider |
-| POST | `/mlops/models/:name/health` | 显式真实连通性测试 |
+| POST | `/mlops/models/health` | 显式真实连通性测试（body: provider+model；计量计入 health） |
 | GET | `/mlops/bindings` | 场景模型绑定 |
 | PUT | `/mlops/bindings/:scenario` | 修改场景绑定 |
+| DELETE | `/mlops/bindings/:scenario` | 解除绑定 |
 
-（P2 落地调整：单价管理提前随费用实现，见 `/mlops/costs/pricing`，按 provider+model 定位，避免不同 provider 同名模型的单价混淆。）
+（P3 落地调整：模型名可含 `/`，启停与健康测试改用 JSON body 传 provider+model，不用路径段；单价管理已在 P2 随费用落地于 `/mlops/costs/pricing`，按 provider+model 定位。）
 
 模型名需要 URL 编码；列表按 provider 配置顺序稳定返回。
 
@@ -728,15 +729,16 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 - 价格修改不影响历史 cost 快照；
 - 明细滚动清理生效且不删除日聚合。
 
-### P3：模型运营和预算
+### P3：模型运营和预算（已完成，2026-08-20）
 
-- [ ] `Enabled` 兼容字段、统一配置 DTO 和局部更新；
-- [ ] 模型启停经 runtime service 热重载；
-- [ ] 默认模型、场景绑定、禁用回退和稳定排序；
-- [ ] 健康缓存和显式测试；
-- [ ] `mlbinding`、`mlbudget`、`mlops_audit`；
-- [ ] 预算计算、档位去重、通知记录和费用页面模型 tab；
-- [ ] admin 权限和审计端点。
+- [x] `Enabled` 兼容字段生效：initProviders 跳过禁用模型、ResolveModel 按配置声明顺序稳定 fallback、`Models()` 稳定排序、禁用模型可诊断（区别未知模型，显式请求返回 400）；
+- [x] 统一配置 DTO：GET/PUT `/ainexus/config` 携带并保留 per-model `enabled`（旧页面未提交字段时按 provider+model 沿用已保存值，不再覆盖为启用）；
+- [x] 模型启停经 runtime service 热重载（`SetModelEnabled` → 全量 Update：构建校验成功才持久化原子换网关）；禁用最后一个启用模型返回 409；
+- [x] 场景绑定 `mlbinding`（chat/investigate/native_chat/patrol_report；compress/health 内部调用不开放）：请求未指定模型时生效，绑定不可路由回退默认可用并留痕；patrol 经 `ainexusrt.Summarize` 应用绑定；
+- [x] 健康缓存（内存最近一次显式测试结果）+ 显式测试端点（走网关路由，计量计入 health；GET 只读不触发请求）；
+- [x] `mlbudget` 月度预算：保存校验（yyyy-mm、limit>0、0<warn_at<1）、覆盖重置通知档位；入账后限频对账（每分钟至多一次），warn_at 与 100% 档位以月份+档位原子去重各通知一次，经 notify.Send 全部启用渠道发送并留记录（渠道策略待产品确认）；
+- [x] admin 权限和审计（启停/绑定/预算/健康测试写操作 + 审计留痕）；
+- [x] 前端 MLOps 模型 tab（启停/健康测试/场景绑定/本月用量/计价标记）+ 费用 tab 预算卡（使用率/已通知档位/设置删除）。
 
 验收：
 

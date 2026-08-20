@@ -87,6 +87,7 @@ func main() {
 	var mlopsSvc *mlops.Service
 	if cfg.Mlops != nil && cfg.Mlops.Enabled {
 		mlopsSvc = mlops.New(st)
+		mlopsSvc.SetNotifier(notifyAdapter{notifySvc}) // 预算档位通知（全部启用渠道）
 		mlopsSvc.StartUsage(usageSettingsFromConfig(cfg.Mlops, log))
 		defer mlopsSvc.StopUsage()
 	}
@@ -94,6 +95,7 @@ func main() {
 	if mlopsSvc != nil {
 		ainexusRT.SetPromptSource(mlopsSvc)
 		ainexusRT.SetUsageSink(mlopsSvc)
+		ainexusRT.SetModelBinder(mlopsSvc) // 场景模型绑定（P3），Init 之前注入
 	}
 	if err := ainexusRT.Init(context.Background()); err != nil {
 		log.Error("ainexus embed init failed", "err", err)
@@ -251,6 +253,28 @@ func main() {
 		log.Error("server exited", "err", err)
 		os.Exit(1)
 	}
+}
+
+// notifyAdapter 把 notify.Service 适配为 mlops.NotifySender（预算通知走
+// 全部启用渠道；成功/失败均由 notify 侧逐渠道留发送记录）。
+type notifyAdapter struct{ svc *notify.Service }
+
+func (a notifyAdapter) EnabledChannelIDs() []string {
+	chs, err := a.svc.ListChannels()
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	for _, ch := range chs {
+		if ch.Enabled {
+			ids = append(ids, ch.ID)
+		}
+	}
+	return ids
+}
+
+func (a notifyAdapter) Send(ctx context.Context, channelIDs []string, title, content string) error {
+	return a.svc.Send(ctx, channelIDs, title, content)
 }
 
 // usageSettingsFromConfig 把 MlopsConfig 映射为计量 collector 配置。

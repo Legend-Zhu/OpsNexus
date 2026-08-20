@@ -15,6 +15,36 @@
       </el-col>
     </el-row>
 
+    <!-- 月度预算（P3） -->
+    <h4 class="panel-title">
+      月度预算（超限只告警不拦截；档位经通知渠道各发一次）
+      <el-button size="small" class="ml8" type="primary" :icon="Plus" @click="openBudget">设置预算</el-button>
+    </h4>
+    <el-table :data="budgets" size="small" class="mb" empty-text="未设置预算（在全部启用通知渠道上无预算告警）">
+      <el-table-column prop="month" label="月份" width="100" />
+      <el-table-column label="预算(元)" width="110" align="right">
+        <template #default="{ row }">{{ fmtMinor(row.limit_minor) }}</template>
+      </el-table-column>
+      <el-table-column label="已计价(元)" width="110" align="right">
+        <template #default="{ row }">{{ fmtMinor(row.spend_minor) }}</template>
+      </el-table-column>
+      <el-table-column label="使用率" min-width="180">
+        <template #default="{ row }">
+          <el-progress :percentage="Math.min(100, Math.round(row.usage_ratio * 100))" :stroke-width="10"
+            :status="row.usage_ratio >= 1 ? 'exception' : row.usage_ratio >= row.warn_at ? 'warning' : undefined" />
+          <span class="muted size12">{{ (row.usage_ratio * 100).toFixed(1) }}% · 未计价 {{ row.unpriced_calls }} 次 · 已通知档位 {{ row.notified.map((n: number) => n * 100 + '%').join('/') || '—' }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="预警档位" width="90" align="right">
+        <template #default="{ row }">{{ row.warn_at * 100 }}%</template>
+      </el-table-column>
+      <el-table-column label="操作" width="80">
+        <template #default="{ row }">
+          <el-button link type="danger" @click="removeBudget(row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
     <!-- 按模型 / 按场景（本月） -->
     <el-row :gutter="12" class="mb">
       <el-col :span="12">
@@ -238,6 +268,26 @@
         <el-button type="primary" :loading="savingPricing" @click="savePricing">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 预算编辑 -->
+    <el-dialog v-model="budgetVisible" title="设置月度预算" width="460px">
+      <el-form label-width="130px">
+        <el-form-item label="月份" required>
+          <el-date-picker v-model="budgetForm.month" type="month" value-format="YYYY-MM" :clearable="false" style="width: 160px" />
+        </el-form-item>
+        <el-form-item label="预算上限(元)" required>
+          <el-input v-model="budgetForm.limit" placeholder="如 100；须为正数" />
+        </el-form-item>
+        <el-form-item label="预警档位" required>
+          <el-input-number v-model="budgetForm.warnPercent" :min="1" :max="99" style="width: 160px" />
+          <span class="muted size12" style="margin-left: 8px">%（达档位与 100% 各通知一次）</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="budgetVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingBudget" @click="saveBudget">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -246,7 +296,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { mlopsApi } from '@/api'
-import type { MLOpsCostTrendRow, MLOpsCostsOverview, MLOpsPricing, MLOpsUsageDetail } from '@/types'
+import type { MLOpsBudgetView, MLOpsCostTrendRow, MLOpsCostsOverview, MLOpsPricing, MLOpsUsageDetail } from '@/types'
 
 const scenarios = ['chat', 'investigate', 'native_chat', 'patrol_report', 'compress', 'health']
 const pageSize = 20
@@ -269,6 +319,15 @@ const opItems = ref<MLOpsUsageDetail[]>([])
 
 const pricingVisible = ref(false)
 const pricingForm = reactive({ provider: '', model: '', price_in: '', price_out: '', note: '', _edit: false })
+
+const budgets = ref<MLOpsBudgetView[]>([])
+const budgetVisible = ref(false)
+const savingBudget = ref(false)
+const budgetForm = reactive({
+  month: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
+  limit: '',
+  warnPercent: 80,
+})
 
 function fmtDay(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -431,11 +490,58 @@ async function removePricing(row: MLOpsPricing) {
   await loadPricings()
 }
 
+// ---- 预算 ----
+
+async function loadBudgets() {
+  try {
+    budgets.value = (await mlopsApi.budgets()).items ?? []
+  } catch {
+    budgets.value = []
+  }
+}
+
+function openBudget() {
+  budgetForm.month = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`
+  budgetForm.limit = ''
+  budgetVisible.value = true
+}
+
+async function saveBudget() {
+  const limit = Number(budgetForm.limit)
+  if (!Number.isFinite(limit) || limit <= 0) {
+    ElMessage.warning('预算上限须为正数（元）')
+    return
+  }
+  savingBudget.value = true
+  try {
+    await mlopsApi.saveBudget({
+      month: budgetForm.month,
+      limit_minor: Math.round(limit * 1e6),
+      warn_at: budgetForm.warnPercent / 100,
+    })
+    ElMessage.success('预算已保存（覆盖会重置通知档位）')
+    budgetVisible.value = false
+    await loadBudgets()
+  } catch {
+    /* 已提示 */
+  } finally {
+    savingBudget.value = false
+  }
+}
+
+async function removeBudget(row: MLOpsBudgetView) {
+  await ElMessageBox.confirm(`删除 ${row.month} 的预算？`, '删除预算', { type: 'warning' })
+  await mlopsApi.deleteBudget(row.month)
+  ElMessage.success('已删除')
+  await loadBudgets()
+}
+
 onMounted(() => {
   void loadOverview()
   void loadTrend()
   void loadDetail(1)
   void loadPricings()
+  void loadBudgets()
 })
 </script>
 

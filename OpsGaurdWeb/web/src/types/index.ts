@@ -696,3 +696,57 @@ export interface MLOpsPricing {
   updated_by?: string
   note?: string
 }
+
+// ---- MLOps 模型运营（/v1/mlops/models|bindings，P3） ----
+
+export interface MLOpsModelItem {
+  provider: string
+  type: string
+  model: string
+  display_name?: string
+  /** 配置启停（运营层）；routed=当前网关是否实际路由 */
+  enabled: boolean
+  routed: boolean
+  is_default: boolean
+  effective_default?: string
+  month_calls: number
+  month_cost_minor: number
+  priced: boolean
+}
+
+export interface MLOpsModelsView {
+  gateway_enabled: boolean
+  gateway_active: boolean
+  default_model?: string
+  effective_default?: string
+  items: MLOpsModelItem[]
+}
+
+export interface MLOpsHealthResult {
+  provider: string
+  model: string
+  ok: boolean
+  latency_ms: number
+  error?: string
+  tested_at: string
+}
+
+export interface MLOpsBinding {
+  scenario: string
+  model: string
+  updated_by?: string
+  updated_at: string
+}
+
+export interface MLOpsBudgetView {
+  month: string
+  currency: string
+  limit_minor: number
+  warn_at: number
+  notified: number[]
+  updated_by?: string
+  updated_at: string
+  spend_minor: number
+  unpriced_calls: number
+  usage_ratio: number
+}

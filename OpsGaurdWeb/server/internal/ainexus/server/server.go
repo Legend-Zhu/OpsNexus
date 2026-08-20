@@ -46,10 +46,15 @@ type PromptSource interface {
 type Server struct {
 	config      *ainexuscfg.Config
 	providers   []provider.Provider          // 所有已注册的 provider
-	modelRoutes map[string]provider.Provider // model名称 -> provider 快速路由
-	registry    *tool.Registry
-	mcpMgr      *mcp.Manager
-	logger      *log.Logger
+	modelRoutes map[string]provider.Provider // model名称 -> provider 快速路由（仅启用模型）
+	// enabledModels 启用模型按配置声明顺序（providers[].models 出现顺序），
+	// 作为默认模型缺失/未指定时的稳定 fallback——不依赖 map 遍历顺序。
+	enabledModels []string
+	// disabledModels 配置中存在但被运营层禁用的模型（诊断用：区别于未知模型）。
+	disabledModels map[string]bool
+	registry       *tool.Registry
+	mcpMgr         *mcp.Manager
+	logger         *log.Logger
 
 	openaiH    *handler.OpenAIHandler
 	anthropicH *handler.AnthropicHandler
@@ -79,12 +84,13 @@ func WithPromptSource(src PromptSource) Option {
 // New 创建内嵌网关
 func New(cfg *ainexuscfg.Config, opts ...Option) *Server {
 	s := &Server{
-		config:      cfg,
-		providers:   make([]provider.Provider, 0),
-		modelRoutes: make(map[string]provider.Provider),
-		registry:    tool.NewRegistry(),
-		mcpMgr:      mcp.NewManager(log.New(os.Stderr, "[OpsGaurdWeb.AiNexus.MCP] ", log.LstdFlags|log.Lshortfile)),
-		logger:      log.New(os.Stderr, "[OpsGaurdWeb.AiNexus] ", log.LstdFlags|log.Lshortfile),
+		config:         cfg,
+		providers:      make([]provider.Provider, 0),
+		modelRoutes:    make(map[string]provider.Provider),
+		disabledModels: make(map[string]bool),
+		registry:       tool.NewRegistry(),
+		mcpMgr:         mcp.NewManager(log.New(os.Stderr, "[OpsGaurdWeb.AiNexus.MCP] ", log.LstdFlags|log.Lshortfile)),
+		logger:         log.New(os.Stderr, "[OpsGaurdWeb.AiNexus] ", log.LstdFlags|log.Lshortfile),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -119,14 +125,21 @@ func (s *Server) Initialize(ctx context.Context) error {
 	return nil
 }
 
-// initProviders 根据配置创建所有 Provider
+// initProviders 根据配置创建所有 Provider。禁用模型（enabled=false，
+// MLOps 运营层）不进路由，但保留在 disabledModels 供诊断；一个 provider
+// 的全部模型都被禁用时 provider 仍注册（模型列表为空）。
 func (s *Server) initProviders() error {
 	for _, pc := range s.config.Providers {
 		modelNames := make([]string, 0, len(pc.Models))
 		for _, m := range pc.Models {
+			if !m.Enabled {
+				s.disabledModels[m.Name] = true
+				s.logger.Printf("  Model disabled (skipped): %s -> %s", m.Name, pc.Name)
+				continue
+			}
 			modelNames = append(modelNames, m.Name)
 		}
-		if len(modelNames) == 0 {
+		if len(pc.Models) == 0 {
 			return fmt.Errorf("provider %q has no models configured", pc.Name)
 		}
 
@@ -152,6 +165,7 @@ func (s *Server) initProviders() error {
 				return fmt.Errorf("model %q is already registered by another provider", m)
 			}
 			s.modelRoutes[m] = p
+			s.enabledModels = append(s.enabledModels, m)
 			s.logger.Printf("  Model routed: %s -> %s (%s)", m, pc.Name, pc.Type)
 		}
 		s.logger.Printf("Provider registered: %s (type=%s, base_url=%s, models=%v)",
@@ -160,6 +174,9 @@ func (s *Server) initProviders() error {
 
 	if len(s.providers) == 0 {
 		return fmt.Errorf("no providers configured")
+	}
+	if len(s.enabledModels) == 0 {
+		return fmt.Errorf("no enabled models: all models are disabled by mlops operations")
 	}
 	return nil
 }
@@ -189,13 +206,42 @@ func (s *Server) OpenAIHandler() *handler.OpenAIHandler { return s.openaiH }
 // AnthropicHandler 返回 Anthropic 格式处理器（/v1/messages）
 func (s *Server) AnthropicHandler() *handler.AnthropicHandler { return s.anthropicH }
 
-// Models 返回所有可用模型名（模型选择器数据源）
+// Models 返回所有可用（启用）模型名，按配置声明顺序稳定返回
+// （模型选择器数据源；不包含被运营层禁用的模型）。
 func (s *Server) Models() []string {
-	models := make([]string, 0, len(s.modelRoutes))
-	for m := range s.modelRoutes {
-		models = append(models, m)
+	out := make([]string, len(s.enabledModels))
+	copy(out, s.enabledModels)
+	return out
+}
+
+// IsModelRoutable 模型是否在当前路由表中（启用）。
+func (s *Server) IsModelRoutable(model string) bool {
+	_, ok := s.modelRoutes[model]
+	return ok
+}
+
+// IsModelDisabled 模型是否因运营层禁用而被跳过（区别于未配置的未知模型）。
+func (s *Server) IsModelDisabled(model string) bool {
+	return s.disabledModels[model]
+}
+
+// TestModel 对一个已启用模型发一次最小真实请求（MLOps 显式健康测试）。
+// 走当前路由（含计量包装），计量归属 scenario=health。
+func (s *Server) TestModel(ctx context.Context, model string) error {
+	p, ok := s.modelRoutes[model]
+	if !ok {
+		if s.disabledModels[model] {
+			return fmt.Errorf("model %q is disabled", model)
+		}
+		return fmt.Errorf("model %q not found", model)
 	}
-	return models
+	ctx = usage.NewOperation(ctx, usage.ScenarioHealth, "mlops_model_health")
+	_, err := p.ChatCompletion(ctx, &provider.ChatRequest{
+		Model:     model,
+		MaxTokens: 8,
+		Messages:  []provider.ChatMessage{{Role: provider.RoleUser, Content: "ping"}},
+	})
+	return err
 }
 
 // MCPNames 返回已连接的 MCP Server 名称
@@ -259,22 +305,21 @@ func renderStaticTemplate(tplText string) (string, error) {
 	return b.String(), nil
 }
 
-// ResolveModel 解析模型名：空 → 配置的默认模型（DefaultModel）→ 首个可用。
-// 返回 "" 表示模型池为空。
+// ResolveModel 解析模型名：空 → 场景绑定/配置默认模型（DefaultModel）→
+// 配置声明顺序的首个启用模型（稳定 fallback，不依赖 map 遍历顺序）。
+// 返回 "" 表示无可用模型。显式指定的模型原样返回（启用与否由调用方
+// 检查 IsModelDisabled/IsModelRoutable 决定错误语义）。
 func (s *Server) ResolveModel(model string) string {
 	if model != "" {
-		if _, ok := s.modelRoutes[model]; ok {
-			return model
-		}
-		return model // 未知模型交给上层报错
+		return model
 	}
 	if s.config.DefaultModel != "" {
 		if _, ok := s.modelRoutes[s.config.DefaultModel]; ok {
 			return s.config.DefaultModel
 		}
 	}
-	for m := range s.modelRoutes {
-		return m
+	if len(s.enabledModels) > 0 {
+		return s.enabledModels[0]
 	}
 	return ""
 }

@@ -41,7 +41,7 @@ func validConfig(enabled bool) *ainexuscfg.Config {
 			Type:    ainexuscfg.ProviderTypeOpenAI,
 			BaseURL: "http://127.0.0.1:1/v1", // 不可达，仅测构建/路由
 			APIKey:  "sk-test",
-			Models:  []ainexuscfg.ModelConfig{{Name: "m1"}},
+			Models:  []ainexuscfg.ModelConfig{{Name: "m1", Enabled: true}},
 		}},
 	}
 }
@@ -73,7 +73,7 @@ func TestHotReload(t *testing.T) {
 	first := svc.Server()
 
 	cfg := validConfig(true)
-	cfg.Providers[0].Models = append(cfg.Providers[0].Models, ainexuscfg.ModelConfig{Name: "m2"})
+	cfg.Providers[0].Models = append(cfg.Providers[0].Models, ainexuscfg.ModelConfig{Name: "m2", Enabled: true})
 	if err := svc.Update(context.Background(), cfg); err != nil {
 		t.Fatalf("second update: %v", err)
 	}
@@ -133,14 +133,14 @@ func TestDefaultModelValidated(t *testing.T) {
 
 	// 未启用 + 默认模型不在模型池 → 拒绝
 	bad := validConfig(false)
-	bad.Providers[0].Models = []ainexuscfg.ModelConfig{{Name: "m1"}}
+	bad.Providers[0].Models = []ainexuscfg.ModelConfig{{Name: "m1", Enabled: true}}
 	bad.DefaultModel = "ghost"
 	if err := svc.Update(context.Background(), bad); err == nil {
 		t.Fatal("expected error for default model not in pool")
 	}
 	// 未启用 + 默认模型在模型池 → 允许
 	good := validConfig(false)
-	good.Providers[0].Models = []ainexuscfg.ModelConfig{{Name: "m1"}}
+	good.Providers[0].Models = []ainexuscfg.ModelConfig{{Name: "m1", Enabled: true}}
 	good.DefaultModel = "m1"
 	if err := svc.Update(context.Background(), good); err != nil {
 		t.Fatalf("expected ok for in-pool default model, got: %v", err)
@@ -350,5 +350,110 @@ func TestUsageSinkSurvivesHotReload(t *testing.T) {
 	if records[0].OperationID == "" || records[0].OperationID == records[1].OperationID {
 		t.Fatalf("each summarize should be its own operation: %q vs %q",
 			records[0].OperationID, records[1].OperationID)
+	}
+}
+
+// twoModelConfig 双模型配置（m1/m2，均可启停）。
+func twoModelConfig() *ainexuscfg.Config {
+	cfg := validConfig(true)
+	cfg.Providers[0].Models = []ainexuscfg.ModelConfig{
+		{Name: "m1", Enabled: true},
+		{Name: "m2", Enabled: true},
+	}
+	return cfg
+}
+
+// TestSetModelEnabled 模型启停热重载：禁用后不可路由/不在模型列表，
+// 禁用最后一个启用模型被拒绝，启用恢复，配置持久化。
+func TestSetModelEnabled(t *testing.T) {
+	svc := newTestService(t)
+	if err := svc.Update(context.Background(), twoModelConfig()); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	// 禁用 m1：热重载成功，m1 不可路由但可诊断（区别未知模型）
+	if err := svc.SetModelEnabled(context.Background(), "test", "m1", false); err != nil {
+		t.Fatalf("disable m1: %v", err)
+	}
+	srv := svc.Server()
+	if srv == nil {
+		t.Fatal("gateway should stay up")
+	}
+	if srv.IsModelRoutable("m1") || !srv.IsModelDisabled("m1") {
+		t.Fatal("m1 should be disabled and unroutable")
+	}
+	if !srv.IsModelRoutable("m2") {
+		t.Fatal("m2 should stay routable")
+	}
+	models := srv.Models()
+	if len(models) != 1 || models[0] != "m2" {
+		t.Fatalf("models = %v", models)
+	}
+	// 默认 fallback 稳定落到 m2
+	if got := srv.ResolveModel(""); got != "m2" {
+		t.Fatalf("fallback = %q, want m2", got)
+	}
+	// 禁用状态持久化在配置里
+	if m := svc.Config().Providers[0].Models[0]; m.Enabled {
+		t.Fatal("persisted config should keep m1 disabled")
+	}
+
+	// 禁用最后一个启用模型 → 拒绝，网关不变
+	if err := svc.SetModelEnabled(context.Background(), "test", "m2", false); err == nil {
+		t.Fatal("disabling the last enabled model should fail")
+	}
+	if !svc.Server().IsModelRoutable("m2") {
+		t.Fatal("m2 should remain routable after rejected disable")
+	}
+
+	// 未知模型 → 报错
+	if err := svc.SetModelEnabled(context.Background(), "test", "nope", true); err == nil {
+		t.Fatal("unknown model should fail")
+	}
+
+	// 启用恢复
+	if err := svc.SetModelEnabled(context.Background(), "test", "m1", true); err != nil {
+		t.Fatalf("re-enable m1: %v", err)
+	}
+	if !svc.Server().IsModelRoutable("m1") || svc.Server().IsModelDisabled("m1") {
+		t.Fatal("m1 should be enabled again")
+	}
+}
+
+// stubBinder 固定场景绑定。
+type stubBinder struct{ scenario, model string }
+
+func (b stubBinder) ScenarioModel(scenario string) (string, bool) {
+	if scenario == b.scenario {
+		return b.model, true
+	}
+	return "", false
+}
+
+// TestEffectiveModelBinding 绑定可路由时生效；绑定不可路由（被禁用）时
+// 回退默认可用模型；显式指定优先于绑定。
+func TestEffectiveModelBinding(t *testing.T) {
+	svc := newTestService(t)
+	if err := svc.Update(context.Background(), twoModelConfig()); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	svc.SetModelBinder(stubBinder{scenario: "chat", model: "m2"})
+
+	if got := svc.EffectiveModel("chat", ""); got != "m2" {
+		t.Fatalf("binding should apply: %q", got)
+	}
+	if got := svc.EffectiveModel("chat", "m1"); got != "m1" {
+		t.Fatalf("explicit request should win: %q", got)
+	}
+	if got := svc.EffectiveModel("investigate", ""); got != "m1" {
+		t.Fatalf("unbound scenario should fall back to first enabled: %q", got)
+	}
+
+	// 绑定模型被禁用 → 回退默认
+	if err := svc.SetModelEnabled(context.Background(), "test", "m2", false); err != nil {
+		t.Fatalf("disable m2: %v", err)
+	}
+	if got := svc.EffectiveModel("chat", ""); got != "m1" {
+		t.Fatalf("binding to disabled model should fall back: %q", got)
 	}
 }
