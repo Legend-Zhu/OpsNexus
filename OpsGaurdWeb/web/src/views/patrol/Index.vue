@@ -4,6 +4,7 @@
       <div class="card-header">
         <span>智能巡检</span>
         <div class="header-right">
+          <el-button :icon="Promotion" @click="deliveryVisible = true">报告投递</el-button>
           <el-button type="primary" :icon="Plus" @click="openCreate">新建流程</el-button>
         </div>
       </div>
@@ -40,6 +41,11 @@
       </el-table-column>
     </el-table>
 
+    <!-- 报告投递设置（生成后的渠道投递策略，渠道在通知中心维护） -->
+    <el-dialog v-model="deliveryVisible" title="报告投递设置" width="680px">
+      <ReportDelivery />
+    </el-dialog>
+
     <!-- 新建/编辑对话框 -->
     <el-dialog v-model="formVisible" :title="editing ? '编辑流程' : '新建流程'" width="680px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
@@ -59,7 +65,7 @@
           <el-select v-model="form.model" clearable filterable placeholder="默认（AI 网关首个可用模型）" style="width: 100%">
             <el-option v-for="m in models" :key="m.name" :label="modelLabel(m)" :value="m.name" />
           </el-select>
-          <span class="muted ml">来自「系统设置 → 模型配置」的模型池</span>
+          <span class="muted ml">来自「MLOps → 模型接入」的模型池</span>
         </el-form-item>
         <el-form-item label="流程 YAML" prop="yaml">
           <el-input v-model="form.yaml" type="textarea" :rows="14" class="mono"
@@ -159,14 +165,16 @@ checks:
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Download } from '@element-plus/icons-vue'
+import { Plus, Download, Promotion } from '@element-plus/icons-vue'
 import { ainexusApi, patrolApi } from '@/api'
 import type { AINexusModelInfo, Patrol, PatrolReport, PatrolRun } from '@/types'
+import ReportDelivery from './ReportDelivery.vue'
 
 const loading = ref(false)
 const patrols = ref<Patrol[]>([])
 const saving = ref(false)
 const runningId = ref('')
+const deliveryVisible = ref(false)
 
 // 报告模型：统一取自 AI 排查网关配置（/v1/ainexus/models）；网关未启用时为空
 // 数组，巡检降级为无 AI 报告，不影响检查。
@@ -253,7 +261,7 @@ checks:
 report:
   # model: qwen-plus           # 报告模型；不填用「AI 排查网关」默认模型
   # prompt: 重点关注存储类异常   # 附加报告要求
-# 报告投递渠道在 系统设置 → 巡检报告 配置（每次生成/仅有异常/不发送）
+# 报告投递渠道在本页「报告投递」按钮配置（每次生成/仅有异常/不发送）
 `
 
 function downloadTemplate() {
@@ -424,8 +432,9 @@ async function viewRun(run: PatrolRun) {
 
 onMounted(async () => {
   await fetchPatrols()
-  // 模型统一取自「系统设置 → AI 排查网关」的配置（GET /v1/ainexus/config，
-  // 网关未启用也正常返回 200；此时模型列表为空，巡检降级为无 AI 报告）。
+  // 模型统一取自 AI 网关模型池（GET /v1/ainexus/config，provider 在
+  // 「MLOps → 模型接入」维护；网关未启用也正常返回 200，此时模型列表为空，
+  // 巡检降级为无 AI 报告）。
   // 不用 /v1/ainexus/models——网关未启用时它返回 503，会被全局拦截器弹错。
   try {
     const cfg = await ainexusApi.config()

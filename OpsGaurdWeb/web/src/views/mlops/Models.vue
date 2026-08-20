@@ -1,7 +1,7 @@
 <template>
   <div class="models">
     <el-alert type="info" :closable="false" class="mb"
-      title="模型运营视图：provider/model 本体在「系统设置 → AI 排查网关」维护，此处只做启停/绑定/健康"
+      title="模型运营视图：provider/model 本体在本页「模型接入」维护，此处只做启停/绑定/健康"
       description="启停经运行时热重载立即生效（构建校验成功才持久化，失败不影响旧网关）；禁用的模型不再接收请求，默认模型禁用时按配置顺序稳定回退；健康测试会发送一次真实最小请求（计量计入 health 场景）。" />
 
     <!-- 网关状态 -->
@@ -23,7 +23,7 @@
     </el-descriptions>
 
     <!-- 模型池 -->
-    <el-table :data="view?.items ?? []" size="small" v-loading="loading" empty-text="未配置模型（在系统设置 → AI 排查网关 添加）">
+    <el-table :data="view?.items ?? []" size="small" v-loading="loading" empty-text="未配置模型（在本页「模型接入」tab 添加）">
       <el-table-column label="provider / model" min-width="230">
         <template #default="{ row }">
           <span class="mono">{{ row.provider }} / {{ row.model }}</span>

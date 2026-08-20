@@ -198,10 +198,16 @@ func New(h *api.Handlers) *gin.Engine {
 			rules.DELETE("/:cluster/:service", h.DeleteAlertRule)
 		}
 
-		// 认证 / 用户（P6）
+		// 认证 / 用户（P6）：修改密码自助；用户管理（列表/新增/重置密码）admin only
 		v1.GET("/auth/me", h.Me)
-		v1.GET("/users", h.ListUsers)
-		v1.POST("/users", h.CreateUser)
+		v1.PUT("/auth/password", h.ChangePassword)
+		usersAdmin := v1.Group("/users")
+		if adminMW := h.AdminMiddleware(); adminMW != nil {
+			usersAdmin.Use(adminMW)
+		}
+		usersAdmin.GET("", h.ListUsers)
+		usersAdmin.POST("", h.CreateUser)
+		usersAdmin.PUT("/:username/password", h.ResetPassword)
 
 		// IdP client 管理（admin only）：注册 / 编辑 / 删除 / 轮换密钥。
 		// IdP 未启用时不挂载（h.IdP()==nil）。
@@ -218,7 +224,8 @@ func New(h *api.Handlers) *gin.Engine {
 			idpAdmin.POST("/:id/rotate-secret", h.RotateClientSecret)
 		}
 
-		// AiNexus 异常排查（内嵌网关，进程内直调；config 为页面管理的网关配置）
+		// AiNexus 异常排查（内嵌网关，进程内直调；config 为页面管理的网关配置）。
+		// config 读返回脱敏视图（api_key_set），普通认证可读；写/测试收敛 admin。
 		ainexus := v1.Group("/ainexus")
 		{
 			ainexus.GET("/health", h.AINexusHealth)
@@ -226,8 +233,12 @@ func New(h *api.Handlers) *gin.Engine {
 			ainexus.POST("/chat", h.AINexusChat)
 			ainexus.POST("/investigate", h.AINexusInvestigate)
 			ainexus.GET("/config", h.GetAINexusConfig)
-			ainexus.PUT("/config", h.UpdateAINexusConfig)
-			ainexus.POST("/config/test", h.TestAINexusProvider)
+			ainexusAdmin := ainexus.Group("")
+			if adminMW := h.AdminMiddleware(); adminMW != nil {
+				ainexusAdmin.Use(adminMW)
+			}
+			ainexusAdmin.PUT("/config", h.UpdateAINexusConfig)
+			ainexusAdmin.POST("/config/test", h.TestAINexusProvider)
 		}
 
 		// MLOps 运营层（P1 Prompt Hub；P2 用量费用；mlops.enabled=false

@@ -214,7 +214,7 @@ export interface Investigation {
   updated_at: string
 }
 
-/** 巡检报告投递设置（系统设置 → 巡检报告） */
+/** 巡检报告投递设置（智能巡检 → 报告投递） */
 export interface PatrolReportSetting {
   mode: 'always' | 'anomaly' | 'off'
   channel_ids: string[]

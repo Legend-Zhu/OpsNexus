@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/alertrule"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/auth"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 )
@@ -398,4 +399,63 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 		return
 	}
 	ok(c, http.StatusCreated, u.Public())
+}
+
+// passwordRequest 修改密码请求体（旧密码校验）。
+type passwordRequest struct {
+	OldPassword string `json:"old_password" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required"`
+}
+
+// ChangePassword godoc: PUT /api/v1/auth/password
+// 当前登录用户修改自己的本地密码（SSO 用户无本地口令，返回 400 提示）。
+func (h *Handlers) ChangePassword(c *gin.Context) {
+	if h.authSvc == nil {
+		fail(c, http.StatusServiceUnavailable, "auth service not initialized")
+		return
+	}
+	var req passwordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
+		return
+	}
+	if err := h.authSvc.ChangePassword(c.GetString("username"), req.OldPassword, req.NewPassword); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrBadOldPassword), errors.Is(err, auth.ErrNoLocalPassword), errors.Is(err, auth.ErrUserNotFound):
+			// 均为请求侧校验失败，用 400（401 会触发前端全局登出，不适合旧密码输错）
+			fail(c, http.StatusBadRequest, err.Error())
+		default:
+			fail(c, http.StatusInternalServerError, "change password: "+err.Error())
+		}
+		return
+	}
+	ok(c, http.StatusOK, gin.H{"changed": c.GetString("username")})
+}
+
+// resetPasswordRequest 管理员重置密码请求体（免旧密码）。
+type resetPasswordRequest struct {
+	NewPassword string `json:"new_password" binding:"required"`
+}
+
+// ResetPassword godoc: PUT /api/v1/users/:username/password（admin）
+// 管理员重置指定用户的本地密码；对 SSO 用户重置即设置本地口令。
+func (h *Handlers) ResetPassword(c *gin.Context) {
+	if h.authSvc == nil {
+		fail(c, http.StatusServiceUnavailable, "auth service not initialized")
+		return
+	}
+	var req resetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid request: "+err.Error())
+		return
+	}
+	if err := h.authSvc.ResetPassword(c.Param("username"), req.NewPassword); err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			fail(c, http.StatusNotFound, err.Error())
+			return
+		}
+		fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(c, http.StatusOK, gin.H{"reset": c.Param("username")})
 }

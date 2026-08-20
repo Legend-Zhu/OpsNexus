@@ -3,14 +3,14 @@
     <!-- 模型池：Provider + 模型清单（唯一配置模型的地方） -->
     <el-alert type="info" :closable="false" class="mb"
       title="模型池统一配置"
-      description="智能巡检、异常排查、AI 排查网关的模型都来自这里。新增 Provider 后可在「AI 排查网关」tab 选择默认模型；模型的运营启停（禁用不断流）在「MLOps → 模型」页面。" />
+      description="智能巡检、异常排查、AI 排查网关的模型都来自这里。新增 Provider 后可在「系统设置 → AI 排查网关」选择默认模型；模型的运营启停（禁用不断流）在本页「模型」tab（需启用 MLOps 运营层）。" />
 
     <div v-for="(p, i) in form.providers" :key="i" class="provider-box">
       <div class="provider-head">
         <span class="provider-title">Provider {{ i + 1 }}</span>
         <span>
-          <el-button link type="primary" :loading="testing === i" @click="testProvider(i)">测试连接</el-button>
-          <el-button link type="danger" @click="form.providers.splice(i, 1)">移除</el-button>
+          <el-button link type="primary" :disabled="!isAdmin" :loading="testing === i" @click="testProvider(i)">测试连接</el-button>
+          <el-button link type="danger" :disabled="!isAdmin" @click="form.providers.splice(i, 1)">移除</el-button>
         </span>
       </div>
       <el-form label-width="90px" class="provider-form">
@@ -44,17 +44,18 @@
               <el-input-number v-model="m.temperature" :min="0" :max="2" :step="0.1" controls-position="right" />
               <el-button link type="danger" :icon="Delete" @click="p.models.splice(mi, 1)" />
             </div>
-            <el-button size="small" :icon="Plus" @click="p.models.push({ name: '' })">添加模型</el-button>
+            <el-button size="small" :icon="Plus" :disabled="!isAdmin" @click="p.models.push({ name: '' })">添加模型</el-button>
           </div>
         </el-form-item>
       </el-form>
     </div>
-    <el-button class="mb" size="small" :icon="Plus" @click="addProvider">添加 Provider</el-button>
+    <el-button class="mb" size="small" :icon="Plus" :disabled="!isAdmin" @click="addProvider">添加 Provider</el-button>
 
     <!-- 保存 -->
     <div class="save-bar">
-      <el-button type="primary" :loading="saving" @click="save">保存模型配置</el-button>
+      <el-button type="primary" :loading="saving" :disabled="!isAdmin" @click="save">保存模型配置</el-button>
       <el-button :loading="loading" @click="load">重置</el-button>
+      <span v-if="!isAdmin" class="muted ml">只读（写操作需管理员）</span>
     </div>
   </div>
 </template>
@@ -64,6 +65,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { ainexusApi } from '@/api'
+import { isAdmin, loadAdminFlag } from '@/composables/admin'
 import type { AINexusModelSpec, AINexusProvider } from '@/types'
 
 const loading = ref(false)
@@ -147,7 +149,10 @@ async function testProvider(i: number) {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  void loadAdminFlag()
+  load()
+})
 </script>
 
 <style scoped>
@@ -187,6 +192,13 @@ onMounted(load)
 }
 .mb {
   margin-bottom: 12px;
+}
+.ml {
+  margin-left: 8px;
+}
+.muted {
+  color: var(--el-text-color-placeholder);
+  font-size: 12px;
 }
 .save-bar {
   margin-top: 16px;

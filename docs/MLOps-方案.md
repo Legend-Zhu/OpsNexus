@@ -451,7 +451,7 @@ type Budget struct {
 
 ### 5.1 单一事实来源
 
-现有 `/api/v1/ainexus/config` 及 `ainexus/runtime` 是 provider/model 配置的唯一事实来源。MLOps 不再维护另一份 provider 表，也不允许旧的“模型配置”页面和 MLOps 页面各自提交一份 providers 后互相覆盖。
+现有 `/api/v1/ainexus/config` 及 `ainexus/runtime` 是 provider/model 配置的唯一事实来源。MLOps 不再维护另一份 provider 表，也不允许模型配置与模型运营两个编辑入口各自提交一份 providers 后互相覆盖。（2026-08-21 起「模型配置」页面已并入 MLOps「模型接入」tab，与运营视图同页。）
 
 建议：
 
@@ -666,7 +666,7 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 
 前端约束（落地口径）：
 
-- provider/model 本体仍只有一个编辑来源（「系统设置 → 模型配置」提交模型池 providers，「AI 排查网关」提交网关设置，职责互补）；MLOps 模型 tab 不提交整份 providers，只做启停/绑定/健康运营操作；
+- provider/model 本体仍只有一个编辑来源（MLOps「模型接入」提交模型池 providers，「系统设置 → AI 排查网关」提交网关设置，职责互补）；MLOps 模型 tab 不提交整份 providers，只做启停/绑定/健康运营操作；
 - per-model `enabled` 由 GET/PUT 全程保留，旧页面未提交字段时服务端按 provider+model 沿用已保存值，不存在双向覆盖；
 - 前后端沿用现有 `snake_case` JSON 契约和标准 response envelope；
 - 写操作前端按当前用户角色隐藏（`composables/admin.ts`），后端 admin 守卫始终保留；

@@ -7,8 +7,8 @@
     </template>
 
     <el-tabs v-model="tab">
-      <!-- 用户 -->
-      <el-tab-pane label="用户" name="users">
+      <!-- 用户（用户管理 admin only；修改密码为自助操作，所有登录用户可用） -->
+      <el-tab-pane v-if="isAdmin" label="用户" name="users">
         <el-table :data="users" empty-text="暂无用户">
           <el-table-column prop="username" label="用户名" min-width="140" />
           <el-table-column prop="role" label="角色" width="100">
@@ -22,8 +22,16 @@
           <el-table-column label="创建时间" width="170">
             <template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template>
           </el-table-column>
+          <el-table-column label="操作" width="110">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openReset(row)">重置密码</el-button>
+            </template>
+          </el-table-column>
         </el-table>
-        <el-button class="mt" type="primary" :icon="Plus" @click="userVisible = true">新增用户</el-button>
+        <div class="user-actions">
+          <el-button type="primary" :icon="Plus" @click="userVisible = true">新增用户</el-button>
+          <el-button :icon="Key" @click="pwdVisible = true">修改密码</el-button>
+        </div>
       </el-tab-pane>
 
       <!-- SSO -->
@@ -56,19 +64,10 @@
         <IdpClients />
       </el-tab-pane>
 
-      <!-- 模型配置（模型池：provider + 模型清单，唯一配置模型的地方） -->
-      <el-tab-pane label="模型配置" name="model-config">
-        <ModelConfig />
-      </el-tab-pane>
-
-      <!-- AI 排查网关（启用 + 从模型池选默认模型 + 工具/Agent/MCP） -->
+      <!-- AI 排查网关（启用 + 从模型池选默认模型 + 工具/Agent/MCP；
+           模型池配置在「MLOps → 模型接入」） -->
       <el-tab-pane label="AI 排查网关" name="ainexus">
         <AINexusGateway />
-      </el-tab-pane>
-
-      <!-- 巡检报告（生成后的渠道投递策略） -->
-      <el-tab-pane label="巡检报告" name="patrol-report">
-        <PatrolReport />
       </el-tab-pane>
 
       <!-- 密钥（巡检 flow 拨测账号等 ${secret:} 引用） -->
@@ -77,7 +76,7 @@
       </el-tab-pane>
     </el-tabs>
 
-    <!-- 用户对话框 -->
+    <!-- 新增用户对话框 -->
     <el-dialog v-model="userVisible" title="新增用户" width="400px">
       <el-form label-width="80px">
         <el-form-item label="用户名">
@@ -98,20 +97,39 @@
         <el-button type="primary" :loading="savingUser" @click="saveUser">创建</el-button>
       </template>
     </el-dialog>
+
+    <!-- 重置密码对话框（admin，免旧密码；对 SSO 用户重置即设置本地口令） -->
+    <el-dialog v-model="resetVisible" :title="`重置密码：${resetTarget?.username ?? ''}`" width="420px" @closed="resetForm.confirm = ''">
+      <el-form label-width="90px">
+        <el-form-item label="新密码">
+          <el-input v-model="resetForm.password" type="password" show-password />
+        </el-form-item>
+        <el-form-item label="确认新密码">
+          <el-input v-model="resetForm.confirm" type="password" show-password />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="resetVisible = false">取消</el-button>
+        <el-button type="primary" :loading="resetting" @click="saveReset">重置</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 修改自己的密码（自助） -->
+    <ChangePasswordDialog v-model:visible="pwdVisible" />
   </el-card>
 </template>
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Key, Plus } from '@element-plus/icons-vue'
 import { authApi } from '@/api'
+import { isAdmin, loadAdminFlag } from '@/composables/admin'
 import type { SSOStatus, User } from '@/types'
 import AINexusGateway from './AINexusGateway.vue'
-import ModelConfig from './ModelConfig.vue'
-import PatrolReport from './PatrolReport.vue'
 import Secrets from './Secrets.vue'
 import IdpClients from './IdpClients.vue'
+import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
 
 const tab = ref('users')
 const users = ref<User[]>([])
@@ -121,13 +139,23 @@ const userVisible = ref(false)
 const savingUser = ref(false)
 const userForm = reactive({ username: '', password: '', role: 'viewer' })
 
+const pwdVisible = ref(false)
+
+const resetVisible = ref(false)
+const resetting = ref(false)
+const resetTarget = ref<User | null>(null)
+const resetForm = reactive({ password: '', confirm: '' })
+
 async function fetchAll() {
-  const u = await authApi.users()
-  users.value = u.items ?? []
   try {
     ssoStatus.value = await authApi.ssoStatus()
   } catch {
     ssoStatus.value = null
+  }
+  // 用户列表 admin only（后端守卫；viewer 直接跳过请求避免 403 弹错）
+  if (isAdmin.value) {
+    const u = await authApi.users()
+    users.value = u.items ?? []
   }
 }
 
@@ -138,7 +166,8 @@ async function saveUser() {
     ElMessage.success('已创建')
     userVisible.value = false
     Object.assign(userForm, { username: '', password: '', role: 'viewer' })
-    await fetchAll()
+    const u = await authApi.users()
+    users.value = u.items ?? []
   } catch {
     // 错误已提示
   } finally {
@@ -146,7 +175,39 @@ async function saveUser() {
   }
 }
 
-onMounted(fetchAll)
+function openReset(row: User) {
+  resetTarget.value = row
+  Object.assign(resetForm, { password: '', confirm: '' })
+  resetVisible.value = true
+}
+
+async function saveReset() {
+  if (!resetTarget.value) return
+  if (!resetForm.password) {
+    ElMessage.warning('请输入新密码')
+    return
+  }
+  if (resetForm.password !== resetForm.confirm) {
+    ElMessage.warning('两次输入的新密码不一致')
+    return
+  }
+  resetting.value = true
+  try {
+    await authApi.resetPassword(resetTarget.value.username, { new_password: resetForm.password })
+    ElMessage.success(`已重置 ${resetTarget.value.username} 的密码`)
+    resetVisible.value = false
+  } catch {
+    // 错误已由 http.ts 提示
+  } finally {
+    resetting.value = false
+  }
+}
+
+onMounted(async () => {
+  await loadAdminFlag()
+  if (!isAdmin.value) tab.value = 'sso'
+  await fetchAll()
+})
 </script>
 
 <style scoped>
@@ -155,20 +216,12 @@ onMounted(fetchAll)
   align-items: center;
   justify-content: space-between;
 }
-.mr {
-  margin-right: 4px;
-}
-.mt {
+.user-actions {
+  display: flex;
+  gap: 8px;
   margin-top: 12px;
 }
 .mb {
   margin-bottom: 12px;
-}
-.ml {
-  margin-left: 8px;
-}
-.muted {
-  color: var(--el-text-color-placeholder);
-  font-size: 12px;
 }
 </style>

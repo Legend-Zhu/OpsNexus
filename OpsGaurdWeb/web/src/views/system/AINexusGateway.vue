@@ -9,14 +9,14 @@
       <span class="muted ml">保存后立即热重载，无需重启进程</span>
     </div>
 
-    <!-- 默认模型（从模型池选择，模型池在「模型配置」tab 管理） -->
+    <!-- 默认模型（从模型池选择，模型池在「MLOps → 模型接入」管理） -->
     <el-divider content-position="left">默认模型</el-divider>
     <el-form label-width="90px" class="default-model-form">
       <el-form-item label="默认模型">
         <el-select v-model="form.default_model" clearable filterable placeholder="默认（模型池首个可用）" style="width: 100%">
           <el-option v-for="m in modelOptions" :key="m.name" :label="modelLabel(m)" :value="m.name" />
         </el-select>
-        <span class="muted ml">异常排查直接使用该模型（排查页无需再选）；模型池见「模型配置」tab</span>
+        <span class="muted ml">异常排查直接使用该模型（排查页无需再选）；模型池见「MLOps → 模型接入」</span>
       </el-form-item>
     </el-form>
 
@@ -131,8 +131,9 @@
 
     <!-- 保存 -->
     <div class="save-bar">
-      <el-button type="primary" :loading="saving" @click="save">保存并热重载</el-button>
+      <el-button type="primary" :loading="saving" :disabled="!isAdmin" @click="save">保存并热重载</el-button>
       <el-button :loading="loading" @click="load">重置</el-button>
+      <span v-if="!isAdmin" class="muted ml">只读（写操作需管理员）</span>
     </div>
   </div>
 </template>
@@ -142,6 +143,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { ainexusApi } from '@/api'
+import { isAdmin, loadAdminFlag } from '@/composables/admin'
 import type { AINexusMCPServer, AINexusModelInfo } from '@/types'
 
 interface KVRow {
@@ -291,7 +293,10 @@ async function save() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  void loadAdminFlag()
+  load()
+})
 </script>
 
 <style scoped>

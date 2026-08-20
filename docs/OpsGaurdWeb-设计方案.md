@@ -130,7 +130,8 @@ OpsGaurdWeb 是**多集群管理控制台**（类 Rancher）：纳管多个 swar
 | 智能助手/LLM 策略 | 对话式排查（选告警/自由提问/多轮/落库） | `/troubleshoot` | AiNexus `/chat`（SSE + alert_id 证据注入） |
 | —（新增） | 镜像仓库（内嵌 registry + 上传构建 + 镜像列表） | `/registry` | 管理端 registry（/v2 + 构建任务） |
 | 通知管理 | 通知中心（渠道/策略/记录） | `/notify` | 管理端（对接 Worker webhook 出口 + 飞书/短信） |
-| 系统设置 | 系统设置（用户/SSO/模型配置/AI 网关/巡检报告） | `/system` | 管理端 |
+| —（新增） | MLOps（模型接入/提示词/模型/用量费用） | `/mlops` | 管理端（内嵌网关运营层；模型接入为网关基础能力，不受 mlops 开关影响） |
+| 系统设置 | 系统设置（用户/SSO/身份提供者/AI 排查网关/密钥） | `/system` | 管理端 |
 
 > 注：工作负载/监控已收编进集群详情页（/workloads、/monitor 重定向 /clusters）。
 
@@ -392,6 +393,7 @@ seq/<kind>                        -> 自增序列（告警 id、事件 seq 等�
 | **P7 网关页面化** ✅ | AiNexus 网关配置页面管理（保存即热重载）+ 模型统一配置（default_model + 集群 MCP 自动合并）+ MCP headers 透传/工具名清洗修复 | `ainexusrt/`、系统设置「模型配置/AI 排查网关」tab（2026-08-05） |
 | **P8 巡检闭环+节点探测** ✅ | 巡检 port/http/process 检查类型（Worker `/local/check/*` + 进程 filter）+ 报告渠道投递 + 异常转告警（patrol_failed）+ 对话式排查页（多轮/落库/告警回写）+ MCP 探测三工具（check_port/check_http/list_host_processes） | `patrol/`、`api/investigation.go`、troubleshoot 对话页（2026-08-05） |
 | **P9 内嵌镜像仓库** ✅ | OCI /v2（pull/push/catalog/delete，basic auth）+ 页面传包构建（docker CLI 状态机）+ 保留策略/GC + 双网段统一主机名寻址 | `registry/`、前端镜像仓库页（2026-08-05） |
+| **P10 菜单重组 + 账号安全** ✅ | 模型配置移入 MLOps「模型接入」（mlops 关闭时仍可用）+ 巡检报告投递移入智能巡检「报告投递」+ 系统设置收敛为账号/身份/AI 网关/密钥 + 修改密码（自助 + admin 重置）+ 用户管理与网关配置写操作 admin 收敛 | `auth/`（ChangePassword/ResetPassword）、前端 mlops/patrol/system 页（2026-08-21） |
 
 每阶段：单元测试 + 真机（双节点 swarm）联调 + 文档更新。
 
@@ -423,5 +425,5 @@ seq/<kind>                        -> 自增序列（告警 id、事件 seq 等�
 | 分层调 LLM 策略 | AiNexus 多模型路由 + default_model 统一配置（页面管理，热重载） | ✅ 已实现 |
 | 巡检编排/调度/报告 | 管理端 `patrol/`（五类检查 + 报告投递 + 异常转告警） | ✅ 已实现 |
 | 通知（飞书/短信） | 管理端 `notify/`（渠道/策略/记录 + 通用 Send） | ✅ 已实现 |
-| 用户/系统设置 | 管理端（用户/SSO/模型配置/网关/巡检报告 tab） | ✅ 已实现 |
+| 用户/系统设置 | 管理端（用户/SSO/身份提供者/AI 网关/密钥 tab + 修改密码/重置密码） | ✅ 已实现 |
 | 镜像仓库/构建 | 管理端 `registry/`（内嵌 OCI /v2 + 页面传包构建） | ✅ 已实现（P9） |

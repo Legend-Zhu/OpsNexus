@@ -175,10 +175,16 @@ export const alertRuleApi = {
 export const authApi = {
   login: (username: string, password: string) => post<{ token: string }>('/v1/auth/login', { username, password }),
   me: () => get<Me>('/v1/auth/me'),
+  // 修改自己的本地密码（SSO 账号无本地口令，后端返回 400 提示）
+  changePassword: (body: { old_password: string; new_password: string }) =>
+    put<{ changed: string }>('/v1/auth/password', body),
   ssoStatus: () => get<SSOStatus>('/v1/auth/sso/status'),
   ssoLoginUrl: () => '/api/v1/auth/sso/login',
+  // 用户管理（admin）：列表 / 新增 / 重置密码
   users: () => get<{ items: User[] }>('/v1/users'),
   createUser: (body: { username: string; password: string; role?: string }) => post<User>('/v1/users', body),
+  resetPassword: (username: string, body: { new_password: string }) =>
+    put<{ reset: string }>(`/v1/users/${username}/password`, body),
 }
 
 // ---- IdP（OpsGaurd 作为 OIDC 身份提供者）：client 管理（admin） ----
@@ -221,7 +227,7 @@ export const investigationApi = {
 
 // ---- 全局设置 ----
 export const settingsApi = {
-  // 巡检报告投递（系统设置 → 巡检报告）
+  // 巡检报告投递（智能巡检 → 报告投递）
   patrolReport: () => get<PatrolReportSetting>('/v1/settings/patrol-report'),
   updatePatrolReport: (body: PatrolReportSetting) => put<PatrolReportSetting>('/v1/settings/patrol-report', body),
 }

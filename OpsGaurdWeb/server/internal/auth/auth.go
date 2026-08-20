@@ -13,6 +13,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -104,6 +105,74 @@ func (s *Service) CreateUser(username, password, role string, enabled bool) (*st
 
 // ListUsers 列出用户（不含密码）。
 func (s *Service) ListUsers() ([]*store.User, error) { return s.st.ListUsers() }
+
+// --- 修改 / 重置密码 ---
+
+// 密码修改类错误（handler 据此映射 HTTP 状态码）。
+var (
+	// ErrUserNotFound 用户不存在或被禁用。
+	ErrUserNotFound = errors.New("user not found")
+	// ErrNoLocalPassword SSO 用户未设置本地口令（不可密码登录）。
+	ErrNoLocalPassword = errors.New("account has no local password (SSO login only)")
+	// ErrBadOldPassword 旧密码校验失败。
+	ErrBadOldPassword = errors.New("invalid old password")
+)
+
+// ChangePassword 用户修改自己的本地密码：校验旧密码后重哈希落库。
+// SSO 用户（无本地口令）返回 ErrNoLocalPassword。
+func (s *Service) ChangePassword(username, oldPassword, newPassword string) error {
+	if newPassword == "" {
+		return fmt.Errorf("new password is required")
+	}
+	u, err := s.st.GetUserByUsername(username)
+	if err != nil {
+		return err
+	}
+	if u == nil || !u.Enabled {
+		return ErrUserNotFound
+	}
+	if err := verifyPassword(u.Password, oldPassword); err != nil {
+		return err
+	}
+	return s.storePassword(u, newPassword)
+}
+
+// ResetPassword 管理员重置指定用户的本地密码（免旧密码）。
+// 对 SSO 用户重置即为其设置本地口令（此后可用密码登录）。
+func (s *Service) ResetPassword(username, newPassword string) error {
+	if newPassword == "" {
+		return fmt.Errorf("new password is required")
+	}
+	u, err := s.st.GetUserByUsername(username)
+	if err != nil {
+		return err
+	}
+	if u == nil {
+		return ErrUserNotFound
+	}
+	return s.storePassword(u, newPassword)
+}
+
+// verifyPassword 按存量格式（hash:salt）校验明文口令。
+func verifyPassword(stored, password string) error {
+	parts := strings.SplitN(stored, ":", 2)
+	if len(parts) != 2 {
+		return ErrNoLocalPassword
+	}
+	got := hashPassword(password, parts[1])
+	if subtle.ConstantTimeCompare([]byte(got), []byte(parts[0])) != 1 {
+		return ErrBadOldPassword
+	}
+	return nil
+}
+
+// storePassword 生成新盐并落库（保留其余字段）。
+func (s *Service) storePassword(u *store.User, password string) error {
+	salt := randomHex(16)
+	u.Password = hashPassword(password, salt) + ":" + salt
+	u.UpdatedAt = time.Now().UTC()
+	return s.st.PutUser(u)
+}
 
 // --- 登录 ---
 

@@ -17,9 +17,10 @@
       :closable="false"
       class="mb"
       title="AiNexus 网关未启用"
-      description="请在 系统设置 → 模型配置 配置模型、AI 排查网关 启用网关并选择默认模型，保存后无需重启立即生效。"
+      description="请在 MLOps → 模型接入 配置模型，再到 系统设置 → AI 排查网关 启用网关并选择默认模型，保存后无需重启立即生效。"
     >
-      <el-button size="small" type="primary" @click="router.push('/system')">前往配置</el-button>
+      <el-button size="small" type="primary" @click="router.push('/mlops')">配置模型</el-button>
+      <el-button size="small" @click="router.push('/system')">启用网关</el-button>
     </el-alert>
 
     <!-- 会话工具栏：告警可选（不选 = 自由提问） -->

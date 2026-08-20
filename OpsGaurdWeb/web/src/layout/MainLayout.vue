@@ -84,7 +84,8 @@
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+                <el-dropdown-item command="password">修改密码</el-dropdown-item>
+                <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -98,6 +99,9 @@
           </transition>
         </router-view>
       </el-main>
+
+      <!-- 自助修改密码（所有登录用户） -->
+      <ChangePasswordDialog v-model:visible="pwdVisible" />
     </el-container>
   </el-container>
 </template>
@@ -110,12 +114,14 @@ import {
 } from '@element-plus/icons-vue'
 import { authApi } from '@/api'
 import { clearToken } from '@/api/http'
+import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
 import { THEMES, applyTheme, currentTheme } from '@/theme'
 import type { Me } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
 const me = ref<Me | null>(null)
+const pwdVisible = ref(false)
 
 // 集群详情页高亮「集群」菜单
 const activeMenu = computed(() => {
@@ -134,6 +140,10 @@ async function loadMe() {
 }
 
 function onCommand(cmd: string) {
+  if (cmd === 'password') {
+    pwdVisible.value = true
+    return
+  }
   if (cmd === 'logout') {
     clearToken()
     router.replace('/login')
