@@ -1,0 +1,3 @@
+# Linux 侧执行脚本必须保持 LF：Windows autocrlf 检出成 CRLF 后
+# scp 到 Linux 会以 /usr/bin/env: 'bash\r' 失败。
+*.sh text eol=lf

@@ -30,6 +30,9 @@ deploy/offline/agent-config*.yaml
 deploy/offline/stack*.yml
 deploy/offline/install-docker*.sh
 
+# 互联网代理运行时密钥（飞书凭据、LLM key）——不进 git，仅 example 模板入仓
+deploy/internet-proxy/proxy.env
+
 # 本地部署工作区（交叉编译二进制、重打镜像上下文、上传包等）
 .deploytmp/
 

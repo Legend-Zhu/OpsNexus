@@ -1,0 +1,14 @@
+# 容器化部署样例（与 deploy.sh 的 systemd 裸跑二选一）。
+# proxy.env 里 LISTEN_* 不能绑宿主机内网 IP（容器内无该地址），保持
+# 0.0.0.0 并靠 ports 的绑定地址限制暴露面，如 "10.50.182.57:7070:7070"。
+services:
+  internet-proxy:
+    build: .
+    restart: unless-stopped
+    env_file: proxy.env
+    environment:
+      LISTEN_LLM: 0.0.0.0:7070
+      LISTEN_NOTIFY: 0.0.0.0:7072
+    ports:
+      - "10.50.182.57:7070:7070"
+      - "10.50.182.57:7072:7072"
