@@ -196,9 +196,10 @@ const projectOptions = computed(() => {
   return [...set].sort()
 })
 
-function queryProjects(qs: string, cb: (items: string[]) => void) {
+// 建议项必须是 { value } 对象——纯字符串经 item[valueKey] 取值渲染为空白行
+function queryProjects(qs: string, cb: (items: { value: string }[]) => void) {
   const q = qs.trim()
-  cb(projectOptions.value.filter((p) => !q || p.includes(q)))
+  cb(projectOptions.value.filter((p) => !q || p.includes(q)).map((p) => ({ value: p })))
 }
 
 // 镜像路径段：小写字母/数字/_.-(registry 仓库名约束;后端同规则校验)

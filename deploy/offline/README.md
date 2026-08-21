@@ -26,7 +26,7 @@
 
 | 文件 | 部署位置 | 说明 |
 |---|---|---|
-| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.13，离线重打见记录 10/11/12/14/16/17） |
+| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.14，离线重打见记录 10/11/12/14/16/17/18） |
 | bundle/opsguard-worker-1.0.0.tar … opsguard-worker-1.1.0.tar | /opt/opsguard/images/ | Worker 镜像（当前线 = 1.2.7，离线重打/中继分发见记录 10/11/12/15） |
 | bundle/docker-27.5.1.tgz | /opt/opsguard/offline/ | docker 静态二进制 |
 | install-docker.sh / docker.service / containerd.service / daemon.json | /opt/opsguard/offline/ | 离线安装（含 swarm init、insecure-registries=10.60.189.6:8080） |
@@ -251,6 +251,12 @@
       的 `reachable/cpuPercent` 本就是零值占位，由 SSE 流填充，勿据此误判）；
       registry `/v2` 正常（当晚即有经页面构建的 `library/insurance:v0.0.1`）。
     - **回滚**：`docker rm -f` 后用 `opsguard-server:1.2.12` 原样 run。
+18. **autocomplete 建议空白行修复（2026-08-21，server 1.2.13→1.2.14 + 前端，
+    worker 无改动）**：记录 17 的回归——`fetch-suggestions` 回调传了纯字符串
+    数组，而 el-autocomplete 默认模板按 `item[valueKey]`（即 `item.value`）
+    取值渲染，字符串取 `.value` 为 undefined → 下拉全是空白行、点击选不中。
+    改为返回 `{ value: p }` 对象数组。重打/验证/回滚同记录 17（新 bundle
+    `index-E2zWGwlk.js`，回滚目标 1.2.13）。
 
 ### 安责险集群（3 节点）部署记录（2026-08-14）
 
