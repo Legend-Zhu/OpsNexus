@@ -100,7 +100,7 @@ OpsGaurd（智能运维全链路自动化平台）用于纳管多个**网络隔�
 | `workerproxy` | 对 Worker 的 gRPC 客户端封装（编排/探测/日志流/事件订阅/反向隧道），内含 pb 生成代码 |
 | `ingest` | 事件拉取落库 + 告警聚合 + 自动通知异步分发 |
 | `alertrule` | 告警规则管理，apply 下发到 Worker 侧 monitoring 配置 |
-| `notify` | 通知渠道（飞书 / 短信 / webhook，经外网代理）与策略、记录 |
+| `notify` | 通知渠道（飞书 / webhook / 短信——短信仅支持经外网代理发送）与策略、记录 |
 | `patrol` | 智能巡检：YAML flow + cron 调度 + AI 报告 + 投递 + 异常转告警 |
 | `invmonitor` | 纳管清单对象的服务端周期探测（经 Worker 的 Check* RPC 指定节点发起） |
 | `ainexus` | 内嵌 AI 排查网关（agent/ReAct、provider、MCP 客户端、工具、SSE、用量计量） |
@@ -132,7 +132,7 @@ OpsGaurd（智能运维全链路自动化平台）用于纳管多个**网络隔�
 | `nodeagent` | 每节点本地 HTTP API：stats、容器/宿主机 exec、SSE 日志、按需探测、容器健康批量查询 |
 | `registryproxy` | `/v2/` 镜像中继（pull/push 经隧道流式转发）+ 按内容寻址的 blob 磁盘 LRU 缓存 |
 | `idpproxy` | `/idp-proxy/` 本地入口：集群内 IdP 请求经反向隧道转发到管理端并改写发现文档 |
-| `mcp` | MCP 服务器（Streamable HTTP `/mcp` + stdio，16 个工具：编排、日志、exec、跨节点聚合等） |
+| `mcp` | MCP 服务器（Streamable HTTP `/mcp` + stdio，20 个工具：编排、日志、事件、节点、exec、拨测等） |
 | `agent` | Worker 自身配置（角色、命令黑白名单、auth tokens）+ nsenter 宿主机命令执行 |
 | `authz` | Bearer token 鉴权中间件（HTTP 与 gRPC 拦截器共用 token 集） |
 | `audit` | 敏感操作审计的 SQLite 持久存储，经 gRPC 流回推 |
@@ -144,7 +144,7 @@ OpsGaurd（智能运维全链路自动化平台）用于纳管多个**网络隔�
 
 ### 4.3 前端 web（`OpsGaurdWeb/web/`）
 
-- 交互约定：axios 单例（`baseURL=/api`，15s 超时，请求注入 `Bearer`，401 统一清 token 跳登录）；统一响应体 `{code,message,data}`。
+- 交互约定：axios 单例（`baseURL=/api`，15s 超时，请求注入 `Bearer`，401 统一清 token 跳登录，登录接口本身除外）；统一响应体 `{code,message,data}`。
 - 实时：两种 SSE——集群详情页 `EventSource` 订阅节点流（token 经 query 传，因 EventSource 不能带 header）；AI 排查对话用 `fetch` + ReadableStream 手动消费。
 - 信息架构（侧边菜单）：**总览 / 项目 / 集群 / 告警中心 / 镜像仓库 / 智能巡检 / 异常排查 / MLOps / 通知中心 / 系统设置**。工作负载与监控已收编进集群详情页。
   - MLOps 四个 tab：模型接入（原系统设置-模型配置移入）/ 提示词 / 模型 / 用量费用。
@@ -173,25 +173,25 @@ server 始终是 gRPC **客户端**，Worker 是**服务端**（gRPC `:9080`）�
 ### 5.3 反向隧道与镜像中继
 
 - **流池**：server 预开 N 条（默认 16，`OPSGUARD_TUNNEL_POOL` 两端须一致）Tunnel 双向流，一请求独占一流（独立 HTTP/2 流控窗口，消除单流队头阻塞）；borrow 跳过死流，keepalive 判死回收。
-- **白名单**：隧道仅放行 `/api/v1/idp/*`、`/.well-known`、`/v2/*`；registry 的 basic auth 由 server 侧代持，集群节点无感。
+- **白名单**：隧道仅放行 `/api/v1/idp/*`、`/.well-known/openid-configuration`（仅此一条）、`/v2` 前缀；registry 的 basic auth 由 server 侧代持，集群节点无感。
 - **镜像中继**：Worker 本地 `/v2/` 把集群内 docker daemon 的 pull/push 流式中继到管理端内嵌仓库；pull 侧带按内容寻址的磁盘 LRU 缓存（digest 校验防路径逃逸，临时文件原子 publish，半截 blob 永不入缓存）。
 - **超时教训（重要）**：push 数百 MB 大镜像层时，任何固定 HTTP ReadTimeout/WriteTimeout 都会中途掐断连接（曾表现为 30s 502）。修复原则：Worker HTTP server `ReadTimeout=WriteTimeout=0`，用 `IdleTimeout=120s` 兜底回收空闲连接（`Worker/cmd/worker/main.go`，worker 1.2.7）。gRPC 层消息上限 16MiB，流控窗口 32MiB/流 + 64MiB/连接（否则大 blob 拉取吞吐塌缩到几十 KB/s）。
 
 ### 5.4 MCP 双向使用
 
-- Worker 是 **MCP 服务端**：`/mcp`（Streamable HTTP）+ stdio，暴露 16 个运维工具。
+- Worker 是 **MCP 服务端**：`/mcp`（Streamable HTTP）+ stdio，暴露 20 个运维工具。
 - server 是 **MCP 客户端**：AiNexus 网关经各集群 Worker 的 `/mcp` 调工具，实现 AI 排查对集群的真实操作能力；worker 与 MCP 工具均以 OpsGaurd IdP 签发的 token 鉴权（OAuth 资源元数据端点 RFC 9728）。
 
 ## 六、存储设计
 
-**管理端 LevelDB**（`store.path`，默认 `./data`）：JSON 值 + key 前缀 bucket，进程内 mutex 串行化 + WriteBatch 原子提交，meta/version 自增迁移（当前 schemaVersion=3）。主要 bucket：
+**管理端 LevelDB**（`store.path`，默认 `./data`）：值以 JSON 为主（`meta/version` 为二进制、ainexus 运行时配置为 YAML），key 前缀 bucket，进程内 mutex 串行化 + WriteBatch 原子提交，meta/version 自增迁移（当前 schemaVersion=3）。主要 bucket：
 
-- 事件/告警：`event/<seq>`、`alert/<id>` + 索引（含「已通知」标记）。
+- 事件/告警：`event/<seq>`、`alert/<id>` + 索引（含「已通知」标记）；`seq/<kind>` 发号器。
 - 巡检：`patrol`、`patrolrun`、`report`。
-- 项目/集群：`project`、`cluster`（纳管清单 InventoryConfig 嵌在 Cluster 内）+ clustercache。
+- 项目/集群：`project`、`cluster`（纳管清单 InventoryConfig 嵌在 Cluster 内）+ `cache`（集群资源缓存）。
 - 用户/通知/规则：`user/*`、`notify/channel|policy|record`、`alertrule`。
 - IdP：idpclient / idpcode / idpatoken / idprtoken / idpkey / idpsession。
-- MLOps：prompt（版本化）、mlusage（call 级明细）、mlusage_day（日聚合）、mlpricing、mlbinding、mlbudget、mlops_audit。
+- MLOps：prompt（版本化）、mlusage（call 级明细）、mlusage_call（call 幂等索引）、mlusage_day（日聚合）、mlpricing、mlbinding、mlbudget、mlops_audit。
 - 其他：ainexus（网关运行时配置）、investigation、secret、cursor（事件订阅游标）、svccfg、settings。
 
 **Worker SQLite**（`dataDir`，容器内 `/var/lib/opsguard`）：monitor 事件与 audit 的持久队列——单调 seq、按 `after_seq` 续传、ack 后 GC，是事件链路「不丢不重」的基石。
@@ -210,7 +210,7 @@ server 始终是 gRPC **客户端**，Worker 是**服务端**（gRPC `:9080`）�
 
 ## 八、安全模型
 
-- **用户认证**：本地用户（bcrypt/PBKDF2）+ SSO（OIDC RP）；会话为 Bearer token（`auth.token_secret` 签发，`token_ttl` 控制）。配了 secret / SSO / IdP 之一即启用认证并播种默认 admin（密码可用环境变量 `OPSGUARD_ADMIN_PASSWORD` 覆盖）。
+- **用户认证**：本地用户（口令为加盐单轮 SHA-256；registry `/v2` 账号另用 bcrypt htpasswd）+ SSO（OIDC RP）；会话为 Bearer token（HMAC-SHA256 签名，`auth.token_secret`，`token_ttl` 控制）。配了 secret / SSO / IdP 之一即启用认证并播种默认 admin（密码可用环境变量 `OPSGUARD_ADMIN_PASSWORD` 覆盖）。
 - **角色**：admin 与普通用户两级。写操作按角色收敛（用户管理、IdP clients、MLOps 写、AI 网关配置等 admin 限定，server 1.2.12 起）。
 - **server ↔ Worker**：每集群独立 worker token（`clusters.<name>.token`），gRPC metadata / HTTP header 双面生效（Worker `authz` 包共用 token 集）；CA 证书齐备时强制 mTLS。
 - **命令执行**：容器 exec 与 nsenter 宿主机 exec 受每节点 `commandPolicy` 黑/白名单与超时约束（`WORKER_ALLOW_HOST_EXEC` 等开关默认收紧）。
@@ -228,7 +228,7 @@ server 始终是 gRPC **客户端**，Worker 是**服务端**（gRPC `:9080`）�
 | 死流回收 | gRPC keepalive 15s ping / 5s 无 ack 判死；server 重启后半开流 ~20s 内 revoke，隧道池跳过/重建死流 |
 | 并发化 | 节点指标按节点并发（慢节点不阻塞首屏）；容器健康批量并发 inspect；stats 5s 缓存 |
 | 超时预算 | NodeClient 总预算 15s、单次探测 10s、命令默认 30s；API axios 15s |
-| 优雅停机 | SIGTERM → HTTP 10s shutdown + gRPC GracefulStop + 隧道 Detach |
+| 优雅停机 | SIGTERM → HTTP 10s shutdown + gRPC GracefulStop + 关闭 leader 转发连接（`TunnelManager.Detach` 已实现但未接入停机路径，隧道的流随 gRPC 关闭自然断开） |
 | 幽灵告警治理 | 检查配置变更/移除时补发恢复事件 |
 
 ## 十、配置参考
@@ -243,8 +243,8 @@ server 始终是 gRPC **客户端**，Worker 是**服务端**（gRPC `:9080`）�
 | `idp.enabled` / `issuer` / `*_token_ttl` | 启用内嵌 IdP（自动开启认证与 idptunnel） |
 | `clusters.<name>.worker_url` / `token` / `mcp_url` / `desc` | 每集群 Worker gRPC 地址与凭据 |
 | `registry.*` | 内嵌仓库：enabled/hostname/storage/retention/max_upload/users/builder/relay 账号 |
-| `ainexus.*` | AI 网关初始化配置（仅首次启动生效，之后以页面保存的运行时配置为准） |
-| `mlops.*` | enabled/usage_retain_days/timezone/currency 等 |
+| `ainexus.*` | AI 网关初始配置（仅当从未在页面保存过运行时配置时作为回退，保存后以 LevelDB 运行时配置为准） |
+| `mlops.*` | enabled/usage_retain_days/usage_queue_size/usage_gc_interval/timezone/currency（当前仅 CNY） |
 
 环境变量：`OPSGUARD_ADMIN_PASSWORD`、`OPSGUARD_TUNNEL_POOL`（默认 16，须与 Worker 侧一致）。
 

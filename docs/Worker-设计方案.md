@@ -2,7 +2,7 @@
 
 > 版本：v0.2（草案）
 > 日期：2026-08-06
-> 状态：调研完成，待评审
+> 状态：调研完成，待评审（历史方案文档；2026-08-21 已按当前代码复核并修正明显漂移，实现现状以《OpsGaurd-系统技术总览.md》为准）
 
 > **v0.2 变更摘要**：管理端↔Worker 的管理 API 从 **HTTP 改为 gRPC**。事件/审计投递由 webhook 推送改为 **gRPC 双向流订阅**（server 发起连接，顺网络策略方向）；`EventStore`/`audit.Store` 由内存 ring buffer 改为 **SQLite 持久化队列**；Worker 拆为**双端口**（HTTP 仅留 `/mcp` + `/healthz` + node 本地 API，gRPC 承载完整 `ManagementService`）；leader 写转发由 HTTP `ProxyWriteToLeader` 改为 **gRPC internal client**；新增 `internal/grpcapi`、`internal/authz/grpc.go`，移除 `internal/monitor/webhook.go`、`internal/orchestrator/api.go`、`ProxyWriteToLeader` 及 `/api/v1/events`/`/api/v1/audit`/`/api/v1/services*` 管理 HTTP 路由。MCP 端点（`/mcp`）、node 本地 API（`/api/v1/local/*`）、Docker 直连客户端不变。
 
@@ -42,7 +42,7 @@ Worker 以 **Docker Swarm 全局服务（global service）** 形式部署到所�
 │  │  ├─ MCP Server (Stream HTTP)  │        │  └─ MCP Server (只读/代理)      │  │
 │  │  └─ EventStore (SQLite 队列)   │        │                               │  │
 │  └───────────────────────────────┘        └───────────────────────────────┘  │
-│       │ :9080 gRPC │ :8080 HTTP                │ :9080 gRPC │ :8080 HTTP     │
+│       │ :9080 gRPC │ :8080 HTTP                │ :8080 HTTP（node 角色不启 gRPC）│
 │                  ▲                                                             │
 │                  │ docker.sock / 2376(TLS)                                      │
 │                  ▼                                                             │
@@ -82,14 +82,16 @@ Worker 单二进制（Go）
 │   └── types.go            Engine API 请求/响应结构体（仅子集）
 ├── internal/orchestrator/  模块①：配置驱动编排（管理 HTTP handler 已移除，能力由 gRPC ManagementService 暴露）
 │   ├── translator.go       Config → swarm.ServiceSpec 双向映射
-│   ├── lifecycle.go        Create→轮询就绪→事件；Update→滚动；Rollback
-│   └── registry.go         私有仓库认证（secret 引用）
+│   ├── lifecycle.go        Create→轮询就绪→事件；Update→滚动
+│   ├── operation.go        异步 operation 记录
+│   └── proxy.go / nodes.go 跨节点 NodeClient 代理 / 节点地址解析
 ├── internal/grpcapi/       管理 API（gRPC，契约 proto/opsguard.proto）
-│   ├── server.go           ManagementService 实现（liveness/workload/nodes/probes/events/audit）
+│   ├── server.go           ManagementService 实现（liveness/workload/nodes/probes/events/audit）+ leader 写转发
 │   ├── stream.go           SubscribeEvents / SubscribeAudit 双向流；StreamLogs server-streaming
+│   ├── tunnel.go           Tunnel 反向隧道（流池；承载 IdP 代理与 /v2 镜像中继）
 │   └── pb/                 protoc-gen-go 生成代码（proto/opsguard.proto 生成本模块与 server 模块）
 ├── internal/authz/         鉴权
-│   ├── http.go             HTTP bearer-token 中间件（包 /mcp + /healthz 公开除外）
+│   ├── authz.go            HTTP bearer-token 中间件（Wrap 全路由，PublicPaths 白名单放行 /healthz 等）
 │   └── grpc.go             gRPC bearer-token 拦截器（unary + stream，与 HTTP 同 token 集）
 ├── internal/monitor/       模块②：监控
 │   ├── manager.go          监控调度器（按 config 起停 checker）
@@ -97,27 +99,28 @@ Worker 单二进制（Go）
 │   ├── httpcheck.go        HTTP 健康探针（状态码/体匹配）
 │   ├── logcheck.go         服务日志流 + 关键词/正则匹配
 │   ├── rescheck.go         资源使用采集（阈值告警）
-│   ├── reporter.go         本地→manager 上报（worker-role）
-│   └── eventstore.go       事件存储（SQLite 持久化队列：Append/Since/Ack/GC/WaitNew）
+│   └── event.go            事件存储（SQLite 持久化队列：Add/Since/Ack/GC/WaitNew）
 ├── internal/audit/         审计（SQLite 持久化队列，actor 取 token name）
+├── internal/idpproxy/      /idp-proxy/ 本地入口：IdP 请求经反向隧道转发管理端（发现文档改写）
+├── internal/registryproxy/ /v2/ 镜像中继（pull/push 经隧道流式转发 + blob 磁盘 LRU 缓存）
 ├── internal/mcp/           模块③：MCP Server
-│   ├── server.go           go-sdk 注册 tools/resources
-│   ├── tools/              deploy/scale/logs/status/rollback/check…
-│   ├── transport.go        Streamable HTTP（含 OAuth2.1）+ stdio（本地调试）
-│   └── auth.go             OAuth2.1 资源服务器（PKCE + RFC9728）
-├── internal/config/        Config schema + 校验（JSON Schema 2020-12）
-├── internal/ha/           Leader 写转发（gRPC internal client → leader :9080）
+│   ├── server.go           go-sdk 注册 tools/resources（Streamable HTTP + stdio）
+│   ├── tools.go            编排/日志/事件/操作类工具
+│   ├── metrics.go          exec/资源采集类工具
+│   └── checks.go           拨测类工具（check_port/check_http/check_flow/list_host_processes）
+├── internal/config/        Config schema + 手写校验（config.go/validate.go/defaults.go 等）
+├── （无独立 ha 包：leader 写转发在 grpcapi/server.go 内以内部 gRPC 客户端实现）
 ├── cmd/worker/main.go      入口
 ├── proto/opsguard.proto    gRPC 契约（仓库根）
 └── deploy/                 Dockerfile、stack.yml、systemd unit
 ```
 
-> **已移除（gRPC 迁移）**：`internal/monitor/webhook.go`（WebhookPusher）、`internal/orchestrator/api.go`（管理 HTTP handler）、`ProxyWriteToLeader`（HTTP 写转发）、`/api/v1/events`、`/api/v1/audit`、`/api/v1/services*` 等 HTTP 管理路由。`EventStore.AddSink` 接口移除（事件改由 gRPC 双向流出推）。
+> **已移除（gRPC 迁移）**：`internal/monitor/webhook.go`（WebhookPusher）、`internal/orchestrator/api.go`（管理 HTTP handler）、`ProxyWriteToLeader`（HTTP 写转发）、`/api/v1/events`、`/api/v1/audit`、`/api/v1/services*` 等 HTTP 管理路由。（注：`EventStore.AddSink` 实际仍保留，供事件/审计挂 sink 使用。）
 
 ### 2.3 数据流
 
-1. **部署流**：OpsGaurdWeb 调 gRPC `ManagementService.Deploy`（带 config）→ leader manager-role Worker → `translator` 转 `swarm.ServiceSpec` → `cli.ServiceCreate` → swarm 调度 task 到各节点 → 各节点 Worker 观察本地 task → 就绪/异常事件 → `EventStore.Append` → gRPC `SubscribeEvents` 流回推管理端（管理端 ack seq 后 Worker GC）→ 回写部署结果。非 leader manager 收到 Deploy 等写 RPC 时，经 gRPC 内部客户端转发到 leader `:9080`（携带原 bearer token，保持审计 actor 一致）。
-2. **监控流**：各 checker 周期性探活/采集 → 命中阈值 → `EventStore.Append`（SQLite，分配单调 `seq`）→ 管理端通过已建立的 `SubscribeEvents` 双向流收到事件（阻塞式 `WaitNew(lastSeen)` 在有新事件时唤醒）→ 管理端回 `Ack(seq)` 后 Worker `GC`；MCP 侧（若启用 `subscriptions/listen`）走 SSE 通知订阅方拉取。
+1. **部署流**：OpsGaurdWeb 调 gRPC `ManagementService.Deploy`（带 config）→ leader manager-role Worker → `translator` 转 `swarm.ServiceSpec` → `cli.ServiceCreate` → swarm 调度 task 到各节点 → 各节点 Worker 观察本地 task → 就绪/异常事件 → `EventStore.Add` → gRPC `SubscribeEvents` 流回推管理端（管理端 ack seq 后 Worker GC）→ 回写部署结果。非 leader manager 收到 Deploy 等写 RPC 时，经 gRPC 内部客户端转发到 leader `:9080`（携带原 bearer token，保持审计 actor 一致）。
+2. **监控流**：各 checker 周期性探活/采集 → 命中阈值 → `EventStore.Add`（SQLite，分配单调 `seq`）→ 管理端通过已建立的 `SubscribeEvents` 双向流收到事件（阻塞式 `WaitNew(lastSeen)` 在有新事件时唤醒）→ 管理端回 `Ack(seq)` 后 Worker `GC`；MCP 侧（若启用 `subscriptions/listen`）走 SSE 通知订阅方拉取。
 3. **Agent 流**：Agent `tools/call` → MCP Server（`/mcp`，Streamable HTTP）→ 调 orchestrator/monitor 能力 → 返回 `structuredContent`。
 
 ---
@@ -126,14 +129,14 @@ Worker 单二进制（Go）
 
 | 层 | 选型 | 理由 |
 |---|---|---|
-| 语言 | **Go 1.22+** | .gitignore 已含 Go 模式；Docker/MCP 均 Tier-1 官方 Go SDK；单二进制便于全局服务部署 |
+| 语言 | **Go 1.25**（go.mod） | .gitignore 已含 Go 模式；Docker/MCP 均 Tier-1 官方 Go SDK；单二进制便于全局服务部署 |
 | Docker 客户端 | **直接 HTTP 调用 Engine REST API**（stdlib `net/http` + 自定义结构体） | 见下方说明 |
-| HTTP 路由 | `github.com/go-chi/chi/v5` | 轻量、中间件友好、与 net/http 兼容；现仅承载 `/mcp` + `/healthz` + node 本地 API |
+| HTTP 路由 | ~~`github.com/go-chi/chi/v5`~~ 实际用 stdlib `http.ServeMux` | 初版选 chi，实现时未引入（路由面小：`/mcp` + `/healthz` + node 本地 API） |
 | MCP SDK | `github.com/modelcontextprotocol/go-sdk` v1.7.0 | 官方 Tier-1，**目标协议版本即 2026-07-28**（stateless + `server/discover` + MRTR + subscriptions + Streamable HTTP 全内置） |
 | 管理 API | **gRPC**（`google.golang.org/grpc` + `protoc-gen-go`） | 双向流原生支持 `SubscribeEvents`/`SubscribeAudit`；强类型契约 `proto/opsguard.proto`；服务端可发起连接（顺网络策略方向，仅 server→worker 可达） |
 
 > **实现期变更（P0）**：Docker 客户端从官方 Go SDK 改为**直接 HTTP 调用 Engine REST API**（stdlib `net/http` + 自定义请求/响应结构体）。原因：`github.com/docker/docker` SDK 的 Go 模块结构不稳定——新版把 `api`/`client` 拆成路径不匹配的嵌套模块（`github.com/moby/moby/api`），旧版（v24）又触发 `distribution/reference` 传递依赖损坏，跨版本都无法干净构建。直接走 REST API 零该依赖、二进制更小（10MB）、攻击面更少，且与本文档已枚举的 REST 端点一致。代价是自维护 Engine API JSON 结构体（仅子集，未知字段忽略）。transport 支持 `unix:///var/run/docker.sock`（默认/Linux）与 `tcp://host:2376`（+TLS）；Windows 本地开发用 Docker Desktop 的 `tcp://localhost:2375`（npipe 暂不支持，保持 stdlib-only）。
-| 配置校验 | `github.com/santhosh-tekuri/jsonschema/v6` | JSON Schema 2020-12，与 MCP `inputSchema` 同源 |
+| 配置校验 | ~~`github.com/santhosh-tekuri/jsonschema/v6`~~ 实际手写 Go 校验（`internal/config/validate.go`） | 初版选 JSON Schema 2020-12，实现时改为纯代码校验 |
 | 日志 | `log/slog`（标准库结构化日志） | Go 1.21+ 内置，契合 MCP 弃用 `logging` 后走 stderr 的指引 |
 | 探针 | `net.Dialer`（TCP）、`net/http`（HTTP）、`cli.ServiceLogs`（日志流） | 标准库 + Docker SDK |
 | 存储 | **SQLite 持久化队列**（`modernc.org/sqlite`，纯 Go 无 CGO） | 事件/审计可跨重启、抗事件风暴（上限=磁盘）；单调 `seq` + `Ack`/`GC` 支撑 gRPC 流回推；替代旧内存 ring buffer |
@@ -160,28 +163,32 @@ Worker 暴露**两个端口**（部署相关的具体端口号可调，下文以
 
 | RPC | 类型 | 说明 |
 |---|---|---|
-| `Liveness` | unary | 存活/就绪探针（管理端健康检查、leader 探测） |
-| `GetSelf` | unary | 本节点 swarm 角色（nodeId/role/leader/swarmManager） |
-| `ListServices` / `GetService` | unary | 服务列表（`?label`/`?status`）/ 详情 + task 概览 + 健康 |
+| `Ping` | unary | 存活/就绪探针（管理端健康检查、leader 探测） |
+| `Self` | unary | 本节点 swarm 角色（nodeId/role/leader/swarmManager） |
+| `ListServices` / `GetService` | unary | 服务列表（`?label`）/ 详情 + task 概览 + 健康 |
 | `Deploy` | unary（写） | 创建服务（入参=完整 config）；同名已存在 → 失败并提示用 `Update` |
 | `Update` | unary（写） | 更新服务（新 config 全量替换；乐观并发用 `version`） |
 | `Scale` | unary（写） | 调整副本数 `{replicas:N}` |
 | `Restart` | unary（写） | 强制重调度（`--force` 等价） |
 | `Remove` | unary（写） | 删除服务 |
-| `Rollback` | unary（写） | 回滚到上一版本 |
 | `GetOperation` | unary | 操作跟踪（`operationId`） |
-| `ListNodes` / `GetNode` | unary | 集群节点列表（含资源聚合）/ 节点详情 |
-| `GetNodeProcesses` | unary | 节点进程代理（`top`/`limit`/`filter` 转发；id 支持 node ID 或 hostname） |
-| `CheckPort` / `CheckHTTP` | unary | 节点级 TCP / HTTP 探测代理（转发到目标 node 的本地探测） |
-| `ListEvents` / `GetEvent` | unary | 事件点查（`?service=&type=&limit=`，从 SQLite 队列读，新→旧） |
+| `ListNodes` / `NodeStats` | unary | 集群节点列表 / 节点资源聚合 |
+| `WatchNodeStats` | **server-streaming** | 节点列表 + 各节点指标流（首帧基础列表立即返回，后续逐节点补指标，慢节点不阻塞他人） |
+| `NodeProcesses` | unary | 节点进程代理（`top`/`limit`/`filter` 转发；id 支持 node ID 或 hostname） |
+| `NodeContainers` / `RestartContainer` | unary | 节点容器列表（standalone 纳管用）/ 重启指定容器 |
+| `CheckPort` / `CheckHTTP` / `CheckFlow` | unary | 节点级 TCP / HTTP / 多步事务探测代理（转发到目标 node 的本地探测） |
+| `ListEvents` | unary | 事件点查（`?service=&type=&limit=`，从 SQLite 队列读，新→旧） |
 | `ListAudit` | unary | 审计点查（从 SQLite 审计队列读） |
 | `StreamLogs` | **server-streaming** | 服务日志流（等价 `docker service logs -f`，单连接单向推送） |
 | `SubscribeEvents` | **bidirectional** | 管理端发起；Worker 推事件（带 `seq`），管理端回 `Ack(seq)`，Worker 据此 `GC` 已确认条目 |
 | `SubscribeAudit` | **bidirectional** | 同上，针对审计条目 |
+| `Tunnel` | **bidirectional** | 反向隧道：server 发起，承载 IdP 代理与 `/v2` 镜像中继（流池化，见《镜像隧道中继方案.md》） |
 
-**leader 写转发**：非 leader 的 manager-role Worker 收到写 RPC（`Deploy`/`Update`/`Scale`/`Restart`/`Remove`/`Rollback`）时，gRPC server 持有的内部 gRPC 客户端将请求转发到 leader 的 `:9080`，转发时携带原 bearer token（metadata），使 leader 记录同一审计 actor。这取代了旧的 HTTP `ProxyWriteToLeader`。
+> 注（2026-08-21 复核）：方案期规划的 `Rollback` RPC 及 `GetNode`/`GetEvent` 点查**未实现**；主动回滚能力未落地（swarm 引擎级 `failureAction=rollback` 仍生效）。
 
-**幂等**：`Deploy` 若同名已存在 → 失败并提示用 `Update`；`Scale`/`Rollback` 可重试。
+**leader 写转发**：非 leader 的 manager-role Worker 收到写 RPC（`Deploy`/`Update`/`Scale`/`Restart`/`Remove`）时，gRPC server 持有的内部 gRPC 客户端将请求转发到 leader 的 `:9080`，转发时携带原 bearer token（metadata），使 leader 记录同一审计 actor。这取代了旧的 HTTP `ProxyWriteToLeader`。
+
+**幂等**：`Deploy` 若同名已存在 → 失败并提示用 `Update`；`Scale` 可重试。
 
 #### 4.1.2 残留 HTTP 接口（`:8080`）
 
@@ -327,8 +334,8 @@ gRPC Deploy  ──▶ ServiceCreate  ──▶ 返回 operationId + 初始状�
                     ① running task 数 == replicas（global：每节点一个 running）
                     ② 每个 task Status.State==running 且 DesiredState==running
                     ③ 容器 Health.Status==healthy（若配了 healthcheck）
-              ├─ 命中就绪 → EventStore.Append(status=healthy) → 经 SubscribeEvents 流回推管理端
-              └─ 超时/失败 → EventStore.Append(status=deploy_failed) + 错误摘要
+              ├─ 命中就绪 → EventStore.Add(status=healthy) → 经 SubscribeEvents 流回推管理端
+              └─ 超时/失败 → EventStore.Add(status=deploy_failed) + 错误摘要
                               （失败 task 的 `Status.Err` 字段是关键诊断信息）
 ```
 
@@ -347,7 +354,7 @@ new → allocated → pending → assigned → accepted → preparing → ready 
 
 ### 4.5 编排事件流（给 OpsGaurdWeb / Agent）
 
-每次 create/update/scale/rollback/force 产生一条 `Operation` 记录：`{operationId, type, service, status: pending|healthy|failed, startedAt, finishedAt, steps:[], error}`。通过：
+每次 create/update/scale/restart 产生一条 `Operation` 记录：`{operationId, type, service, status: pending|healthy|failed, startedAt, finishedAt, steps:[], error}`。通过：
 - gRPC `GetOperation(operationId)` 查询；
 - MCP 工具 `get_operation`；
 - 状态变更同时写 `EventStore`，经 `SubscribeEvents` 双向流回推管理端（取代旧的 webhook 推送）。
@@ -401,7 +408,7 @@ config `mode` 二选一。`global` 适合"每节点常驻 agent"类服务；`rep
 - `update.failureAction`：`pause`（停更，留新旧混合）/ `continue`（继续）/ `rollback`（回滚到上一版本）。
 - `update.maxFailureRatio`：容忍失败率，超阈值触发 `failureAction`。
 - **滚动期 service 处于"新旧版本共存"状态**，Worker 标注 `updating`，监控不得误判为故障。
-- 主动回滚走 gRPC `Rollback`，或 `failureAction=rollback` 自动触发。
+- 回滚依赖 `failureAction=rollback` 自动触发（主动 `Rollback` RPC 未实现，可以旧 config 重新 `Update` 达成）。
 
 #### 4.6.6 监控聚合口径（多副本下）
 
@@ -447,7 +454,7 @@ worker:
   role: auto            # auto | manager | node（auto 按 swarm 节点类型推导）
   listen: ":8080"       # HTTP：/mcp + /healthz + /api/v1/local/*
   grpcListen: ":9080"   # gRPC：完整 ManagementService（双向流事件/审计回推）
-  dataDir: "/var/lib/worker"  # SQLite 队列落盘目录（events.db / audit.db）
+  dataDir: "/var/lib/opsguard"  # SQLite 队列落盘目录（events.db / audit.db）
 commandPolicy:
   mode: blacklist       # blacklist | whitelist
   allowHostExec: false  # 宿主机命令执行开关，默认关（需显式开启）
@@ -465,7 +472,7 @@ commandPolicy:
 - **超时**：单条命令默认 30s，超时终止。
 - **执行路径**：
   - 容器内：Engine API `POST /containers/{id}/exec`（经任务所在节点的 worker）；
-  - 宿主机：worker 容器以 **privileged + pid=host** 运行，`nsenter -t 1 -m -u -i -n -p` 进宿主机 PID1 命名空间执行（完整宿主机环境）。
+  - 宿主机：`nsenter -t 1 -m -u -i -n -p` 进宿主机 PID1 命名空间执行（完整宿主机环境）。注：swarm 部署会忽略 `privileged`/`pid: host`（见 stack.yml 注记），需要完整宿主机可见时用裸 `docker run`。
 - **确认守卫**：MCP 层 `exec_host_command`/`exec_in_container` 与 `remove_service`/`scale=0` 一样需 `confirm=true`。
 
 **真机验证（双节点集群）**：`exec_host_command hostname` 在两台宿主机返回各自主机名；`exec_host_command "shutdown -h now"` 被黑名单拦截（`matches blacklist pattern "shutdown"`）；`exec_in_container` 跨节点路由到任务所在节点执行成功。
@@ -510,7 +517,7 @@ commandPolicy:
 ### 5.5 事件存储与外发
 
 - `EventStore`：**SQLite 持久化队列**（`modernc.org/sqlite`，纯 Go 无 CGO；库文件 `dataDir` 下 `events.db`）。每条事件分配单调递增的 `seq`。事件结构：`{seq, id, ts, service, type, level, msg, detail, labels}`。核心方法：
-  - `Append(ev)`：落盘并分配 `seq`，通过 `sync.Cond` 唤醒所有 `WaitNew` 阻塞者；
+  - `Add(ev)`：落盘并分配 `seq`，通过 `sync.Cond` 唤醒所有 `WaitNew` 阻塞者；
   - `Since(seq)`：读取大于该 `seq` 的事件（供流回推与点查）；
   - `Ack(seq)`：记录管理端已确认的最大 `seq`；
   - `GC(maxAge)`：清理已被 ack 且超龄的条目（由 `SubscribeEvents` 收到 ack 后触发）；
@@ -529,7 +536,7 @@ commandPolicy:
 > - **httpCheck**：校验状态码（`expectedStatus`）与正则 body（`expectedBody`）。**URL 为 localhost/127.0.0.1 时自动改写为 task 节点 IP**（Worker 容器内 localhost 指向自身，否则误报）。
 > - **logCheck**：`ServiceLogs(follow)` 流 + Docker 日志帧解码（8 字节头 + uint32 BE 长度），正则匹配 + ignore 排除 + 10s 去抖；断流自动重连（指数退避）。
 > - **resCheck**：容器 stats 单次快照；**CPU% 用两次快照差值计算**（`docker stats` 算法），否则累计计数只能得"终身均值≈0"；内存按 `usage-inactive_file` 口径。多副本按均值聚合。
-> - **已知限制（v1）**：资源按均值聚合（非 max/p95）；服务级探活默认 `retries=2` 固定（httpCheck）；`action=restart` 联动已接（log/resource 阈值可触发 gRPC `Restart`）但未在 e2e 验证；worker 重启后不会自动恢复既有服务的监控注册（需重新 Deploy/Update）；事件/审计在重启后保留（SQLite），但管理端尚未持久化 `lastSeen`，重连后会重放未 ack 段。
+> - **已知限制（v1）**：资源按均值聚合（非 max/p95）；服务级探活默认 `retries=2` 固定（httpCheck）；`action=restart` 联动已接（log/resource 阈值可触发 gRPC `Restart`）但未在 e2e 验证；worker 重启后不会自动恢复既有服务的监控注册（需重新 Deploy/Update）；事件/审计在重启后保留（SQLite），管理端游标已持久化（LevelDB cursor，先 PutCursor 再 Ack），重连从最后游标续传。
 
 ### 5.6 监控与编排的联动
 
@@ -579,7 +586,6 @@ commandPolicy:
 | `deploy_service` | `config`（完整 config） | `operationId` + 初始状态 | 写（需 elicitation 确认） |
 | `update_service` | `name`,`config` | `operationId` | 写 |
 | `scale_service` | `name`,`replicas` | `operationId` | 写（replicas=0 需确认） |
-| `rollback_service` | `name` | `operationId` | 写 |
 | `restart_service` | `name` | `operationId` | 写 |
 | `remove_service` | `name` | `result` | 写（**必须 elicitation 确认**） |
 | `get_service_logs` | `name`,`?tail`,`?since`,`?follow` | 日志行/订阅 | 读 |
@@ -631,7 +637,7 @@ commandPolicy:
 > **P3 实现说明（已落地，`internal/mcp/`，基于 go-sdk v1.7.0）**：
 > - **传输**：Streamable HTTP（单 endpoint `POST /mcp`，**stateless**，`StreamableHTTPOptions.Stateless=true`，2026-07-28 无状态协议必需；真机发现并修复）；`-mcp-stdio` 模式走 stdio（newline-delimited JSON-RPC 自定义 transport，与 SDK custom-transport 同款）。
 > - **Server**：`mcp.NewServer` + 泛型 `mcp.AddTool[In,Out]`（自动生成 input/output JSON Schema 2020-12、入参校验、`structuredContent` 输出）。
-> - **Tools（19 个，已注册）**：编排类 list/get/deploy/update/scale/restart/remove_service、get_service_logs、get_events、get_operation、list/get_node、get_self；命令执行类 **exec_in_container**（跨节点路由）、**exec_host_command**（nsenter 宿主机，跨节点，黑白名单）；指标类 **get_resource_usage**（跨节点聚合）；节点探测类 **check_port**（任意 host:port TCP）、**check_http**（任意 URL，状态码+body 正则）、**list_host_processes**（宿主机进程发现，名称/cmdline 子串过滤）——探测类只读、无需 confirm，node 参数空=全部 ready 节点扇出（单点失败降级为结果条目），供排查 LLM 检查宿主机中间件/Java 进程。危险操作（remove/scale=0/两类 exec）要求 `confirm=true`，否则返回 `isError` 工具错误（e2e 已验证，含 `rm -rf /` 被黑名单拦截）。
+> - **Tools（20 个，已注册）**：编排类 list/get/deploy/update/scale/restart/remove_service、get_service_logs、get_events、get_operation、list/get_node、get_self；命令执行类 **exec_in_container**（跨节点路由）、**exec_host_command**（nsenter 宿主机，跨节点，黑白名单）；指标类 **get_resource_usage**（跨节点聚合）；节点探测类 **check_port**（任意 host:port TCP）、**check_http**（任意 URL，状态码+body 正则）、**list_host_processes**（宿主机进程发现，名称/cmdline 子串过滤）、**check_flow**（多步 HTTP 事务拨测）——探测类只读、无需 confirm，node 参数空=全部 ready 节点扇出（单点失败降级为结果条目），供排查 LLM 检查宿主机中间件/Java 进程。危险操作（remove/scale=0/两类 exec）要求 `confirm=true`，否则返回 `isError` 工具错误（e2e 已验证，含 `rm -rf /` 被黑名单拦截）。
 > - **Resources（3 个）**：`worker://services`、`worker://services/{name}`（template）、`worker://events`。
 > - **协议能力**：go-sdk 自动实现 `server/discover`、版本协商（2026-07-28/2025-11-25）、每请求 `_meta` 能力声明；客户端 e2e 确认 `InitializeResult().ProtocolVersion=2026-07-28`。2026-07-28 要求请求体 `_meta` 携带 `io.modelcontextprotocol/protocolVersion`（手写 JSON-RPC 需显式带，SDK 客户端自动带）。
 > - **跨节点**：manager 按任务所在节点路由到 node worker 的 `/api/v1/local/*`，聚合 stats、代理 exec、广播 host 命令（真机双节点验证）。
@@ -645,7 +651,7 @@ commandPolicy:
    - Worker 容器以只读 root 挂载 + `--cap-drop=ALL` + 仅 `SETFCAP` 等最小能力；
    - 宿主机仅 root + docker 组可访问 socket；
    - 生产建议改 `tcp://manager:2376` + TLS 双向认证，避免每节点暴露 socket。
-2. **宿主机命令执行（privileged + pid=host）**：`exec_host_command` 经 nsenter 进宿主机 PID1 命名空间执行，**必须**以 privileged + pid=host 运行（见 `deploy/stack.yml`）。这是整个系统攻击面最大的一环，安全基线：
+2. **宿主机命令执行（nsenter）**：`exec_host_command` 经 nsenter 进宿主机 PID1 命名空间执行。注：swarm 部署会忽略 `privileged`/`pid: host`（`deploy/stack.yml` 注记），完整宿主机可见需裸 `docker run`。这是整个系统攻击面最大的一环，安全基线：
    - 默认 `allowHostExec=false`（需 config 显式开启，见 `deploy/agent-config.yaml.example`）；
    - 命令黑白名单由 agent config 下发（见 §4.7）；
    - 高风险动作（`exec_host_command`/`exec_in_container`/`remove_service`/`scale=0`）在 MCP 层强制 `confirm=true`；
@@ -721,14 +727,14 @@ Worker/
 
 1. **Docker Engine API 版本差异**：`WithAPIVersionNegotiation()` 自动协商，但 `StartInterval`（1.44+）、部分 log 字段依赖版本；translator 需做版本探测降级。
 2. **日志驱动限制**：`ServiceLogs` 仅 `json-file`/`journald`；若集群用 `fluentd`/`gelf` 等远端驱动，logCheck 与流式日志接口不可用，需提示用户或改接集中日志（ELK）——v1 不做，记为已知限制。
-3. **宿主机命令执行的安全暴露面**：`exec_host_command` 要求 worker 以 privileged + pid=host 运行（nsenter 进宿主机 PID1 命名空间），容器逃逸即宿主 root。缓解：`allowHostExec` 默认关、黑白名单、MCP `confirm`、生产置于仅内网/鉴权代理后；`/api/v1/local/*` 目前无鉴权（记入风险）。
+3. **宿主机命令执行的安全暴露面**：`exec_host_command` 要求 worker 以 privileged + pid=host 运行（nsenter 进宿主机 PID1 命名空间），容器逃逸即宿主 root。缓解：`allowHostExec` 默认关、黑白名单、MCP `confirm`、生产置于仅内网/鉴权代理后；`/api/v1/local/*` 已由 bearer 中间件统一鉴权（PublicPaths 白名单除外，见 §七.6）。
 4. **MCP 规范时效**：`2026-07-28` 为截至 2026-08-03 的最新版本；官方 SDK v1.7.0 已原生支持（stateless 需显式 `StreamableHTTPOptions.Stateless=true`，真机发现并修复）。后续版本升级需复核 SDK `CHANGELOG`。
 5. **Leader 选举与写转发**：复用 swarm manager 的 Raft leader（`ManagerStatus.Leader`）而非自研选举，简化实现；多 manager 部署时仅 leader 执行写编排，其余 manager 实例上的写 RPC（Deploy/Update/Scale/Restart/Remove）经 **gRPC 内部客户端转发到 leader `:9080`**（携带原 bearer token，保持审计 actor 一致）。仍需处理 leader 切换时在途 operation 的接管（operation 状态落盘 + 新 leader 重放）与在途 gRPC 双向流的重连（管理端用 `lastSeen` 续传，重放未 ack 段）。
 6. **config 兼容性**：config 是自定义 schema，未来若要兼容 Compose 文件或 K8s manifest，需在 `translator` 上加适配层，不污染核心模型。
 7. **私有仓库凭证**：`registryAuth` 用 swarm secret 还是 `AuthConfig` 内联？默认 secret 引用（更安全），但 create 时需先 `secret create`；提供 `registryAuth.inline`（base64）作为便捷模式，标注不推荐用于生产。
 8. **agent config 同步**：命令策略经每节点挂载的 `agent-config.yaml` 下发；配置变更需全节点重新挂载/重启 worker（尚无集中分发），生产可用配置中心或 swarm config 分发。
 9. **跨节点 stats 采样时序**：`get_resource_usage` 的 CPU% 依赖两节点各自两次快照差值（1s 间隔），manager 聚合时各节点采样起点不一致，聚合值含 ±1s 偏差（读路径可接受）。
-10. **SQLite 队列增长与重放**：事件/审计改 SQLite 持久化队列后，若管理端长期不连或未 ack，`Since(lastSeen)` 的未 GC 段会累积（上限=磁盘）。缓解：`GC(maxAge)` 清理超龄条目（不论是否 ack），但管理端重连时可能要重放较长未确认段；生产应配 `maxAge` 上限并监控 `events.db`/`audit.db` 体积。`modernc.org/sqlite` 为纯 Go 无 CGO，跨平台编译友好，但高并发写性能低于 CGO 版 `mattn/go-sqlite3`——本场景写量来自事件探针，非热路径，可接受。
+10. **SQLite 队列增长与重放**：事件/审计改 SQLite 持久化队列后，若管理端长期不连或未 ack，`Since(lastSeen)` 的未 GC 段会累积（上限=磁盘）。缓解：`GC(maxAge)` 只清理**已 ack 且超龄**的条目（未 ack 条目不清理、上限=磁盘；管理端游标已持久化，重连从游标续传）；生产应监控 `events.db`/`audit.db` 体积。`modernc.org/sqlite` 为纯 Go 无 CGO，跨平台编译友好，但高并发写性能低于 CGO 版 `mattn/go-sqlite3`——本场景写量来自事件探针，非热路径，可接受。
 11. **gRPC 双向流与网络策略**：`SubscribeEvents`/`SubscribeAudit` 由 server 发起连接（仅 server→worker 可达的方向），Worker 侧不监听管理端可达性；连接断开后由 server 重建并续 `lastSeen`。若中间有 L4 代理/负载均衡，需确保长连接空闲不被过早回收（调大 idle timeout 或加心跳）。
 
 ---
