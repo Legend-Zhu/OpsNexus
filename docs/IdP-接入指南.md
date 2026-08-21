@@ -19,7 +19,7 @@ idp:
 - 暴露标准 OIDC 端点（见下表）。
 - **签名 RSA 密钥**首次启动自动生成，持久化在 LevelDB（`idpkey/` bucket）；密钥泄露需在「身份提供者」管理页或直接删 LevelDB key 触发重新生成（会致已签发 token 失效）。
 
-> ⚠️ 生产环境 issuer 必须 https。当前 `r.Run` 无内置 TLS，请在反向代理（nginx / ingress）做 TLS 终结。
+> ⚠️ 生产环境 issuer 建议 https（代码校验仅要求带 scheme，http 亦合法——见 §七实测记录 7）。当前 `r.Run` 无内置 TLS，请在反向代理（nginx / ingress）做 TLS 终结。
 
 ## 二、OIDC 端点清单
 
@@ -44,7 +44,7 @@ idp:
   - **公共客户端**（PKCE-only，无 secret）：用于无法安全保存密钥的场景（MCP 工具、SPA、移动端）。授权时必须带 `code_challenge`。
   - **机密客户端**（client_secret）：用于后端服务。创建/轮换时返回一次性明文 secret，妥善保管。
 - **回调地址**：精确匹配白名单（可多个）。授权请求的 `redirect_uri` 必须与其中之一**完全相等**。
-- **Scope**：允许申请的 scope 子集；留空表示允许 `openid profile email`。
+- **Scope**：允许申请的 scope 子集；**留空表示完全不限制**（任意请求 scope 都放行，向后兼容旧 client，管理员可按需收紧）。
 
 ## 四、对接示例
 
@@ -97,7 +97,7 @@ Worker 的 `/.well-known/oauth-protected-resource` 会把该 issuer 写入 `auth
 
 ## 六、HTTPS 与证书（含自签命令）
 
-> ⚠️ 生产环境 issuer 必须 `https://`（localhost 例外）。OpsGaurd 进程本身跑明文 HTTP，证书装在反向代理（nginx / ingress）做 TLS 终结。
+> ⚠️ 生产环境 issuer 建议 `https://`（代码校验仅要求带 scheme、http 亦合法；localhost 例外）。OpsGaurd 进程本身跑明文 HTTP，证书装在反向代理（nginx / ingress）做 TLS 终结。
 
 按场景三选一：
 
@@ -269,11 +269,11 @@ OIDC 流程的两类通信各走一条已通的通路：
 
 ### 启用步骤
 
-**管理端**（`config.docker.yaml`）：IdP 启用后，`idptunnel` manager 自动为每个已纳管集群开一条 Tunnel 流，无需额外配置。
+**管理端**（`config.docker.yaml`）：IdP 启用后，`idptunnel` manager 自动为每个已纳管集群开一个 Tunnel 流池（默认 16 条并发流，`OPSGUARD_TUNNEL_POOL` 可调），无需额外配置。
 
 **Worker**（环境变量，仅 manager 角色）：
 ```bash
-OPSGUARD_TUNNEL_BASE=http://10.60.171.232:8080        # 本 Worker 对集群内可达的地址（r-nacos 用它作 issuer）
+OPSGUARD_TUNNEL_BASE=http://10.60.171.232:6060        # 本 Worker 对集群内可达的地址（disaster 集群 worker HTTP 实际发布 6060；r-nacos 用它作 issuer）
 OPSGUARD_IDP_PUBLIC_ISSUER=http://172.28.50.176:8080  # 管理端公网地址（authorize 浏览器跳转用）
 ```
 配了 `OPSGUARD_TUNNEL_BASE` 的 Worker 会在 `:8080/idp-proxy/` 暴露本地隧道入口（已自动放行鉴权），并在 discovery 里按上面两个地址改写端点。

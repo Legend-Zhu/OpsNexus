@@ -30,19 +30,21 @@
 
 | 服务 | 副本 | 所在节点 | 容器端口 | NodePort | 镜像（Harbor 253:20005） | 备注 |
 |---|---|---|---|---|---|---|
-| admin-server | 2 | 230 ×2 | 8080 | **30007** | library/admin-server | |
-| data-server | 2 | 230 ×2 | 20081 | **30000** | library/data-server@sha256:5688ab34… | **挂宿主 `/data/dbte`** |
-| monitor-server | 4 | 230 ×2 + 249 ×2 | 8081 | **30004** | library/monitor-server | |
-| plotting-server | 2 | 232 + 249 | 20083 | **30002** | library/plotting-server@sha256:fd02cbb2… | |
-| mapcache-server | 2 | 232 + 249 | 18084 | **30005** | library/mapcache-server@sha256:eab4b676… | |
+| admin-server | 2 | 230 ×2 | 8080 | **30007** | library/admin-server | **同样挂宿主 `/data/dbte`**（k8s-dep.json，与 data-server 同） |
+| data-server | 2 | 230 ×2 | 20081 | **30000** | nx/data-server:v202512111 | **挂宿主 `/data/dbte`** |
+| monitor-server | 4 | 230 ×2 + 249 ×2 | 8081 | **30004** | monitor-server:v202507102（无项目前缀） | |
+| plotting-server | 3 | 232 + 249 + 231 | 20083 | **30002** | library/plotting-server@sha256:fd02cbb2… | |
+| mapcache-server | 3 | 232 + 249 + 231 | 18084 | **30005** | library/mapcache-server@sha256:eab4b676… | |
 | neo4j-server | 1 | 230 | 8080 | **30008** | library/neo4j-server@sha256:2c40ffad… | 无数据卷（见风险 R3） |
 | notice-test | 1 | 230 | 8083 | 30003 | library/notice-test | 测试 |
 | external-test | 1 | 230 | 8082 | 30001 | library/external-test | 测试 |
-| plan-server | **0** | — | 8080 | 30006 | — | 已 0 副本，疑似弃用 |
-| prdl-external-online-server | **0** | — | 8083 | 30009 | — | 已 0 副本，疑似弃用 |
+| plan-server | 1 | 231 | 8080 | 30006 | nx/plan-server（231 本地 + Harbor nx 项目） | 非弃用（§4.1 批次⑥已确认，231 Running） |
+| prdl-external-online-server | 1 | 231 | 8083 | 30009 | nx/external-online-server:v202503201 | 非弃用（§4.1 批次⑥已确认，231 Running） |
 | minio | **0** | — | 9000/9011 | — | — | 只有 Service 无 Pod（见风险 R4） |
 
-**所有业务 Pod 的环境变量只有 5 个自定义项**（其余为 K8s 自动注入的 service 变量）：
+> 2026-08-21 复核注：副本数与镜像引用已按 k8s-*.json 资源转储修正（原表为 08-10 前快照：plotting/mapcache 曾记 2 副本、plan/external-online 曾记 0 副本"疑似弃用"）。P4 预拉取用的 digest 取自运行容器 `.Config.Image` 实况，与本表 Deployment spec 的 tag 引用并存不矛盾。
+
+**所有业务 Pod 的自定义环境变量以 5 个为基础**（monitor-server 实为 7 个——多 `SPRING_CLOUD_NACOS_DISCOVERY_PORT=30004` 与 `SPRING_CLOUD_NACOS_DISCOVERY_IP` 空值；notice-test 7 个、external-test 6 个；其余为 K8s 自动注入的 service 变量）：
 
 ```bash
 NACOS_ADDR=10.60.171.253:20011      # nacos-server-dm8（253 容器，8848→20011，9848→21011）
@@ -67,7 +69,7 @@ springdoc.api-docs.enabled=false
 
 - nginxwebui 按**端口**分流（无 server_name），listen 20003/20004/20005/20007/20014/20016/20017/20030/20031/21000/20000(ssl) 等，上游大多是 `230:30000~30009`。
 - 部分上游指向**非 K8s** 目标，本次替换不受影响：231:20007/20008/3000/3300（AI 等）、249:20001（pr-fire-monitor/micaps）、232:20020/3000（grafana）、外部地址（10.60.114.2、10.60.171.176、172.28.40.6 等）。
-- **ingress-nginx DaemonSet 占了每台 b 节点的 80/443，但集群里一条 Ingress 规则都没有**（controller 的 nginx.conf 只有默认 404 server）——纯占位，这就是之前"80 端口 404"的根因。
+- **ingress-nginx DaemonSet 占了每台 b 节点的 80/443，但集群里一条 Ingress 规则都没有**（controller 的 nginx.conf 只有默认 404 server）——纯占位，这就是之前"80 端口 404"的根由。（2026-08-21 复核：k8s-svc.json 里有 3 个 Ingress 派生 Service——ingress-860c…/9be8…/aec6…，ownerReferences 指向的 Ingress 对象已不存在，疑为删除残留，需上环境确认；不影响"80/443 被占"的结论。）
 
 ### 1.4 K8s 实际在干什么 vs 白付的成本
 
@@ -153,7 +155,7 @@ Rancher 部署时各服务靠**环境变量覆盖**注入 nacos 配置。迁移�
 |---|---|---|---|---|---|
 | admin-server | `10.60.171.232:8848` | `test` | `nacos` | `springdoc.api-docs.enabled=false`、`springdoc.swagger-ui.enabled=false` | |
 | data-server | `10.60.171.232:8848` | `test` | `nacos` | 同上 springdoc×2 | 另有 bind `/data/dbte` |
-| monitor-server | `10.60.171.232:8848` | `test` | `nacos` | 同上 springdoc×2 | ⚠️ **丢弃 `SPRING_CLOUD_NACOS_DISCOVERY_IP=undefined`**（Rancher 表单留空的脏值，字面注册 IP `undefined`；Swarm 不设，取容器真实 IP） |
+| monitor-server | `10.60.171.232:8848` | `test` | `nacos` | 同上 springdoc×2 + `SPRING_CLOUD_NACOS_DISCOVERY_PORT=30004` | ⚠️ **丢弃 `SPRING_CLOUD_NACOS_DISCOVERY_IP`**（转储中为空值；若 Rancher 表单出现字面 `undefined` 也一律不设，Swarm 取容器真实 IP） |
 | neo4j-server | `10.60.171.232:8848` | `test` | `nacos` | 同上 springdoc×2 | R3：先确认无本地数据卷（真库疑似 253 `neo4j-neo4j-1`） |
 | notice-test | `10.60.171.232:8848` | `test` | `nacos` | springdoc×2 + `logging.level.root=debug`、`userCenter.ifSendNoticeMsg=false` | 批次① |
 | external-test | `10.60.171.232:8848` | `test` | `nacos` | springdoc×2 + `schedule-enable=true` | 批次① |
@@ -389,7 +391,7 @@ rm -rf /etc/cni/net.d /var/lib/cni /run/calico /opt/cni /etc/kubernetes /var/lib
 | external-online-server | 1 | 30009→8083 | v2026081101 | |
 | gateway-server | 1 | 30010→8080 | v2026081101 | 新增入口 |
 
-另：opsguard_worker global 5/5（1.2.5，manager 角色承担隧道中继）；maxkb4j-app/pgvector、rnacos、nginxwebui、mongo、DM/redis/neo4j/kafka/minio/AI 等裸容器不受影响。
+另：opsguard_worker global 5/5（1.2.5，08-16 快照；后续 08-18/08-20 已升至 1.2.6→1.2.7，见 `deploy/offline/README.md` 记录 13/15，manager 角色承担隧道中继）；maxkb4j-app/pgvector、rnacos、nginxwebui、mongo、DM/redis/neo4j/kafka/minio/AI 等裸容器不受影响。
 
 **验证口径**：`230:30000-30010` 全应答；r-nacos prod 10 服务全健康（test ns 归零）；前门 20004/20014/20030/20003/20002/20013/20020 与基线一致。
 
@@ -397,6 +399,6 @@ rm -rf /etc/cni/net.d /var/lib/cni /run/calico /opt/cni /etc/kubernetes /var/lib
 
 - [ ] rancher 容器两台（231 rancher-v2613、253 rancher_v2517-rancher_server-1_old）已停止未删除，观察后删
 - [ ] 253 `/data/harbor` 死数据清理（镜像已迁内嵌仓库）
-- [ ] OpsGaurd healthy 跨节点汇聚（代码改进：经各节点 agent 查容器健康）
+- [x] OpsGaurd healthy 跨节点汇聚（已实现 2026-08-17，git f55a0f7，方案见《healthy跨节点汇聚方案.md》，deploy README 记录 13 已验证）
 - [ ] 20017 根路径 502（后端 249:20001 不存在，存量问题，与业务方确认是否有用）
 - [ ] 80/443（原 ingress-nginx hostPort）已释放，可按 §6.5 规划改用途

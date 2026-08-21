@@ -2,7 +2,7 @@
 
 > 版本：v0.1（草案）
 > 日期：2026-08-06
-> 状态：调研完成，待试点验证
+> 状态：调研完成，已试点验证并投产（附录 B/C 为 2026-08-07/08-10 实测记录；2026-08-21 复核：securityOpt 已支持，r-nacos 可走 OpsGaurd 编排部署）
 
 ## 一、背景与目标
 
@@ -148,7 +148,7 @@ r-nacos 控制台支持 OAuth2 登录（`OAUTH2_*` 环境变量）。对接 OpsG
 
 **阶段一：r-nacos 本地账号跑通**（不依赖 IdP）。镜像离线导入 + 单副本部署（见下方部署模板），用 r-nacos 内置账号登录，立即可用。
 
-**阶段二：对接 IdP**。前置：管理端启用 IdP（`idp.enabled`，issuer 填公网地址如 `http://172.28.50.176:8080`）；Worker 配隧道 env（`OPSGUARD_TUNNEL_BASE=http://10.60.171.232:8080`、`OPSGUARD_IDP_PUBLIC_ISSUER=http://172.28.50.176:8080`）。然后在管理台「身份提供者」注册 client（`rnacos-console`，机密，回调 `http://10.60.171.232:10848/<r-nacos回调路径>`），最后更新 r-nacos 服务的 env 取消注释：
+**阶段二：对接 IdP**。前置：管理端启用 IdP（`idp.enabled`，issuer 填公网地址如 `http://172.28.50.176:8080`）；Worker 配隧道 env（`OPSGUARD_TUNNEL_BASE=http://10.60.171.232:6060`、`OPSGUARD_IDP_PUBLIC_ISSUER=http://172.28.50.176:8080`；TUNNEL_BASE 用 disaster worker HTTP 实际发布端口 6060，与附录 A/C 一致）。然后在管理台「身份提供者」注册 client（`rnacos-console`，机密，回调 `http://10.60.171.232:10848/<r-nacos回调路径>`），最后更新 r-nacos 服务的 env 取消注释：
 
 ```yaml
 env:
@@ -163,7 +163,7 @@ r-nacos 拉 discovery 时拿到改写后的端点：`authorize`→公网管理�
 
 **部署模板（实测版，2026-08-07 disaster 集群验证）**：原 §6.1 的 stack yaml 是 docker-compose 语法，不能直接用。下方是实测可用的部署方式。注意三个实测要点：
 1. **镜像名是 `qingpan/rnacos`**（不是 rustack），最新 `stable` tag（v0.8.6）
-2. **必须 `--security-opt seccomp=unconfined`**：r-nacos 的 Rust tokio runtime 起线程会被 docker 默认 seccomp 拦截（panic exit 101）。OpsGaurd 的 `config.Service` 暂未暴露 security_opt，故试点用 `docker run`（非 swarm service）部署。
+2. **必须 `--security-opt seccomp=unconfined`**：r-nacos 的 Rust tokio runtime 起线程会被 docker 默认 seccomp 拦截（panic exit 101）。（2026-08-21 复核：OpsGaurd 的 `config.Service` **已支持 `securityOpt` 字段**——映射到 `ContainerSpec.Privileges.SecurityOpt`，可走 OpsGaurd 编排部署；试点时期因字段未有而用 `docker run`。）
 3. **控制台端口是 10848**（v0.8.x，非旧版 10010）；工作目录 `/io`，数据卷挂 `/io`。
 
 ```bash
@@ -195,7 +195,7 @@ docker restart rnacos             # 生效，无需重建
 2. r-nacos OAuth2 回调：改 `/opt/rnacos/rnacos.env` 的 `RNACOS_OAUTH2_REDIRECT_URI`（端口部分）→ `docker restart rnacos`。
 3. OpsGaurd IdP client 白名单：管理台「系统设置 → 身份提供者」编辑 `rnacos-console` 的 redirect_uri 端口（或 API `PUT /api/v1/idp/clients/<id>`）。redirect_uri 须与 REDIRECT_URI 精确一致，否则 authorize 报 `invalid redirect_uri`。
 
-> 原 OpsGaurd `config.Service` 部署模板（含 healthcheck/monitoring/resources）见下，**但需先在 config.Service 增加 securityOpt 字段支持**（待实现），否则 r-nacos 会 panic：
+> 原 OpsGaurd `config.Service` 部署模板（含 healthcheck/monitoring/resources）见下（**securityOpt 字段已实现**，2026-08-07 起——映射见《集群纳管清单方案.md》§3.2，试点时曾为"待实现"）：
 
 compose → OpsGaurd 字段对照（避免踩坑）：
 

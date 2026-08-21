@@ -42,7 +42,7 @@
 
 ### 1.1 上传镜像
 
-**路径**：「镜像仓库」。先看页头状态：`docker 可用`（绿，才能页面构建）、`已启用认证`。若出现「镜像仓库未启用」红条 → server 配置 `registry.enabled: true` 后重启。
+**路径**：「镜像仓库」。先看页头状态：`docker 可用`（绿，才能页面构建）、`已启用认证`。若出现「镜像仓库未启用」黄色告警条（el-alert warning 样式）→ server 配置 `registry.enabled: true` 后重启。
 
 在「上传构建」卡片：
 
@@ -386,7 +386,7 @@ report:
 
 | 症状 | 场景 | 原因 → 处理 |
 | --- | --- | --- |
-| 「镜像仓库未启用」红条 | 1 | `registry.enabled` 未开 → 改 true 重启 |
+| 「镜像仓库未启用」黄条 | 1 | `registry.enabled` 未开 → 改 true 重启 |
 | 「构建不可用」黄标 | 1 | 管理端缺 docker CLI → 安装，或走场景 4 的 CLI 直推 |
 | 构建失败 `zip 内未找到 Dockerfile` / PUSHING 401 | 1/4 | 包内容不对 / `registry.builder` 账号缺配 → 对应修复 |
 | 接入集群 502 `not a swarm manager` / 连接失败 | 1 | 地址填到 node 节点 / 端口填成 HTTP 端口、防火墙未通 → 填 manager 的 gRPC 地址并放通 |

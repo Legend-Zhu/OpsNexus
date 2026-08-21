@@ -2,7 +2,7 @@
 
 > 版本：v0.1（草案）
 > 日期：2026-08-04
-> 状态：原型分析完成，方案待评审
+> 状态：原型分析完成，方案待评审（历史方案文档；2026-08-21 已按当前代码复核修正明显漂移，实现现状以《OpsGaurd-系统技术总览.md》为准）
 > 关联：`Worker/`（集群侧 Agent，swarm 编排+监控+MCP）、`AiNexus/`（AI 对话网关/Agent）、`OpsGaurdWeb/Prototype/OpsGuard-prototype-v2.html`（UI 原型）
 
 ## 一、原型分析
@@ -63,7 +63,7 @@ Alert(告警: 级别/来源/服务器/状态/次数) · User(角色) · Schedule
 | 纳管对象 | 裸机服务器 + JAR 进程 + 中间件 | **Docker Swarm 集群**（节点 + 服务/容器） | 管理端顶层为**集群**（类 Rancher），集群内提供**容器视图**（Worker 提供）|
 | Agent | 裸机采集程序（9100 端口，采集 CPU/内存/磁盘/进程） | Worker 容器（挂 docker.sock：容器 stats/端口/日志/命令执行/MCP） | **v1 以 Worker 为 Agent**；裸机 Agent 作为后续扩展（Worker 已有 nsenter 宿主机能力可覆盖部分）|
 | 资源指标 | 服务器 CPU/内存/磁盘 | 容器 stats + 节点资源（Worker `/local/stats`） | 节点维度指标由 Worker 聚合提供 |
-| AI 排查 | 假设有 Agent 提供 MCP 工具 | **Worker 自带 /mcp（16 工具）** | **闭环：内嵌 AiNexus 作为 MCP 客户端连接 Worker 的 /mcp**，对话/排查端点由管理端进程内直调 |
+| AI 排查 | 假设有 Agent 提供 MCP 工具 | **Worker 自带 /mcp（20 工具）** | **闭环：内嵌 AiNexus 作为 MCP 客户端连接 Worker 的 /mcp**，对话/排查端点由管理端进程内直调 |
 | LLM 网关 | 原型假设直连各模型 | — | **AiNexus 已是现成的多模型路由网关**（OpenAI/Anthropic 双格式 + 多 Provider） |
 
 > **结论**：原型给出的是**产品形态与信息架构**；底层资源模型以**集群（swarm）+ Worker** 实现，AI 能力由 **AiNexus** 承载（vendor 进后端单进程）。两者通过"前端 → 管理端（内嵌 AiNexus）→ MCP → Worker（采集/操作）"形成闭环。
@@ -120,13 +120,13 @@ OpsGaurdWeb 是**多集群管理控制台**（类 Rancher）：纳管多个 swar
 | 运维态势 | 仪表盘 | `/dashboard` | 各集群 Worker 聚合（节点/服务/事件/审计） |
 | 项目管理 | 项目（管理层级第一层） | `/projects` | 管理端项目表 |
 | 项目管理 | 集群管理（类 Rancher） | `/clusters` | 后端集群注册表 |
-| 项目-服务器 | 集群详情（节点/服务/进程） | `/clusters/:name` | Worker `/services`、`/nodes`、`/local/stats`、`/local/processes` |
+| 项目-服务器 | 集群详情（节点/服务/进程） | `/clusters/:name` | gRPC `ListServices`/`ListNodes`/`NodeStats`/`NodeProcesses`（经 workerproxy） |
 | 服务器详情 | 集群资源详情（节点+容器+操作） | `/clusters/:name`（详情抽屉） | Worker 详情/exec/日志 |
-| 应用服务管理 | 工作负载（swarm 服务） | `/clusters/:name`（收编） | Worker `/services`（含部署/缩放/回滚） |
-| 中间件管理 | 节点探测覆盖（端口/HTTP/进程 filter） | `/clusters/:name`（节点抽屉） | Worker `/local/check/*`、`/local/processes` |
-| 实时监控 | 集群监控（节点资源/服务健康） | `/clusters/:name`（收编） | Worker `/local/stats` + 事件 |
+| 应用服务管理 | 工作负载（swarm 服务） | `/clusters/:name`（收编） | gRPC `ListServices` 等（部署/缩放/重启；主动回滚未实现） |
+| 中间件管理 | 节点探测覆盖（端口/HTTP/进程 filter） | `/clusters/:name`（节点抽屉） | gRPC `CheckPort`/`CheckHTTP`/`NodeProcesses` |
+| 实时监控 | 集群监控（节点资源/服务健康） | `/clusters/:name`（收编） | gRPC `NodeStats`/`WatchNodeStats` + 事件 |
 | 告警中心 | 告警中心（已排查标记 + 一键跳转排查） | `/alerts` | gRPC SubscribeEvents 已订阅入管理端的事件 + investigation 回写 |
-| 巡检编排/调度/报告 | 智能巡检（YAML 五类检查 + 内置调度 + 报告 + 异常转告警） | `/patrol` | 管理端存储 + 调度引擎 + AiNexus 生成 |
+| 巡检编排/调度/报告 | 智能巡检（YAML 六类检查 + 内置调度 + 报告 + 异常转告警） | `/patrol` | 管理端存储 + 调度引擎 + AiNexus 生成 |
 | 智能助手/LLM 策略 | 对话式排查（选告警/自由提问/多轮/落库） | `/troubleshoot` | AiNexus `/chat`（SSE + alert_id 证据注入） |
 | —（新增） | 镜像仓库（内嵌 registry + 上传构建 + 镜像列表） | `/registry` | 管理端 registry（/v2 + 构建任务） |
 | 通知管理 | 通知中心（渠道/策略/记录） | `/notify` | 管理端（对接 Worker webhook 出口 + 飞书/短信） |
@@ -156,7 +156,7 @@ server/internal/
 ├── workerproxy/    # Worker gRPC 代理客户端：拨号 Worker 的 ManagementService，调用 Self/Events/Deploy/
 │                   #   NodeStats/CheckPort/CheckHTTP/进程 filter + SubscribeEvents/SubscribeAudit 双向流
 │                   #   （公开方法签名不变，上层 api/patrol/alertrule/investigate 无感）（✅ P1/P2/P3/P8）
-├── patrol/         # 巡检：YAML 流程（resource/health/port/http/process 五类检查）+ 内置调度
+├── patrol/         # 巡检：YAML 流程（resource/health/port/http/process/flow 六类检查）+ 内置调度
 │                   #   + AI 报告 + 报告渠道投递 + 异常转告警闭环（✅ P5/P8）
 ├── notify/         # 通知：渠道（可配置不预设）/策略/记录 + 互联网代理转发 + 通用 Send（✅ P6/P8）
 ├── alertrule/      # 告警规则：管理 Worker monitoring config（决策⑦）+ 下发（✅ P6）
@@ -170,27 +170,29 @@ server/internal/
                     #   + settings/investigation/ainexus 桶 + 索引 + 序列 + 迁移）
 ```
 
+> 注：以上为 v0.1 模块划分快照；后续新增 `idp/`、`idptunnel/`、`mlops/`、`api/project.go`/`inventory.go`/`secret.go` 及 store 多个桶文件未逐一列入，全量见《OpsGaurd-系统技术总览.md》§4.1。
+
 ### 4.2 API 规划（骨架基础上扩展）
 
 ```
 # 集群管理（已有骨架，补业务）
 GET/POST    /api/v1/clusters                    # 列表 / 接入（Worker URL+token+名称）
 GET/DELETE  /api/v1/clusters/:name              # 详情（健康探测）/ 移除
-GET         /api/v1/clusters/:name/nodes        # 节点列表（经 Worker /nodes）
+GET         /api/v1/clusters/:name/nodes        # 节点列表（gRPC ListNodes）
 GET         /api/v1/clusters/:name/nodes/:id/processes   # 节点进程（top/limit/filter）
 
 # 工作负载（经 Worker 代理）
-GET         /api/v1/clusters/:name/workloads            # Worker /services
+GET         /api/v1/clusters/:name/workloads            # gRPC ListServices
 GET         /api/v1/clusters/:name/workloads/:service   # 详情+tasks+健康
 POST        /api/v1/clusters/:name/workloads            # 部署（config → Worker）
-POST        /api/v1/clusters/:name/workloads/:service/scale|restart|rollback
+POST        /api/v1/clusters/:name/workloads/:service/scale|restart   # rollback 未实现
 DELETE      /api/v1/clusters/:name/workloads/:service
-GET         /api/v1/clusters/:name/workloads/:service/logs   # SSE 流式（Worker /local/logs 代理）
+GET         /api/v1/clusters/:name/workloads/:service/logs   # SSE 流式（gRPC StreamLogs 透传）
 
 # 监控告警（经 Worker）
 GET         /api/v1/clusters/:name/events       # 查询已入管理端的事件（由 gRPC SubscribeEvents 订阅落库）
-GET         /api/v1/clusters/:name/audit        # Worker /audit
-GET         /api/v1/clusters/:name/metrics      # 节点资源聚合（Worker /local/stats）
+GET         /api/v1/clusters/:name/audit        # gRPC ListAudit
+GET         /api/v1/clusters/:name/metrics      # 节点资源聚合（gRPC NodeStats）
 
 # 告警规则（集群级监控配置管理；service = swarm 服务名或纳管对象名）
 GET         /api/v1/alertrules[?cluster=]       # 规则列表（可按集群过滤，集群详情页「告警规则」tab）
@@ -218,7 +220,7 @@ PUT         /api/v1/investigations/:id            # 追问后更新同一条
 GET         /api/v1/investigations/:id            # 详情
 GET         /api/v1/alerts/:id/investigations     # 按告警列出历史排查
 
-# 巡检（YAML 流程：resource/health/port/http/process 五类检查）
+# 巡检（YAML 流程：resource/health/port/http/process/flow 六类检查）
 GET/POST    /api/v1/patrols                     # YAML 流程 CRUD + 校验
 POST        /api/v1/patrols/:id/run             # 立即执行
 GET         /api/v1/patrols/:id/runs            # 执行记录
@@ -237,7 +239,8 @@ DELETE      /api/v1/registry/images/*ref        # 删除 tag（<name>/tags/<tag>
 
 # 通知/系统（新增）
 GET/POST    /api/v1/notify/channels             # 渠道（飞书/短信/...）
-GET/POST    /api/v1/notify/policy               # 策略
+GET         /api/v1/notify/policies             # 策略（按级别）
+PUT         /api/v1/notify/policies/:level      # 策略保存
 GET         /api/v1/notify/records
 GET/POST    /api/v1/users                       # 用户管理
 ```
@@ -260,7 +263,7 @@ GET/POST    /api/v1/users                       # 用户管理
 
 - **形态**：AiNexus 的 Go 代码作为 `server/internal/ainexus/` **vendor 进管理端后端模块**（Go `internal` 可见性规则下不可跨模块 import，故为代码级集成而非 `replace` 依赖）。后端进程内同时持有管理 API 与 AI 网关：AiNexus 的 providers/tools/MCP Manager/ReAct Agent 全部在同一进程，`/ainexus/*` 原生端点直接挂载进 gin 路由，不再有独立监听端口、独立鉴权、进程间 HTTP。
 - **对话/排查**：前端 AI 助手 → 后端 `/ainexus/chat` → **进程内调用** AiNexus OpenAI handler（gin Context 直接传入，SSE 写回同一响应流），无中间 HTTP 跳转。
-- **深度排查**：管理端把告警上下文（相关事件、服务日志、审计记录）注入 prompt → 内嵌 ReAct Agent 调 MCP 工具 → **AiNexus 的 MCP 客户端连接该集群 Worker 的 `/mcp`**，由 Worker 的 16 工具（get_service_logs/get_events/exec_host_command/...）实际采集证据 → LLM 根因分析。**MCP 集成（stdio/SSE/Streamable HTTP 三种传输）与 Worker /mcp 的对接逻辑原样复用，仅传输 URL 走内网。**
+- **深度排查**：管理端把告警上下文（相关事件、服务日志、审计记录）注入 prompt → 内嵌 ReAct Agent 调 MCP 工具 → **AiNexus 的 MCP 客户端连接该集群 Worker 的 `/mcp`**，由 Worker 的 20 工具（get_service_logs/get_events/exec_host_command/...）实际采集证据 → LLM 根因分析。**MCP 集成（stdio/SSE/Streamable HTTP 三种传输）与 Worker /mcp 的对接逻辑原样复用，仅传输 URL 走内网。**
 - **分层调 LLM**：AiNexus 多模型路由天然支持"告警用轻量模型、深度排查用强模型"——管理端在请求时按场景指定 model。
 - **鉴权收敛**：AiNexus 网关自身的 APIKey 校验在嵌入后**关闭**（由管理端统一鉴权中间件覆盖 `/api/v1/ainexus/*`），避免双重认证。
 - **上下文管理（长排查防爆）**：预算默认对齐深度排查模型 **1M 窗口**（`agent.max_context_tokens`），超预算时**摘要式压缩**（类 Trae Memory）：旧 ReAct 轮次经内嵌 LLM 压缩成一条 `[历史摘要]`（按 根因/关键操作/关键观测/待办 分类聚合），保留最近 `keep_tool_rounds` 个工具轮次完整原文；压缩失败/未配置 LLM 退化为按完整轮次硬删（tool/assistant 配对原子，防 400）。硬限大幅放宽：工具结果单次 128KB、流式 chunk 32K rune、investigate 证据 256KB——1M 窗口下以信息密度而非省空间为目标。
@@ -288,7 +291,7 @@ GET/POST    /api/v1/users                       # 用户管理
 
 ```
 ① Worker 监控事件 ──gRPC SubscribeEvents（server 主动建流，Worker 回送）──▶ ingest(订阅+游标+ACK) ──▶ 告警聚合 ──▶ notify 按级别策略投递渠道
-② 巡检 cron/手动 ──▶ 五类检查(resource/health/port/http/process)──▶ 异常
+② 巡检 cron/手动 ──▶ 六类检查(resource/health/port/http/process/flow)──▶ 异常
      ├──▶ patrol_failed 告警(按 检查项|节点 细分,新增/复发才通知,恢复自动关闭)
      └──▶ AI 报告(每次 Run 结束生成)──▶ 按 settings/patrol-report 投递渠道(每次/仅异常/关闭)
 ③ 告警 ──▶ 对话式排查(troubleshoot 页:选告警 or 自由提问,多轮追问,
@@ -337,8 +340,8 @@ key 结构: <bucket>/<pk>  → JSON 值
 
 meta/version                      -> 数据版本号（迁移用，整数递增）
 
-cluster/<name>                    -> Cluster{name, worker_url, mcp_url, worker_token,
-                                       desc, status(online/offline), last_seen}
+cluster/<name>                    -> Cluster{name, project_id, worker_url, mcp_url, token,
+                                       desc, status(online/offline), last_seen, inventory}
 cluster/idx/status/<status>       -> ""  （按状态枚举，可选）
 
 event/<seq>                       -> IngestEvent{id, ts, cluster_id, service, type,
@@ -419,11 +422,11 @@ seq/<kind>                        -> 自增序列（告警 id、事件 seq 等�
 | 资源采集（CPU/内存/磁盘） | Worker `/local/stats` + 节点 stats | ✅ 已实现 |
 | 进程/服务健康 | Worker 服务健康（task+healthcheck）+ `/local/processes`（filter） | ✅ 已实现 |
 | 命令执行/SSH | Worker `exec_host_command`/`exec_in_container`（黑白名单） | ✅ 已实现 |
-| MCP 工具（AI 排查证据） | Worker `/mcp` 19 工具（含 check_port/check_http/list_host_processes） | ✅ 已实现 |
+| MCP 工具（AI 排查证据） | Worker `/mcp` 20 工具（含 check_port/check_http/check_flow/list_host_processes） | ✅ 已实现 |
 | 事件/告警 | Worker 事件 + gRPC SubscribeEvents 订阅 + 管理端 ingest 聚合（游标 + ACK） | ✅ 已实现 |
 | LLM 对话/多模型路由 | AiNexus（已 vendor 进后端，`server/internal/ainexus`） | ✅ 已实现 |
 | 分层调 LLM 策略 | AiNexus 多模型路由 + default_model 统一配置（页面管理，热重载） | ✅ 已实现 |
-| 巡检编排/调度/报告 | 管理端 `patrol/`（五类检查 + 报告投递 + 异常转告警） | ✅ 已实现 |
+| 巡检编排/调度/报告 | 管理端 `patrol/`（六类检查 + 报告投递 + 异常转告警） | ✅ 已实现 |
 | 通知（飞书/短信） | 管理端 `notify/`（渠道/策略/记录 + 通用 Send） | ✅ 已实现 |
 | 用户/系统设置 | 管理端（用户/SSO/身份提供者/AI 网关/密钥 tab + 修改密码/重置密码） | ✅ 已实现 |
 | 镜像仓库/构建 | 管理端 `registry/`（内嵌 OCI /v2 + 页面传包构建） | ✅ 已实现（P9） |

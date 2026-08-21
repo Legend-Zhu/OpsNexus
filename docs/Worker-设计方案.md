@@ -670,28 +670,30 @@ commandPolicy:
 ```
 Worker/
 ├── cmd/worker/main.go                 # 入口：agent 配置 + 角色判断 + gRPC(管理)+HTTP(/mcp+/healthz+nodeagent)+MCP+Monitor
+├── cmd/genpatch/                      # 离线 proto pb 补丁工具（无 protoc 时 gen.sh 降级调用）
 ├── internal/
-│   ├── config/        schema.go, validator.go, defaults.go, quantity.go（服务 config）
+│   ├── config/        config.go, validate.go, defaults.go, quantity.go, load.go（服务 config）
 │   ├── agent/         agent.go, policy.go, hostexec.go（worker 自身 config：命令黑白名单/超时/开关）
 │   ├── docker/        client.go, service.go, task.go, node.go, stats.go, logs.go,
 │   │                  exec.go, image.go, transport.go, types.go, logdecoder.go
 │   ├── orchestrator/  translator.go, lifecycle.go, operation.go, proxy.go（跨节点代理；管理 HTTP handler 已移除）
-│   ├── grpcapi/       server.go, stream.go（ManagementService 实现 + 双向流；契约 proto/opsguard.proto）
+│   ├── grpcapi/       server.go, stream.go, tunnel.go（ManagementService + 双向流 + 反向隧道池）
 │   │   └── pb/        protoc-gen-go 生成代码
-│   ├── authz/         http.go（HTTP bearer 中间件）, grpc.go（gRPC unary+stream 拦截器，同 token 集）
-│   ├── monitor/       manager.go, portcheck.go, httpcheck.go, logcheck.go, rescheck.go, event.go, eventstore.go（SQLite 队列）
-│   ├── audit/         audit.go（SQLite 持久化审计队列：Append/Since/Ack/GC/WaitNew）
+│   ├── authz/         authz.go（HTTP bearer 中间件）, grpc.go（gRPC unary+stream 拦截器，同 token 集）
+│   ├── monitor/       manager.go, portcheck.go, httpcheck.go, logcheck.go, rescheck.go, event.go（SQLite 队列）
+│   ├── audit/         audit.go（SQLite 持久化审计队列：Add/Since/Ack/GC/WaitNew）
 │   ├── nodeagent/     api.go, logs.go, util.go（每节点本地接口 /local/stats /local/exec /local/host /local/logs）
-│   ├── mcp/           server.go, tools.go, resources.go, metrics.go（exec_host_command / 跨节点聚合）
+│   ├── idpproxy/      handler.go（/idp-proxy/ 经隧道访问管理端 IdP）
+│   ├── registryproxy/ handler.go, cache.go（/v2/ 镜像中继 + blob LRU 缓存）
+│   ├── mcp/           server.go, tools.go, resources.go, metrics.go, checks.go（exec/拨测/跨节点聚合）
 │   ├── logging/       redact.go（slog 脱敏）
 │   └── version/       version.go
 ├── proto/
 │   └── opsguard.proto                  # gRPC 契约（ManagementService；仓库根）
 ├── deploy/
 │   ├── Dockerfile
-│   ├── stack.yml                      # global 部署 + privileged + pid=host；暴露 :8080(HTTP) + :9080(gRPC)
-│   ├── agent-config.yaml.example      # 命令策略配置模板（黑白名单；含 listen/grpcListen/dataDir）
-│   └── worker.service                 # 或 systemd unit（非 swarm 单机）
+│   ├── stack.yml                      # global 部署（swarm 忽略 privileged/pid:host，宿主可见需裸 docker run）；暴露 :8080(HTTP) + :9080(gRPC)
+│   └── agent-config.yaml.example      # 命令策略配置模板（黑白名单；含 listen/grpcListen/dataDir）
 ├── docs/                              # 已存在（本文件所在）
 ├── go.mod / go.sum
 └── README.md

@@ -2,7 +2,7 @@
 
 > 版本：v0.5  
 > 日期：2026-08-20  
-> 状态：**已实施**——P0 兼容与计量基础、P1 结构化 Prompt Hub、P2 provider 级用量费用、P3 模型运营与预算、P4 前端与文档收尾全部落地（各分期验收项见 §十）；§十二待确认项仍开放。  
+> 状态：**已实施**——P0 兼容与计量基础、P1 结构化 Prompt Hub、P2 provider 级用量费用、P3 模型运营与预算、P4 前端与文档收尾全部落地（各分期验收项见 §十）；§十二待确认项部分已随实施落定（第 8 条页面归属已于 2026-08-21 关闭）。  
 > 修订说明：v0.3 将 MLOps 定位为围绕内嵌 AiNexus 网关的运营管理；v0.4 按当前实现校准调用边界/存储迁移/流式 usage/计量粒度/提示词结构/模型热重载/权限审计；v0.5 随实施回写实际 API 路径、bucket 布局与前端落地口径。  
 > 关联代码：`OpsGaurdWeb/server/internal/ainexus`、`internal/ainexusrt`、`internal/mlops`、`internal/api/mlops*.go`、`internal/api/ainexusconfig.go`、`internal/api/ainexus.go`、`internal/api/investigate.go`、`internal/patrol/service.go`、`internal/store`、`internal/notify`；前端 `web/src/views/mlops/`。  
 
@@ -50,7 +50,7 @@ AiNexus 不是独立进程，而是管理端进程内的 Go 模块：
 
 1. `BuildInvestigateMessages` 当前返回 system/user 两条消息，且 MCP 开关决定 system 内容，证据为空时会省略对应 user 段落；模板设计必须保留消息角色和条件结构。
 2. Agent 一次业务请求可能执行多轮 provider 调用；工具轮次和上下文压缩均可能额外产生 LLM 请求，费用不能只在业务请求结束时读取最后一轮 usage。
-3. 当前 `store.schemaVersion` 为 2，迁移表只有 1、2。新增 bucket 仍必须提供 migration 3，不能只把常量改成 3。
+3. 当前 `store.schemaVersion` 为 2，迁移表只有 1、2。新增 bucket 仍必须提供 migration 3，不能只把常量改成 3。（2026-08-21 复核注：此为 v0.4 写作时现状；migration 3 已随 P0 落地，现为 `schemaVersion=3`。）
 
 ### 1.4 目标
 
@@ -70,7 +70,7 @@ AiNexus 不是独立进程，而是管理端进程内的 Go 模块：
 
 现有 `internal/store/store.go`：
 
-- `schemaVersion = 2`；
+- `schemaVersion = 2`（写作时现状；migration 3 已随 P0 落地，现为 3）；
 - migration 1、2 已登记；
 - `migrate()` 会逐版本查找迁移函数。
 
@@ -658,7 +658,7 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 
 ## 九、前端（已落地，P1–P4）
 
-导航入口"MLOps"，三个 tab（模型/费用面板 lazy 按需加载）：
+导航入口"MLOps"，现为四个 tab（模型接入 / 提示词 / 模型 / 用量费用；「模型接入」为 2026-08-21 菜单重组并入的模型池编辑页，模型/费用面板 lazy 按需加载）：
 
 1. **提示词**：场景列表、结构化 system/user 编辑器、变量 schema、语法校验、预览、版本历史、激活/回滚、恢复默认；
 2. **模型**：读取现有 AiNexus 配置的 provider/model，展示启停、路由状态、默认/生效模型、场景绑定、本月用量、计价标记和最近健康结果；启停/健康测试/绑定为 admin 操作；
@@ -752,7 +752,7 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 
 ### P4：前端和文档收尾（已完成，2026-08-20）
 
-- [x] MLOps 导航和三 tab（提示词/模型/用量费用，模型/费用面板 lazy 按需加载）；
+- [x] MLOps 导航和 tab（落地时为三 tab：提示词/模型/用量费用；2026-08-21 菜单重组后为四 tab，模型接入并入，模型/费用面板 lazy 按需加载）；
 - [x] 重复配置入口确认与收敛：「系统设置 → 模型配置」只提交模型池（providers），「AI 排查网关」只提交网关设置（启用/默认/工具/Agent/MCP），职责互补不互相覆盖；per-model `enabled` 在 GET/PUT 全程保留（旧页面未提交字段由服务端按 provider+model 沿用），模型配置页增加 MLOps 启停引导提示；
 - [x] 权限与提示：MLOps 全部写操作（提示词版本/激活/重置/删除、单价、预算、启停、健康测试、绑定）后端挂 admin 守卫，前端按当前用户角色隐藏写入口（`composables/admin.ts`，未启用认证时保持可见与后端行为一致）；报表/明细只读对普通认证开放；全部接口沿用标准 envelope、snake_case 与分页/时间范围上限；
 - [x] 文档与配置说明：本方案状态更新、`configs/config.yaml` mlops 块含全部配置项注释（无独立操作手册，方案文档即操作口径）；
@@ -793,7 +793,7 @@ Prompt active、模型启停、场景绑定和价格更新使用 Store 原子写
 5. 日聚合永久保留采用年度汇总、归档还是有限保留；
 6. 预算通知使用哪些已配置渠道，是否允许独立于告警等级策略；
 7. native chat 是否未来需要平台 system prompt 强制注入；
-8. MLOps 模型 tab 与现有“系统设置 → 模型配置/AI 排查网关”的最终页面归属。
+8. ~~MLOps 模型 tab 与现有“系统设置 → 模型配置/AI 排查网关”的最终页面归属。~~（已落定，2026-08-21：模型配置并入 MLOps「模型接入」tab；系统设置收敛为 用户/SSO/身份提供者/AI 排查网关/密钥。）
 
 当前服务端基线测试：
 
