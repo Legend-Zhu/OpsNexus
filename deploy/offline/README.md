@@ -26,7 +26,7 @@
 
 | 文件 | 部署位置 | 说明 |
 |---|---|---|
-| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.12，离线重打见记录 10/11/12/14/16） |
+| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.13，离线重打见记录 10/11/12/14/16/17） |
 | bundle/opsguard-worker-1.0.0.tar … opsguard-worker-1.1.0.tar | /opt/opsguard/images/ | Worker 镜像（当前线 = 1.2.7，离线重打/中继分发见记录 10/11/12/15） |
 | bundle/docker-27.5.1.tgz | /opt/opsguard/offline/ | docker 静态二进制 |
 | install-docker.sh / docker.service / containerd.service / daemon.json | /opt/opsguard/offline/ | 离线安装（含 swarm init、insecure-registries=10.60.189.6:8080） |
@@ -236,6 +236,21 @@
       回归**——审计无管理端编排操作、worker 均为收到 SIGTERM 干净退出（外部
       swarm/docker 侧触发，疑似宿主机/docker 守护进程重启连锁），风暴后全部
       自愈（5/5 reachable，资源指标正常）。
+17. **registry 页构建项目名可新建（2026-08-21，server 1.2.12→1.2.13 + 前端，
+    worker 无改动）**：上传构建的「项目名」下拉虽配了 `allow-create`，但
+    el-select 点击外部失焦会丢弃未回车的新名，体验上等于只能选已有命名空间。
+    改为 `el-autocomplete`（自由输入 + 现有命名空间建议，`registry/Index.vue`），
+    输入值永远保留在表单。
+    - **重打方式**同记录 14/16 但**仅前端**（server 二进制不变）：本地
+      `web-1.2.13.tar.gz`（545KB，tar 带 `web/` 前缀）上传
+      `/opt/opsguard/build/1.2.13/`（sha256 校验一致）；
+      `FROM opsguard-server:1.2.12 + rm -rf /app/web/* + COPY web/` 重打 →
+      `docker rm -f` 后原样 run。
+    - **已验证**：healthz 200；首页引用新 bundle（`index-CFod7ZBO.js`）；三集群
+      online；节点 SSE azbx 3/3 `reachable:true` 实时指标（注意：REST `/nodes`
+      的 `reachable/cpuPercent` 本就是零值占位，由 SSE 流填充，勿据此误判）；
+      registry `/v2` 正常（当晚即有经页面构建的 `library/insurance:v0.0.1`）。
+    - **回滚**：`docker rm -f` 后用 `opsguard-server:1.2.12` 原样 run。
 
 ### 安责险集群（3 节点）部署记录（2026-08-14）
 

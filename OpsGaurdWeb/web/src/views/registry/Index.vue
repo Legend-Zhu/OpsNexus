@@ -60,10 +60,8 @@ docker push {{ registryAddr }}/myapp:v1</pre>
             </template>
           </el-form-item>
           <el-form-item label="项目名">
-            <el-select v-model="buildForm.project" filterable allow-create default-first-option
-              placeholder="选择仓库已有命名空间或输入新名" style="width: 200px">
-              <el-option v-for="p in projectOptions" :key="p" :label="p" :value="p" />
-            </el-select>
+            <el-autocomplete v-model="buildForm.project" :fetch-suggestions="queryProjects" clearable
+              placeholder="选择已有命名空间或输入新名" style="width: 200px" />
           </el-form-item>
           <el-form-item label="镜像名">
             <el-input v-model="buildForm.name" placeholder="如 myapp（不含项目前缀）" style="width: 170px" />
@@ -186,7 +184,9 @@ const imagesLoading = ref(false)
 const logBoxRef = ref<HTMLElement>()
 
 // 项目名 = 镜像仓库的命名空间(repo 首段,如 ops/myapp 的 ops),从现有镜像
-// 列表提取,也允许输入新名——与管理端「项目」体系无关
+// 列表提取,也允许输入新名——与管理端「项目」体系无关。
+// 用 autocomplete 而非 select+allow-create:后者点击外部失焦会丢弃未回车的
+// 新名,体验上变成"只能选已有"
 const projectOptions = computed(() => {
   const set = new Set<string>()
   for (const r of images.value) {
@@ -195,6 +195,11 @@ const projectOptions = computed(() => {
   }
   return [...set].sort()
 })
+
+function queryProjects(qs: string, cb: (items: string[]) => void) {
+  const q = qs.trim()
+  cb(projectOptions.value.filter((p) => !q || p.includes(q)))
+}
 
 // 镜像路径段：小写字母/数字/_.-(registry 仓库名约束;后端同规则校验)
 const nameSegOk = (s: string) => /^[a-z0-9_.\-]+$/.test(s)
