@@ -222,7 +222,8 @@ export const investigationApi = {
   update: (id: string, body: { title?: string; messages: string; conclusion?: string; model?: string }) =>
     put<Investigation>(`/v1/investigations/${id}`, body),
   get: (id: string) => get<Investigation>(`/v1/investigations/${id}`),
-  listByAlert: (alertId: string) => get<{ items: Investigation[] }>(`/v1/alerts/${alertId}/investigations`),
+  list: (alertId?: string) =>
+    get<{ items: Investigation[] }>('/v1/investigations', { params: alertId ? { alert_id: alertId } : {} }),
 }
 
 // ---- 全局设置 ----

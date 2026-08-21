@@ -138,6 +138,7 @@ func New(h *api.Handlers) *gin.Engine {
 		// 排查会话（对话式 troubleshoot 落库）
 		invs := v1.Group("/investigations")
 		{
+			invs.GET("", h.ListInvestigations)
 			invs.POST("", h.SaveInvestigation)
 			invs.PUT("/:id", h.UpdateInvestigation)
 			invs.GET("/:id", h.GetInvestigation)

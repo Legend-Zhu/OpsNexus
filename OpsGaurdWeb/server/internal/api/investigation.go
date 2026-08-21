@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -108,6 +109,27 @@ func (h *Handlers) GetInvestigation(c *gin.Context) {
 		return
 	}
 	ok(c, http.StatusOK, inv)
+}
+
+// ListInvestigations godoc: GET /api/v1/investigations?alert_id=&limit=
+// 全量排查会话列表（最新在前）；alert_id 为空时含自由提问会话，供 troubleshoot 历史入口使用。
+func (h *Handlers) ListInvestigations(c *gin.Context) {
+	if h.clusters == nil {
+		fail(c, http.StatusServiceUnavailable, "cluster service not initialized")
+		return
+	}
+	limit := 100
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	items, err := h.clusters.Investigations(c.Query("alert_id"), limit)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "list investigations: "+err.Error())
+		return
+	}
+	ok(c, http.StatusOK, gin.H{"items": items})
 }
 
 // ListAlertInvestigations godoc: GET /api/v1/alerts/:id/investigations

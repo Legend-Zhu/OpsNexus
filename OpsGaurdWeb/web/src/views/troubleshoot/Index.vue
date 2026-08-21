@@ -42,7 +42,7 @@
         />
       </el-select>
       <el-switch v-model="useMCP" active-text="MCP 采证" :disabled="running" />
-      <el-button v-if="alertId" size="small" @click="openHistory">历史排查</el-button>
+      <el-button size="small" @click="openHistory">历史排查</el-button>
       <el-button size="small" :icon="RefreshLeft" :disabled="!messages.length" @click="resetSession">新会话</el-button>
       <el-button
         v-if="alertId && !messages.length"
@@ -93,10 +93,16 @@
     </div>
     <div v-if="status" class="status">{{ status }}</div>
 
-    <!-- 历史排查（关联告警的过往会话） -->
-    <el-dialog v-model="historyVisible" title="历史排查" width="720px">
+    <!-- 历史排查（选中告警时按告警过滤，否则列出全部会话含自由提问） -->
+    <el-dialog v-model="historyVisible" :title="alertId ? '历史排查（当前告警）' : '历史排查（全部会话）'" width="720px">
       <el-table :data="historyList" size="small" v-loading="historyLoading">
         <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
+        <el-table-column label="类型" width="120">
+          <template #default="{ row }">
+            <el-tag v-if="row.alert_id" size="small" type="warning">告警排查</el-tag>
+            <el-tag v-else size="small" type="info">自由提问</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="时间" width="170">
           <template #default="{ row }">{{ new Date(row.updated_at).toLocaleString() }}</template>
         </el-table-column>
@@ -106,7 +112,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!historyLoading && !historyList.length" description="该告警暂无历史排查" />
+      <el-empty v-if="!historyLoading && !historyList.length" description="暂无历史排查" />
     </el-dialog>
 
     <!-- 历史会话只读查看 -->
@@ -370,7 +376,8 @@ async function openHistory() {
   historyVisible.value = true
   historyLoading.value = true
   try {
-    const resp = await investigationApi.listByAlert(alertId.value)
+    // 选中告警时按告警过滤；否则列出全部会话（含自由提问）
+    const resp = await investigationApi.list(alertId.value || undefined)
     historyList.value = resp.items ?? []
   } catch {
     historyList.value = []
