@@ -100,7 +100,7 @@ Worker 单二进制（Go）
 │   ├── logcheck.go         服务日志流 + 关键词/正则匹配
 │   ├── rescheck.go         资源使用采集（阈值告警）
 │   └── event.go            事件存储（SQLite 持久化队列：Add/Since/Ack/GC/WaitNew）
-├── internal/audit/         审计（SQLite 持久化队列，actor 取 token name）
+├── internal/audit/         审计（SQLite 持久化队列，actor 取 "token名@客户端IP"，auth 关闭时为客户端 IP，stdio 会话为 "stdio"）
 ├── internal/idpproxy/      /idp-proxy/ 本地入口：IdP 请求经反向隧道转发管理端（发现文档改写）
 ├── internal/registryproxy/ /v2/ 镜像中继（pull/push 经隧道流式转发 + blob 磁盘 LRU 缓存）
 ├── internal/mcp/           模块③：MCP Server
@@ -659,9 +659,9 @@ commandPolicy:
 3. **mTLS 双向认证**（管理端↔Worker）：`-tls-cert/-tls-key/-tls-ca` 三参齐备时强制客户端证书（`RequireAndVerifyClientCert`，TLS 1.2+）。`ca.pem`/`cert.pem`/`key.pem` 权限 `0444`/`0400`，证书 `extKeyUsage` 区分 `serverAuth`/`clientAuth`，`subjectAltName` 含所有节点。与 Bearer token 可叠加（证书鉴身份 + token 鉴权限）。
 4. **Swarm 端口**：2377/TCP（manager 间）、7946/TCP+UDP（节点发现）、4789/UDP（VXLAN，仅可信网络，必要时 `--opt encrypted` 启用 IPsec ESP）。daemon 远程 API 走 2376/TLS，**禁用 2375 明文**。
 5. **autolock**：`docker swarm update --autolock=true` 保护 Raft 密钥，manager 重启需 `swarm unlock`，防密钥落盘泄露。
-6. **API/MCP 鉴权（Bearer Token）**：`auth.enabled` + `auth.tokens`（name→secret，name 作审计 actor）；HTTP 中间件（`internal/authz/http.go`）用常量时间比较校验 `Authorization: Bearer`，包住 `/api/v1/local/*`（可执行宿主机命令）与 `/mcp`；gRPC 侧由拦截器（`internal/authz/grpc.go`，unary + stream）从 metadata 取 `authorization: bearer` 同样校验，与 HTTP **共用同一 token 集**，包住 `:9080` 的 `ManagementService` 全部 RPC；`/.well-known/oauth-protected-resource`（RFC 9728）与 `/healthz` 公开。生产通过 `WORKER_TOKENS` env 集中分发 token。**完整 OAuth 2.1 授权码流（PKCE + AS）**：`/.well-known/oauth-protected-resource` 的 `authorization_servers` 字段现由 OpsGaurd IdP 填充（经 `OPSGUARD_IDP_ISSUER` env），MCP 客户端据此发现授权服务器走标准 PKCE 流；静态 bearer token 仍保留兜底，可平滑迁移。对接详见 `docs/IdP-接入指南.md`。
+6. **API/MCP 鉴权（Bearer Token）**：`auth.enabled` + `auth.tokens`（name→secret，"name@客户端IP" 作审计 actor）；HTTP 中间件（`internal/authz/authz.go`）用常量时间比较校验 `Authorization: Bearer`，包住 `/api/v1/local/*`（可执行宿主机命令）与 `/mcp`，auth 关闭时仍注入客户端 IP 作 actor（保证审计可溯源）；gRPC 侧由拦截器（`internal/authz/grpc.go`，unary + stream）从 metadata 取 `authorization: bearer` 同样校验，与 HTTP **共用同一 token 集**，包住 `:9080` 的 `ManagementService` 全部 RPC；`/.well-known/oauth-protected-resource`（RFC 9728）与 `/healthz` 公开。生产通过 `WORKER_TOKENS` env 集中分发 token。**完整 OAuth 2.1 授权码流（PKCE + AS）**：`/.well-known/oauth-protected-resource` 的 `authorization_servers` 字段现由 OpsGaurd IdP 填充（经 `OPSGUARD_IDP_ISSUER` env），MCP 客户端据此发现授权服务器走标准 PKCE 流；静态 bearer token 仍保留兜底，可平滑迁移。对接详见 `docs/IdP-接入指南.md`。
 7. **配置脱敏**：config 中的 `env`/`secrets` 值、`registryAuth` 凭证不得进日志/事件；`slog` 统一脱敏过滤器（`internal/logging`）。
-8. **审计日志**：所有编排写操作（deploy/update/scale/restart/remove）与命令执行（exec_in_container/exec_host_command）记入 `internal/audit`（**SQLite 持久化队列**，`audit.db`），含 actor（token 名）、操作、目标、结果；gRPC `ListAudit` 点查、`SubscribeAudit` 双向流回推（管理端 ack seq 后 GC）。审计与业务日志相互独立。审计 actor 在 leader 写转发场景保持一致——非 leader 转发写 RPC 时携带原 bearer token，leader 据此记录原始调用方。
+8. **审计日志**：所有编排写操作（deploy/update/scale/restart/remove）与命令执行（exec_in_container/exec_host_command）记入 `internal/audit`（**SQLite 持久化队列**，`audit.db`），含 actor（HTTP/MCP 为 "token名@客户端IP"，auth 关闭时为客户端 IP，stdio 会话为 "stdio"）、操作、目标、结果；gRPC `ListAudit` 点查、`SubscribeAudit` 双向流回推（管理端 ack seq 后 GC）。审计与业务日志相互独立。审计 actor 在 leader 写转发场景保持一致——非 leader 转发写 RPC 时携带原 bearer token，leader 据此记录原始调用方。
 
 ---
 

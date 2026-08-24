@@ -93,14 +93,14 @@ func (h *Handler) registerToolsChecks(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "check_port",
 		Description: "One-shot TCP connectivity probe to any host:port, run from swarm nodes (all ready nodes by default, or a specific one). Read-only. Typical use: is host-installed middleware (MySQL, Redis, ...) listening? Probes originate from the node's worker container network — target the node IP, not 127.0.0.1.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in checkPortIn) (*mcp.CallToolResult, checkPortOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in checkPortIn) (*mcp.CallToolResult, checkPortOut, error) {
 		if in.Host == "" {
 			return nil, checkPortOut{}, fmt.Errorf("host is required")
 		}
 		if in.Port <= 0 || in.Port > 65535 {
 			return nil, checkPortOut{}, fmt.Errorf("port must be within 1-65535")
 		}
-		out, err := h.checkPort(context.Background(), in)
+		out, err := h.checkPort(ctx, in)
 		if err != nil {
 			return nil, checkPortOut{}, err
 		}
@@ -111,11 +111,11 @@ func (h *Handler) registerToolsChecks(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "check_http",
 		Description: "One-shot HTTP probe of any URL, run from swarm nodes (all ready nodes by default, or a specific one): status check (default any 2xx) plus optional body regex. Read-only. Probes originate from the node's worker container network — target the node IP, not 127.0.0.1.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in checkHTTPIn) (*mcp.CallToolResult, checkHTTPOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in checkHTTPIn) (*mcp.CallToolResult, checkHTTPOut, error) {
 		if in.URL == "" {
 			return nil, checkHTTPOut{}, fmt.Errorf("url is required")
 		}
-		out, err := h.checkHTTP(context.Background(), in)
+		out, err := h.checkHTTP(ctx, in)
 		if err != nil {
 			return nil, checkHTTPOut{}, err
 		}
@@ -126,8 +126,8 @@ func (h *Handler) registerToolsChecks(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_host_processes",
 		Description: "List host OS processes on swarm nodes (all ready nodes by default, or a specific one), optionally filtered by a name/cmdline substring — find host-installed middleware or Java processes (e.g. filter=\"java\"). Returns pid/name/cmdline/state/memKb/cpuPercent sorted by cpu (or mem). Read-only.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in hostProcsIn) (*mcp.CallToolResult, hostProcsOut, error) {
-		out, err := h.hostProcesses(context.Background(), in)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in hostProcsIn) (*mcp.CallToolResult, hostProcsOut, error) {
+		out, err := h.hostProcesses(ctx, in)
 		if err != nil {
 			return nil, hostProcsOut{}, err
 		}
@@ -138,7 +138,7 @@ func (h *Handler) registerToolsChecks(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "check_flow",
 		Description: "Multi-step HTTP transaction probe, run from swarm nodes (all ready nodes by default, or a specific one). Steps run in order until one fails; each step can extract vars from its response (e.g. token) that later steps reference as {{var}}. Typical use: verify a login chain — POST /login (extract $.data.token) then GET an authed endpoint with Bearer {{token}}. Read-only; extracted values are never echoed back (only var names).",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in checkFlowIn) (*mcp.CallToolResult, checkFlowOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in checkFlowIn) (*mcp.CallToolResult, checkFlowOut, error) {
 		if len(in.Steps) == 0 {
 			return nil, checkFlowOut{}, fmt.Errorf("steps is required")
 		}
@@ -147,7 +147,7 @@ func (h *Handler) registerToolsChecks(s *mcp.Server) {
 				return nil, checkFlowOut{}, fmt.Errorf("steps[%d]: name and url are required", i)
 			}
 		}
-		out, err := h.checkFlow(context.Background(), in)
+		out, err := h.checkFlow(ctx, in)
 		if err != nil {
 			return nil, checkFlowOut{}, err
 		}

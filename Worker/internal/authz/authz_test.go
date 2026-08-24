@@ -49,9 +49,10 @@ func TestWrongTokenRejected(t *testing.T) {
 
 func TestValidTokenPasses(t *testing.T) {
 	mw := New(&agent.AuthConfig{Enabled: true, Tokens: map[string]string{"admin": "s3cr3t"}})
-	got := ""
+	got, want := "", ""
 	srv := httptest.NewServer(mw.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = audit.ActorFromContext(r.Context())
+		want = "admin@" + clientIP(r)
 	})))
 	defer srv.Close()
 	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
@@ -61,7 +62,42 @@ func TestValidTokenPasses(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("valid token: want 200, got %d", resp.StatusCode)
 	}
-	if got != "admin" {
-		t.Fatalf("actor should be token name 'admin', got %q", got)
+	if got != want {
+		t.Fatalf("actor should be %q (token name@client ip), got %q", want, got)
+	}
+}
+
+func TestDisabledStampsClientIP(t *testing.T) {
+	mw := New(&agent.AuthConfig{Enabled: false})
+	got, want := "", ""
+	srv := httptest.NewServer(mw.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = audit.ActorFromContext(r.Context())
+		want = clientIP(r)
+	})))
+	defer srv.Close()
+	resp, _ := http.Get(srv.URL)
+	resp.Body.Close()
+	if got == "" || got == "anonymous" {
+		t.Fatalf("disabled auth should stamp the client ip as actor, got %q", got)
+	}
+	if got != want {
+		t.Fatalf("actor should be %q, got %q", want, got)
+	}
+}
+
+func TestClientIP(t *testing.T) {
+	cases := []struct {
+		remote, want string
+	}{
+		{"10.0.0.5:41234", "10.0.0.5"},
+		{"[2001:db8::1]:443", "2001:db8::1"},
+		{"192.168.1.7", "192.168.1.7"}, // no port: returned as-is
+		{"", ""},
+	}
+	for _, c := range cases {
+		r := &http.Request{RemoteAddr: c.remote}
+		if got := clientIP(r); got != c.want {
+			t.Errorf("clientIP(%q) = %q, want %q", c.remote, got, c.want)
+		}
 	}
 }

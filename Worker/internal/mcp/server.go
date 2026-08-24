@@ -79,10 +79,11 @@ func (h *Handler) HTTPHandler() http.Handler {
 
 // ServeStdio runs the MCP server over stdin/stdout (newline-delimited
 // JSON-RPC; local agents, debugging). Blocks until ctx is cancelled or the
-// stream ends.
+// stream ends. There is no HTTP caller to authenticate, so stdio sessions
+// are tagged with the fixed actor "stdio" in the audit log.
 func (h *Handler) ServeStdio(ctx context.Context) error {
 	tr := &stdioTransport{r: os.Stdin, w: os.Stdout}
-	return h.srv.Run(ctx, tr)
+	return h.srv.Run(audit.ContextWithActor(ctx, "stdio"), tr)
 }
 
 // stdioTransport implements mcp.Transport over an io.Reader/io.Writer with

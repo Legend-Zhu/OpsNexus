@@ -1,14 +1,16 @@
 // Package authz provides bearer-token authentication middleware for the
 // Worker's HTTP API and MCP endpoint. Tokens are configured in the agent
-// config (`auth.tokens`: name -> secret); the token name becomes the audit
-// actor. An OAuth 2.1 Protected Resource Metadata endpoint is served for
-// standards-based discovery (RFC 9728).
+// config (`auth.tokens`: name -> secret); the token name plus client IP
+// ("name@ip") becomes the audit actor (client IP alone when auth is
+// disabled). An OAuth 2.1 Protected Resource Metadata endpoint is served
+// for standards-based discovery (RFC 9728).
 package authz
 
 import (
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 
@@ -42,10 +44,15 @@ func New(cfg *agent.AuthConfig) *Middleware {
 }
 
 // Wrap returns a handler that requires a valid bearer token when enabled.
-// PublicPaths are exempt.
+// PublicPaths are exempt. Regardless of whether auth is enabled, the audit
+// actor is stamped on the request context: "name@ip" when a token matches,
+// or just the client IP when auth is disabled (so unauthenticated
+// deployments still get attributable audit records).
 func (m *Middleware) Wrap(next http.Handler) http.Handler {
 	if !m.enabled {
-		return next
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(audit.ContextWithActor(r.Context(), clientIP(r))))
+		})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for _, p := range m.PublicPaths {
@@ -70,13 +77,23 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 		// constant-time comparison over all configured tokens
 		for name, secret := range m.tokens {
 			if len(secret) == len(token) && subtle.ConstantTimeCompare([]byte(secret), []byte(token)) == 1 {
-				// record the token name as the audit actor
-				next.ServeHTTP(w, r.WithContext(audit.ContextWithActor(r.Context(), name)))
+				// record the token name plus client IP as the audit actor
+				next.ServeHTTP(w, r.WithContext(audit.ContextWithActor(r.Context(), name+"@"+clientIP(r))))
 				return
 			}
 		}
 		writeUnauthorized(w, "invalid bearer token")
 	})
+}
+
+// clientIP extracts the client address from RemoteAddr (host only, port
+// stripped). X-Forwarded-For is deliberately ignored: workers are reached
+// directly, so a forwarded header could only come from a spoofing client.
+func clientIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 // ProtectedResourceMetadata is the OAuth 2.1 resource-server metadata

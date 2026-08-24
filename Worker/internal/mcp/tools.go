@@ -131,8 +131,8 @@ func (h *Handler) registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_services",
 		Description: "List swarm services with replica counts. Optional label filter, e.g. app=web.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in labelIn) (*mcp.CallToolResult, []serviceSummary, error) {
-		svcs, err := h.orch.ListServices(context.Background(), in.Label)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in labelIn) (*mcp.CallToolResult, []serviceSummary, error) {
+		svcs, err := h.orch.ListServices(ctx, in.Label)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -154,8 +154,8 @@ func (h *Handler) registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_service",
 		Description: "Get a service's full detail: spec, tasks, running/desired/healthy counts.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, detailOut, error) {
-		d, err := h.orch.Inspect(context.Background(), in.Name)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, detailOut, error) {
+		d, err := h.orch.Inspect(ctx, in.Name)
 		if err != nil {
 			return nil, detailOut{}, err
 		}
@@ -166,12 +166,12 @@ func (h *Handler) registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "deploy_service",
 		Description: "Deploy a new service from a config (YAML/JSON). Returns a pending operation; poll get_operation for convergence.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in configIn) (*mcp.CallToolResult, opOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in configIn) (*mcp.CallToolResult, opOut, error) {
 		cfg, err := parseConfig(in.Config)
 		if err != nil {
 			return nil, opOut{}, err
 		}
-		op, err := h.orch.Deploy(context.Background(), cfg)
+		op, err := h.orch.Deploy(ctx, cfg)
 		if err != nil {
 			return nil, opOut{}, err
 		}
@@ -182,12 +182,12 @@ func (h *Handler) registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update_service",
 		Description: "Update an existing service from a new config (rolling update).",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in updateIn) (*mcp.CallToolResult, opOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateIn) (*mcp.CallToolResult, opOut, error) {
 		cfg, err := parseConfig(in.Config)
 		if err != nil {
 			return nil, opOut{}, err
 		}
-		op, err := h.orch.Update(context.Background(), in.Name, cfg)
+		op, err := h.orch.Update(ctx, in.Name, cfg)
 		if err != nil {
 			return nil, opOut{}, err
 		}
@@ -198,11 +198,11 @@ func (h *Handler) registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "scale_service",
 		Description: "Scale a service to the given replica count. replicas=0 stops the service and requires confirm=true.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in scaleIn) (*mcp.CallToolResult, opOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in scaleIn) (*mcp.CallToolResult, opOut, error) {
 		if in.Replicas == 0 && !in.Confirm {
 			return nil, opOut{}, fmt.Errorf("scaling to 0 stops the service; set confirm=true to proceed")
 		}
-		op, err := h.orch.Scale(context.Background(), in.Name, in.Replicas)
+		op, err := h.orch.Scale(ctx, in.Name, in.Replicas)
 		if err != nil {
 			return nil, opOut{}, err
 		}
@@ -213,8 +213,8 @@ func (h *Handler) registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "restart_service",
 		Description: "Force swarm to re-create a service's tasks (docker service update --force).",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, opOut, error) {
-		op, err := h.orch.Restart(context.Background(), in.Name)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, opOut, error) {
+		op, err := h.orch.Restart(ctx, in.Name)
 		if err != nil {
 			return nil, opOut{}, err
 		}
@@ -225,11 +225,11 @@ func (h *Handler) registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "remove_service",
 		Description: "Delete a service and its tasks. Destructive: requires confirm=true.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in removeIn) (*mcp.CallToolResult, opOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in removeIn) (*mcp.CallToolResult, opOut, error) {
 		if !in.Confirm {
 			return nil, opOut{}, fmt.Errorf("removing a service is destructive; set confirm=true to proceed")
 		}
-		op, err := h.orch.Remove(context.Background(), in.Name)
+		op, err := h.orch.Remove(ctx, in.Name)
 		if err != nil {
 			return nil, opOut{}, err
 		}
@@ -240,12 +240,12 @@ func (h *Handler) registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_service_logs",
 		Description: "Return the most recent log lines of a service (all tasks aggregated).",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in logsIn) (*mcp.CallToolResult, logsOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in logsIn) (*mcp.CallToolResult, logsOut, error) {
 		tail := in.Tail
 		if tail <= 0 {
 			tail = 200
 		}
-		lines, err := h.recentLogs(context.Background(), in.Name, tail)
+		lines, err := h.recentLogs(ctx, in.Name, tail)
 		if err != nil {
 			return nil, logsOut{}, err
 		}
@@ -289,8 +289,8 @@ func (h *Handler) registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_nodes",
 		Description: "List swarm nodes with role and health status.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, nodesOut, error) {
-		nodes, err := h.cli.ListNodes(context.Background(), nil)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, nodesOut, error) {
+		nodes, err := h.cli.ListNodes(ctx, nil)
 		if err != nil {
 			return nil, nodesOut{}, err
 		}
@@ -305,8 +305,8 @@ func (h *Handler) registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_node",
 		Description: "Get a single swarm node by id or hostname.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in nodeIn) (*mcp.CallToolResult, nodeOut, error) {
-		nodes, err := h.cli.ListNodes(context.Background(), nil)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in nodeIn) (*mcp.CallToolResult, nodeOut, error) {
+		nodes, err := h.cli.ListNodes(ctx, nil)
 		if err != nil {
 			return nil, nodeOut{}, err
 		}
@@ -322,8 +322,8 @@ func (h *Handler) registerTools(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_self",
 		Description: "Report this Worker's own node identity and swarm role (nodeId, role, leader, swarmManager).",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, orchestrator.SelfInfo, error) {
-		si, err := h.orch.Self(context.Background())
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, orchestrator.SelfInfo, error) {
+		si, err := h.orch.Self(ctx)
 		if err != nil {
 			return nil, orchestrator.SelfInfo{}, err
 		}

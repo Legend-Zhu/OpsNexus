@@ -84,8 +84,8 @@ func (h *Handler) registerToolsMetrics(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_resource_usage",
 		Description: "Query real-time CPU and memory usage of a service's task containers across all swarm nodes (percent of limits; CPU is a ~1s delta rate).",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in resIn) (*mcp.CallToolResult, resOut, error) {
-		out, err := h.resourceUsage(context.Background(), in.Name)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in resIn) (*mcp.CallToolResult, resOut, error) {
+		out, err := h.resourceUsage(ctx, in.Name)
 		if err != nil {
 			return nil, resOut{}, err
 		}
@@ -96,19 +96,19 @@ func (h *Handler) registerToolsMetrics(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "exec_in_container",
 		Description: "Run a command inside a service's running container, routed to whichever node runs the task. Dangerous: executes arbitrary commands as the container user; requires confirm=true.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in execIn) (*mcp.CallToolResult, execOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in execIn) (*mcp.CallToolResult, execOut, error) {
 		if !in.Confirm {
 			return nil, execOut{}, fmt.Errorf("exec runs arbitrary commands inside the container; set confirm=true to proceed")
 		}
 		if len(in.Command) == 0 {
 			return nil, execOut{}, fmt.Errorf("command is required")
 		}
-		out, err := h.execInContainer(context.Background(), in.Service, in.Slot, in.Command)
+		out, err := h.execInContainer(ctx, in.Service, in.Slot, in.Command)
 		if err != nil {
-			h.auditAction(audit.ActionExec, joinArgs(in.Command), in.Service, false, err.Error())
+			h.auditAction(ctx, audit.ActionExec, joinArgs(in.Command), in.Service, false, err.Error())
 			return nil, execOut{}, err
 		}
-		h.auditAction(audit.ActionExec, joinArgs(in.Command), in.Service, true, "slot="+itoa(out.Slot)+" node="+out.Node)
+		h.auditAction(ctx, audit.ActionExec, joinArgs(in.Command), in.Service, true, "slot="+itoa(out.Slot)+" node="+out.Node)
 		return nil, out, nil
 	})
 
@@ -116,24 +116,26 @@ func (h *Handler) registerToolsMetrics(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "exec_host_command",
 		Description: "Run a command on a swarm node's host OS (nsenter, privileged worker). Targets all nodes by default, or a specific node. Subject to the command blacklist/whitelist policy; requires confirm=true.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in hostIn) (*mcp.CallToolResult, hostOut, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in hostIn) (*mcp.CallToolResult, hostOut, error) {
 		if !in.Confirm {
 			return nil, hostOut{}, fmt.Errorf("host command execution is powerful; set confirm=true to proceed")
 		}
 		if in.Command == "" {
 			return nil, hostOut{}, fmt.Errorf("command is required")
 		}
-		out, err := h.execHost(context.Background(), in.Command, in.Node)
+		out, err := h.execHost(ctx, in.Command, in.Node)
 		if err != nil {
 			return nil, hostOut{}, err
 		}
-		h.auditAction(audit.ActionHostExec, in.Command, in.Node, true, "")
+		h.auditAction(ctx, audit.ActionHostExec, in.Command, in.Node, true, "")
 		return nil, out, nil
 	})
 }
 
-// auditAction records a command-execution action in the audit log.
-func (h *Handler) auditAction(action audit.Action, command, target string, ok bool, detail string) {
+// auditAction records a command-execution action in the audit log. The actor
+// is taken from the request context (token name@ip via the auth middleware,
+// or "stdio" for local stdio sessions).
+func (h *Handler) auditAction(ctx context.Context, action audit.Action, command, target string, ok bool, detail string) {
 	if h.audit == nil {
 		return
 	}
@@ -142,7 +144,7 @@ func (h *Handler) auditAction(action audit.Action, command, target string, ok bo
 		cmd = cmd[:200] + "..."
 	}
 	h.audit.Add(audit.Entry{
-		Actor:   "mcp",
+		Actor:   audit.ActorFromContext(ctx),
 		Action:  action,
 		Command: cmd,
 		Target:  target,
