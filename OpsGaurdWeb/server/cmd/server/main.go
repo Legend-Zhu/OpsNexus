@@ -151,8 +151,15 @@ func main() {
 	clusterSvc.OnClusterRemove(ingestMgr.Remove)
 	defer ingestMgr.Stop()
 
-	// 告警规则服务（P6：管理 Worker monitoring config）
-	h.SetAlertRuleService(alertrule.New(st, clusterSvc))
+	// 告警规则服务（P6：管理 Worker monitoring config）。
+	// 删集群时同步清理其规则，避免永不可下发的孤儿记录。
+	ruleSvc := alertrule.New(st, clusterSvc)
+	h.SetAlertRuleService(ruleSvc)
+	clusterSvc.OnClusterRemove(func(name string) {
+		if err := ruleSvc.RemoveCluster(name); err != nil {
+			log.Error("remove alert rules on cluster delete", "cluster", name, "err", err)
+		}
+	})
 
 	// 纳管对象监控调度器：执行 inventory 条目（standalone-container /
 	// host-service）声明的 monitoring——经 workerproxy 一次性探测原语

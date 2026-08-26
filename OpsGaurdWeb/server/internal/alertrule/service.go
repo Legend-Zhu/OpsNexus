@@ -113,6 +113,21 @@ func (s *Service) Delete(ctx context.Context, clusterName, service string, force
 	return res, nil
 }
 
+// RemoveCluster 删除集群下全部规则（集群删除回调）。集群既已删除，
+// 规则的生效点不复存在、也永不可再下发，直接清理避免孤儿记录。
+func (s *Service) RemoveCluster(clusterName string) error {
+	rules, err := s.st.ListAlertRules(clusterName)
+	if err != nil {
+		return err
+	}
+	for _, r := range rules {
+		if err := s.st.DeleteAlertRule(clusterName, r.Service); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // stopActive 停止规则在生效点的监控（幂等，可重复执行）。
 // 目标判定与 Apply 一致：swarm service 优先，否则按纳管清单条目处理；
 // 与 Apply 不同的是，Worker 不可达等传输错误视为停止失败（无法确认监控状态，

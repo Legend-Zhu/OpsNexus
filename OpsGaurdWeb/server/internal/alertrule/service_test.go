@@ -316,6 +316,35 @@ func TestDeleteFailFastAndForce(t *testing.T) {
 	}
 }
 
+// TestRemoveClusterPurgesRules 集群删除回调：清理该集群全部规则，其他集群不受影响。
+func TestRemoveClusterPurgesRules(t *testing.T) {
+	svc, _, st := newTestRule(t)
+	if err := st.PutCluster(&store.Cluster{Name: "prod", WorkerURL: "http://127.0.0.1:1", Status: store.ClusterOnline}); err != nil {
+		t.Fatalf("put cluster: %v", err)
+	}
+	if _, err := svc.Upsert(&store.AlertRule{Cluster: "dev", Service: "web", Monitoring: store.Monitoring{Enabled: true}}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if _, err := svc.Upsert(&store.AlertRule{Cluster: "dev", Service: "db", Monitoring: store.Monitoring{Enabled: true}}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if _, err := svc.Upsert(&store.AlertRule{Cluster: "prod", Service: "web", Monitoring: store.Monitoring{Enabled: true}}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	if err := svc.RemoveCluster("dev"); err != nil {
+		t.Fatalf("remove cluster rules: %v", err)
+	}
+	devRules, err := svc.List("dev")
+	if err != nil || len(devRules) != 0 {
+		t.Fatalf("dev rules should be purged, got %+v err=%v", devRules, err)
+	}
+	prodRules, err := svc.List("prod")
+	if err != nil || len(prodRules) != 1 || prodRules[0].Service != "web" {
+		t.Fatalf("prod rules should be intact, got %+v err=%v", prodRules, err)
+	}
+}
+
 // TestDeleteClusterGone 集群已删除：无生效点，直接删规则。
 func TestDeleteClusterGone(t *testing.T) {
 	svc, _, st := newTestRule(t)
