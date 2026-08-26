@@ -219,6 +219,19 @@ func main() {
 		})
 		orch.SetMonitor(monMgr)
 
+		// 监控配置持久化 + 启动重建：监控 job 只存在于 Manager 内存，不落盘
+		// 则 Worker 重启后全部静默消失（服务本身仍在 swarm 上，监控理应随
+		// Worker 恢复）。重建失败不阻塞启动，仅告警。
+		orch.SetMonitorConfigStore(orchestrator.NewMonitorConfigStore(filepath.Join(dataDir, "monitoring.json")))
+		rctx, rcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		restored, pruned, rerr := orch.RestoreMonitors(rctx)
+		rcancel()
+		if rerr != nil {
+			log.Error("monitor restore failed", "err", rerr)
+		} else if restored > 0 || pruned > 0 {
+			log.Info("monitors restored after restart", "restored", restored, "pruned", pruned)
+		}
+
 		// P3 MCP: expose the same capabilities to LLM agents over Streamable HTTP.
 		mcpHandler, err = mcp.NewWithAudit(orch, monMgr, cli, log, auditStore)
 		if err != nil {

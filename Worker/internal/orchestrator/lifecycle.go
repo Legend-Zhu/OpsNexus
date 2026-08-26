@@ -22,11 +22,12 @@ type Orchestrator struct {
 	store        *OperationStore
 	log          *slog.Logger
 	readyTimeout time.Duration
-	mon          MonitorRegistrar // optional P2 hook; nil disables
-	audit        *audit.Store     // optional audit log; nil disables
-	workerPort   string           // node-worker HTTP proxy port (default WorkerPort)
-	grpcPort     string           // management gRPC port (default "9080"); leader write-forwarding targets it
-	authToken    string           // bearer token forwarded to node-worker HTTP API (when auth enabled)
+	mon          MonitorRegistrar    // optional P2 hook; nil disables
+	monCfg       *MonitorConfigStore // optional monitoring persistence; nil disables
+	audit        *audit.Store        // optional audit log; nil disables
+	workerPort   string              // node-worker HTTP proxy port (default WorkerPort)
+	grpcPort     string              // management gRPC port (default "9080"); leader write-forwarding targets it
+	authToken    string              // bearer token forwarded to node-worker HTTP API (when auth enabled)
 }
 
 // MonitorRegistrar is the P2 monitoring hook implemented by monitor.Manager.
@@ -145,6 +146,12 @@ func (o *Orchestrator) SetMonitor(m MonitorRegistrar) {
 	o.mon = m
 }
 
+// SetMonitorConfigStore wires the monitoring persistence store (nil disables).
+// Without it monitoring cannot be rebuilt after a Worker restart.
+func (o *Orchestrator) SetMonitorConfigStore(s *MonitorConfigStore) {
+	o.monCfg = s
+}
+
 // SetAudit wires the audit log (nil disables).
 func (o *Orchestrator) SetAudit(a *audit.Store) {
 	o.audit = a
@@ -245,6 +252,7 @@ func (o *Orchestrator) Deploy(ctx context.Context, cfg *config.Config) (*Operati
 	o.store.Put(op)
 	go o.pollReadiness(op, id, configHasHealth(cfg))
 	o.registerMonitor(cfg)
+	o.saveMonitoring(cfg.Service.Name, cfg.Monitoring)
 	o.auditAction(ctx, audit.ActionDeploy, cfg.Service.Name, true, "service="+cfg.Service.Image)
 	return op, nil
 }
@@ -280,6 +288,7 @@ func (o *Orchestrator) Update(ctx context.Context, name string, cfg *config.Conf
 	o.store.Put(op)
 	go o.pollReadiness(op, svc.ID, configHasHealth(cfg))
 	o.registerMonitor(cfg)
+	o.saveMonitoring(name, cfg.Monitoring)
 	o.auditAction(ctx, audit.ActionUpdate, name, true, "image="+cfg.Service.Image)
 	return op, nil
 }
@@ -343,6 +352,11 @@ func (o *Orchestrator) Remove(ctx context.Context, name string) (*Operation, err
 	o.store.Put(op)
 	if o.mon != nil {
 		o.mon.Unregister(name)
+	}
+	if o.monCfg != nil {
+		if err := o.monCfg.Delete(name); err != nil {
+			o.log.Error("remove persisted monitoring config", "service", name, "err", err)
+		}
 	}
 	o.auditAction(ctx, audit.ActionRemove, name, true, "removed")
 	return op, nil
@@ -529,6 +543,61 @@ func (o *Orchestrator) registerMonitor(cfg *config.Config) {
 	if o.mon != nil {
 		o.mon.Register(cfg.Service.Name, &cfg.Monitoring)
 	}
+}
+
+// saveMonitoring persists the monitoring block alongside registerMonitor so a
+// restart can rebuild the jobs. Failure only logs: monitoring runs until the
+// next restart, and the next Deploy/Update retries persistence.
+func (o *Orchestrator) saveMonitoring(service string, m config.Monitoring) {
+	if o.monCfg == nil {
+		return
+	}
+	if err := o.monCfg.Put(service, m); err != nil {
+		o.log.Error("persist monitoring config", "service", service, "err", err)
+	}
+}
+
+// RestoreMonitors rebuilds monitor jobs at startup from the persisted configs:
+// for every service whose monitoring was persisted AND that still exists in
+// the swarm, register it again (disabled blocks are skipped — nothing to run).
+// Entries whose service no longer exists are pruned (removed outside OpsGuard).
+// Returns the number of jobs restored and entries pruned.
+func (o *Orchestrator) RestoreMonitors(ctx context.Context) (restored, pruned int, err error) {
+	if o.monCfg == nil {
+		return 0, 0, nil
+	}
+	configs, err := o.monCfg.All()
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(configs) == 0 {
+		return 0, 0, nil
+	}
+	services, err := o.cli.ListServices(ctx, nil)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list services: %w", err)
+	}
+	alive := make(map[string]struct{}, len(services))
+	for _, svc := range services {
+		alive[svc.Spec.Name] = struct{}{}
+	}
+	for name, m := range configs {
+		if _, ok := alive[name]; !ok {
+			if derr := o.monCfg.Delete(name); derr != nil {
+				o.log.Error("prune stale monitoring config", "service", name, "err", derr)
+				continue
+			}
+			pruned++
+			continue
+		}
+		if o.mon == nil || !m.Enabled {
+			continue
+		}
+		mm := m
+		o.mon.Register(name, &mm)
+		restored++
+	}
+	return restored, pruned, nil
 }
 
 func configHasHealth(cfg *config.Config) bool {
