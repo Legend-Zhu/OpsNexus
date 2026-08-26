@@ -249,21 +249,29 @@ func (h *Handlers) ApplyAlertRule(c *gin.Context) {
 }
 
 // DeleteAlertRule godoc: DELETE /api/v1/alertrules/:cluster/:service
+// 删除规则并级联停止其已生效的监控；?force=true 在停止失败时强删（响应如实报告未停止）。
 func (h *Handlers) DeleteAlertRule(c *gin.Context) {
 	if h.ruleSvc == nil {
 		fail(c, http.StatusServiceUnavailable, "alert rule service not initialized")
 		return
 	}
-	if err := h.ruleSvc.Delete(c.Param("cluster"), c.Param("service")); err != nil {
+	force := c.Query("force") == "true"
+	res, err := h.ruleSvc.Delete(c.Request.Context(), c.Param("cluster"), c.Param("service"), force)
+	if err != nil {
 		var nf alertrule.ErrNotFound
 		if errors.As(err, &nf) {
 			fail(c, http.StatusNotFound, nf.Error())
 			return
 		}
+		var sf alertrule.ErrStopFailed
+		if errors.As(err, &sf) {
+			fail(c, http.StatusBadGateway, err.Error())
+			return
+		}
 		fail(c, http.StatusInternalServerError, "delete rule: "+err.Error())
 		return
 	}
-	ok(c, http.StatusOK, gin.H{"deleted": c.Param("cluster") + "/" + c.Param("service")})
+	ok(c, http.StatusOK, res)
 }
 
 // --- 认证 / 用户 ---

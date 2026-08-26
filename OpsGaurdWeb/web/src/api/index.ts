@@ -164,11 +164,20 @@ export const notifyApi = {
 }
 
 // ---- 告警规则（P6；list 可按集群过滤） ----
+
+/** 删除结果：删除会级联停止已生效的监控；停止失败时默认保留规则，force 强删则如实报告未停止 */
+export interface AlertRuleDeleteResult {
+  deleted: string
+  stopped: boolean
+  stopError?: string
+}
+
 export const alertRuleApi = {
   list: (cluster?: string) => get<{ items: AlertRule[] }>('/v1/alertrules', { params: cluster ? { cluster } : {} }),
   upsert: (body: Partial<AlertRule>) => put<AlertRule>('/v1/alertrules', body),
   apply: (body: Partial<AlertRule>) => post<AlertRule>('/v1/alertrules/apply', body),
-  remove: (cluster: string, service: string) => del<{ deleted: string }>(`/v1/alertrules/${cluster}/${service}`),
+  remove: (cluster: string, service: string, force = false) =>
+    del<AlertRuleDeleteResult>(`/v1/alertrules/${cluster}/${service}`, force ? { params: { force: true } } : undefined),
 }
 
 // ---- 认证 / 用户（P6：本地登录 + SSO/OIDC） ----

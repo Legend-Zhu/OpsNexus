@@ -8,6 +8,7 @@ package alertrule
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -15,6 +16,10 @@ import (
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ErrNotFound 规则不存在。
@@ -28,6 +33,12 @@ func (e ErrNotFound) Error() string {
 type ErrInvalid struct{ Msg string }
 
 func (e ErrInvalid) Error() string { return "invalid alert rule: " + e.Msg }
+
+// ErrStopFailed 停止生效监控失败（规则未删除；可重试或 force 强删）。
+type ErrStopFailed struct{ Err error }
+
+func (e ErrStopFailed) Error() string { return "停止监控失败，规则未删除: " + e.Err.Error() }
+func (e ErrStopFailed) Unwrap() error { return e.Err }
 
 // Service 告警规则服务。
 type Service struct {
@@ -65,16 +76,142 @@ func (s *Service) Upsert(r *store.AlertRule) (*store.AlertRule, error) {
 	return r, nil
 }
 
-// Delete 删除规则。
-func (s *Service) Delete(clusterName, service string) error {
+// DeleteResult 删除结果。
+type DeleteResult struct {
+	Deleted string `json:"deleted"`            // "cluster/service"
+	Stopped bool   `json:"stopped"`            // 生效监控是否已成功停止
+	StopErr string `json:"stopError,omitempty"` // force 删除时停止失败的原因
+}
+
+// Delete 删除规则，并先停止该规则已生效的监控（Apply 的逆操作）：
+//   - swarm service：向 Worker 下发 enabled: false 配置（Update 全量替换，监控必停）；
+//   - inventory item：清除清单同名条目的 Monitoring 声明（invmonitor 探测循环随即不再执行）。
+//
+// 停止失败时：默认返回错误并保留规则（fail-fast，状态仍可补救）；force=true 时
+// 强删规则，并在 DeleteResult 中如实报告监控未停止。目标本无生效监控可停
+// （从未下发、服务/条目已不存在、集群已删除）时视为已停止，直接删除。
+func (s *Service) Delete(ctx context.Context, clusterName, service string, force bool) (*DeleteResult, error) {
 	existing, err := s.st.GetAlertRule(clusterName, service)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if existing == nil {
-		return ErrNotFound{Cluster: clusterName, Service: service}
+		return nil, ErrNotFound{Cluster: clusterName, Service: service}
 	}
-	return s.st.DeleteAlertRule(clusterName, service)
+
+	stopped, stopErr := s.stopActive(ctx, clusterName, service)
+	if stopErr != nil && !force {
+		return nil, ErrStopFailed{Err: stopErr}
+	}
+	if err := s.st.DeleteAlertRule(clusterName, service); err != nil {
+		return nil, err
+	}
+	res := &DeleteResult{Deleted: clusterName + "/" + service, Stopped: stopped}
+	if stopErr != nil {
+		res.StopErr = stopErr.Error()
+	}
+	return res, nil
+}
+
+// stopActive 停止规则在生效点的监控（幂等，可重复执行）。
+// 目标判定与 Apply 一致：swarm service 优先，否则按纳管清单条目处理；
+// 与 Apply 不同的是，Worker 不可达等传输错误视为停止失败（无法确认监控状态，
+// 不能像 Apply 那样静默降级到清单），仅服务确不存在（NotFound）才回退清单。
+func (s *Service) stopActive(ctx context.Context, clusterName, service string) (bool, error) {
+	cli, err := s.clusters.WorkerClient(clusterName)
+	if err != nil {
+		var nf cluster.ErrNotFound
+		if errors.As(err, &nf) {
+			return true, nil // 集群已删除，生效点不存在
+		}
+		return false, fmt.Errorf("worker client: %w", err)
+	}
+	d, werr := cli.GetWorkload(ctx, service)
+	if werr != nil {
+		if !isServiceNotFound(werr) {
+			return false, fmt.Errorf("get workload: %w", werr)
+		}
+		// 服务确不存在 —— 清除纳管清单同名条目的监控声明（若存在）。
+		if _, invErr := s.disableInInventory(ctx, clusterName, service); invErr != nil {
+			return false, invErr
+		}
+		return true, nil
+	}
+	yamlText, err := buildWorkloadConfig(service, d, store.Monitoring{Enabled: false})
+	if err != nil {
+		return false, err
+	}
+	op, err := cli.Update(ctx, service, yamlText)
+	if err != nil {
+		return false, fmt.Errorf("worker update: %w", err)
+	}
+	if op.Status == "failed" {
+		return false, fmt.Errorf("worker update failed: %s", op.Error)
+	}
+	return true, nil
+}
+
+// disableInInventory 清除纳管清单中同名条目的 Monitoring 字段（applyToInventory 的逆操作）。
+// 返回 ok=false 表示清单中没有该条目或条目本就未声明监控。
+func (s *Service) disableInInventory(ctx context.Context, clusterName, service string) (bool, error) {
+	rec, err := s.clusters.GetStatic(clusterName)
+	if err != nil {
+		return false, fmt.Errorf("get cluster: %w", err)
+	}
+	if rec.Inventory == nil {
+		return false, nil
+	}
+	for i := range rec.Inventory.Items {
+		if rec.Inventory.Items[i].Name == service {
+			if rec.Inventory.Items[i].Monitoring == nil {
+				return false, nil
+			}
+			rec.Inventory.Items[i].Monitoring = nil
+			if _, err := s.clusters.UpdateInventory(ctx, clusterName, rec.Inventory); err != nil {
+				return false, fmt.Errorf("update inventory: %w", err)
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// isServiceNotFound 判断 GetWorkload 错误是否为"服务不存在"（Worker 返回
+// codes.NotFound）；连接失败/超时等传输错误不是。
+func isServiceNotFound(err error) bool {
+	var unreach *workerproxy.ErrUnreachable
+	if errors.As(err, &unreach) {
+		return status.Code(unreach.Err) == codes.NotFound
+	}
+	return status.Code(err) == codes.NotFound
+}
+
+// buildWorkloadConfig 按工作负载现状与监控块拼装完整服务 config YAML
+// （Worker 契约：service 块 + monitoring 块；Update 为全量替换语义）。
+func buildWorkloadConfig(service string, d workerproxy.WorkloadDetail, monitoring store.Monitoring) (string, error) {
+	svc := map[string]any{
+		"name":  service,
+		"image": d.Image,
+	}
+	if d.Mode == "replicated" && d.Desired > 0 {
+		svc["replicas"] = d.Desired
+	}
+	if len(d.Ports) > 0 {
+		var ports []map[string]any
+		for _, p := range d.Ports {
+			ports = append(ports, map[string]any{"target": p.TargetPort, "published": p.PublishedPort, "protocol": p.Protocol})
+		}
+		svc["ports"] = ports
+	}
+	cfg := map[string]any{
+		"service":    svc,
+		"monitoring": monitoring,
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("marshal config: %w", err)
+	}
+	return string(data), nil
 }
 
 // Apply 下发规则：
@@ -107,29 +244,11 @@ func (s *Service) Apply(ctx context.Context, r *store.AlertRule) error {
 	}
 
 	// 拼装完整服务 config（Worker 契约：service 块 + monitoring 块）
-	svc := map[string]any{
-		"name":  r.Service,
-		"image": d.Image,
-	}
-	if d.Mode == "replicated" && d.Desired > 0 {
-		svc["replicas"] = d.Desired
-	}
-	if len(d.Ports) > 0 {
-		var ports []map[string]any
-		for _, p := range d.Ports {
-			ports = append(ports, map[string]any{"target": p.TargetPort, "published": p.PublishedPort, "protocol": p.Protocol})
-		}
-		svc["ports"] = ports
-	}
-	cfg := map[string]any{
-		"service":    svc,
-		"monitoring": r.Monitoring,
-	}
-	yamlText, err := yaml.Marshal(cfg)
+	yamlText, err := buildWorkloadConfig(r.Service, d, r.Monitoring)
 	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
+		return err
 	}
-	op, err := cli.Update(ctx, r.Service, string(yamlText))
+	op, err := cli.Update(ctx, r.Service, yamlText)
 	if err != nil {
 		return fmt.Errorf("worker update: %w", err)
 	}

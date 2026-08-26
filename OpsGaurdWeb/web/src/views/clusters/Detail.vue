@@ -762,9 +762,44 @@ async function applyRule(row: AlertRule) {
 }
 
 async function removeRule(row: AlertRule) {
-  await ElMessageBox.confirm(`删除规则 ${row.service}？（不会改动服务当前已生效的监控配置）`, '删除规则', { type: 'warning' })
-  await alertRuleApi.remove(row.cluster, row.service)
-  ElMessage.success('已删除')
+  try {
+    await ElMessageBox.confirm(
+      `删除规则 ${row.service}？将同时停止其已生效的监控（swarm 服务向 Worker 下发禁用配置；纳管对象清除清单中的监控声明）`,
+      '删除规则',
+      { type: 'warning' },
+    )
+  } catch {
+    return // 取消
+  }
+  const doRemove = async (force: boolean) => {
+    const res = await alertRuleApi.remove(row.cluster, row.service, force)
+    if (res.stopped) {
+      ElMessage.success('已删除并停止监控')
+    } else {
+      ElMessage.warning(`规则已删除，但监控未能停止：${res.stopError ?? '未知原因'}`)
+    }
+  }
+  try {
+    await doRemove(false)
+  } catch (e) {
+    // 停止监控失败（502）时规则被保留；其他错误已由 http 拦截器提示
+    const resp = (e as { response?: { status?: number; data?: { message?: string } } })?.response
+    if (resp?.status !== 502) return
+    try {
+      await ElMessageBox.confirm(
+        `停止监控失败，规则已保留：${resp.data?.message ?? ''}\n是否强制删除？强制删除后监控将继续运行，且无法再通过规则停止。`,
+        '强制删除规则',
+        { type: 'warning', confirmButtonText: '强制删除', cancelButtonText: '取消' },
+      )
+    } catch {
+      return // 取消
+    }
+    try {
+      await doRemove(true)
+    } catch {
+      return // 错误已由 http 拦截器提示
+    }
+  }
   await loadRules()
 }
 
