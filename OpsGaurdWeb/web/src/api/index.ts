@@ -1,4 +1,5 @@
 import { get, post, del, put, getToken } from './http'
+import type { AxiosProgressEvent } from 'axios'
 import type {
   AddClusterPayload,
   AINexusConfig,
@@ -258,8 +259,8 @@ export const registryApi = {
   builds: () => get<{ items: BuildTask[] }>('/v1/registry/builds'),
   build: (id: string) => get<BuildTask>(`/v1/registry/builds/${id}`),
   // 上传构建包（multipart，大文件放宽超时到 10 分钟）
-  submitBuild: (form: FormData) =>
-    post<BuildTask>('/v1/registry/builds', form, { timeout: 600000 }),
+  submitBuild: (form: FormData, onUploadProgress?: (event: AxiosProgressEvent) => void) =>
+    post<BuildTask>('/v1/registry/builds', form, { timeout: 600000, onUploadProgress }),
 }
 
 // ---- MLOps（提示词管理，P1；启用需 server 配置 mlops.enabled=true） ----

@@ -80,8 +80,14 @@ docker push {{ registryAddr }}/myapp:v1</pre>
           <span class="muted">（项目名/镜像名仅允许小写字母、数字、_ . -）</span>
         </div>
 
+        <div v-if="uploading" class="upload-status">
+          <span>上传中</span>
+          <el-progress :percentage="uploadProgress" :indeterminate="uploadProgress === 0" style="width: 320px" />
+          <span class="mono dim">{{ uploadProgress }}%</span>
+        </div>
+
         <!-- 当前构建进度 -->
-        <template v-if="currentTask">
+        <template v-if="currentTask && !uploading">
           <div class="build-status">
             <el-progress :percentage="currentTask.progress < 0 ? 100 : currentTask.progress"
               :status="currentTask.status === 'FAILED' ? 'exception' : currentTask.status === 'SUCCESS' ? 'success' : undefined"
@@ -177,6 +183,8 @@ const registryAddr = computed(() => (info.value ? `${info.value.hostname}:${info
 const zipFile = ref<File | null>(null)
 const buildForm = reactive({ project: '', name: '', tag: '' })
 const building = ref(false)
+const uploading = ref(false)
+const uploadProgress = ref(0)
 const currentTask = ref<BuildTask | null>(null)
 const builds = ref<BuildTask[]>([])
 const images = ref<RegistryRepo[]>([])
@@ -263,14 +271,20 @@ async function submitBuild() {
   form.append('name', `${buildForm.project.trim()}/${buildForm.name.trim()}`)
   form.append('tag', buildForm.tag.trim())
   building.value = true
+  uploading.value = true
+  uploadProgress.value = 0
   try {
-    const task = await registryApi.submitBuild(form)
+    const task = await registryApi.submitBuild(form, (event) => {
+      if (!event.total) return
+      uploadProgress.value = Math.min(100, Math.max(0, Math.round((event.loaded / event.total) * 100)))
+    })
     currentTask.value = task
     startPoll(task.id)
     ElMessage.success('构建任务已提交')
   } catch {
     /* 错误已由 http.ts 提示 */
   } finally {
+    uploading.value = false
     building.value = false
   }
 }
@@ -393,6 +407,7 @@ onBeforeUnmount(stopPoll)
   color: var(--el-text-color-placeholder);
   font-size: 12px;
 }
+.upload-status,
 .build-status {
   display: flex;
   align-items: center;
