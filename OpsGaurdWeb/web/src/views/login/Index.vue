@@ -46,8 +46,6 @@
       >
         企业 SSO 登录
       </el-button>
-
-      <p v-if="hint" class="hint">{{ hint }}</p>
     </div>
   </div>
 </template>
@@ -68,7 +66,6 @@ const form = reactive({ username: '', password: '' })
 const loading = ref(false)
 const localEnabled = ref(true)
 const ssoEnabled = ref(false)
-const hint = ref('')
 
 const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
@@ -107,8 +104,6 @@ function goSSO() {
 
 onMounted(() => {
   void loadSSOStatus()
-  // 提示默认账号（后端 bootstrap 播种）
-  hint.value = '本地默认账号 admin / opsguard-admin'
 })
 </script>
 
@@ -207,12 +202,6 @@ onMounted(() => {
 }
 .divider {
   margin: 20px 0 16px;
-}
-.hint {
-  margin-top: 18px;
-  text-align: center;
-  color: var(--og-text-dim);
-  font-size: 12px;
 }
 .no-local {
   text-align: center;

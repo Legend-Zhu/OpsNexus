@@ -257,6 +257,21 @@
     取值渲染，字符串取 `.value` 为 undefined → 下拉全是空白行、点击选不中。
     改为返回 `{ value: p }` 对象数组。重打/验证/回滚同记录 17（新 bundle
     `index-E2zWGwlk.js`，回滚目标 1.2.13）。
+19. **告警规则删除级联停止 + 登录页默认账号提示移除（2026-08-26，
+    server 1.2.14→1.2.15→1.2.16，worker 无改动仍 1.2.7）**：
+    - **1.2.15**（提交 `199efdb`/`51d4560`）：删除规则改为逆向下发——swarm 服务
+      向 Worker 推 `enabled:false`、纳管对象清清单 Monitoring；停止失败保留
+      规则（502）可 `?force=true` 强删。本地交叉编译 server（29MB）+ 新 dist
+      打包上传 `/opt/opsguard/build/1.2.15/`，`FROM 1.2.14` 重打。
+      验证：healthz 200、GET `/` `/login` 200、未认证 alertrules 401、旧容器留作
+      `opsguard-server-1.2.14-backup`。
+    - **1.2.16**（仅前端，同日跟进）：登录页移除「本地默认账号 admin / …」提示
+      及死代码（`views/login/Index.vue`）。**注意 COPY 只覆盖同名文件**：首次
+      重打后容器内仍残留 1.2.15 旧 chunk（含旧提示文案，页面已不引用但可按
+      hash 直链访问）——重打改为 `FROM 1.2.15 + rm -rf /app/web/* + COPY web/`
+      （同记录 14 口径），容器内 `grep -rl opsguard-admin /app/web/assets`
+      确认零命中。验证：healthz 200、`/login` 200（bundle `index-CXMPMFPC.js`）。
+    - **回滚**：`opsguard-server:1.2.14` / `:1.2.15` 镜像均保留，原样 run 即可。
 
 ### 安责险集群（3 节点）部署记录（2026-08-14）
 
