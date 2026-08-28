@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 )
 
@@ -79,7 +80,7 @@ func (h *Handlers) RecoverAlert(c *gin.Context) {
 	}
 	// 恢复通知（与 ack 通知对齐）
 	if h.notifySvc != nil {
-		_ = h.notifySvc.NotifyAlert(c.Request.Context(), a, fmt.Sprintf("[%s/%s] 告警已恢复（手动）：%s", a.Cluster, a.Service, a.Title))
+		_ = h.notifySvc.NotifyAlert(c.Request.Context(), a, fmt.Sprintf("[%s/%s] 告警已恢复（手动）：%s", a.Cluster, a.Service, ingest.TitleBody(a.Title)))
 	}
 	ok(c, http.StatusOK, a)
 }

@@ -26,7 +26,7 @@
 
 | 文件 | 部署位置 | 说明 |
 |---|---|---|
-| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.14，离线重打见记录 10/11/12/14/16/17/18） |
+| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.17，离线重打见记录 10/11/12/14/16/17/18/19/20） |
 | bundle/opsguard-worker-1.0.0.tar … opsguard-worker-1.1.0.tar | /opt/opsguard/images/ | Worker 镜像（当前线 = 1.2.7，离线重打/中继分发见记录 10/11/12/15） |
 | bundle/docker-27.5.1.tgz | /opt/opsguard/offline/ | docker 静态二进制 |
 | install-docker.sh / docker.service / containerd.service / daemon.json | /opt/opsguard/offline/ | 离线安装（含 swarm init、insecure-registries=10.60.189.6:8080） |
@@ -272,6 +272,28 @@
       （同记录 14 口径），容器内 `grep -rl opsguard-admin /app/web/assets`
       确认零命中。验证：healthz 200、`/login` 200（bundle `index-CXMPMFPC.js`）。
     - **回滚**：`opsguard-server:1.2.14` / `:1.2.15` 镜像均保留，原样 run 即可。
+
+20. **探测告警标题带服务对象名（2026-08-28，server 1.2.16→1.2.17，worker/前端
+    无改动）**：TCP/HTTP 探测告警的飞书消息此前只有 `[集群] 端口不可达：TCP
+    ip:port …`，看不出是哪个服务。根因：标题由 `ingest.AlertTitle` 拼接，只用
+    了集群名+事件 Msg，事件自带的 Service（纳管对象名 / swarm 服务名）没进
+    标题，而飞书通知只投递标题文本。改动（提交 5198b3c 一系列）：
+    - `AlertTitle` 标题改 `[集群/服务] 类型：详情`（Service 缺失退化 `[集群]`）；
+    - 新增 `TitleBody`：恢复类通知（事件恢复 + 手动恢复）剥掉标题自带前缀，
+      避免 `[c/s] 告警已恢复：[c/s] …` 重复；
+    - 存量活动告警在下一次同类事件合并时自动更新标题（UpsertAlert 覆盖
+      Title），无需迁移；旧格式标题无前缀，TitleBody 原样返回兼容。
+    - **发版**：本地交叉编译 `server-1.2.17`（29.8MB，sha256 389189e0…）上传
+      `/opt/opsguard/build/1.2.17/`；`FROM opsguard-server:1.2.16 + COPY server
+      + chmod` 重打（web 零改动，继承 1.2.16 的 web 层）；旧容器 rename 留
+      `opsguard-server-1.2.16-backup` 后新容器原样 run（三挂载/unless-stopped/8080）。
+    - **已验证**：healthz 200、三集群隧道池建立（232/66 各 16 流）、启动无
+      error；端到端——local 清单临时加 `probe-selftest`（host-service 指向
+      10.60.189.6:59999）→ 一个探测周期内产生 `port_down`，标题
+      `[local/probe-selftest] 端口不可达：TCP …`，飞书 2s 内送达（error 策略
+      两渠道）；删除临时条目后孤儿清理自动 recovered + 恢复通知同样新格式。
+    - **回滚**：`docker rm -f opsguard-server` 后用 `opsguard-server:1.2.16`
+      原样 run。
 
 ### 安责险集群（3 节点）部署记录（2026-08-14）
 

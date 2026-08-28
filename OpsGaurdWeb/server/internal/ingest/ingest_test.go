@@ -221,3 +221,52 @@ func TestNotifyRecoverAndReactivate(t *testing.T) {
 
 // (TestParseEvent / TestValidateToken removed — the webhook HTTP entry they
 // tested is gone, replaced by the gRPC SubscribeEvents subscriber.)
+
+// TestAlertTitleIncludesService 标题带 [集群/服务] 前缀（飞书等通知只投递
+// 标题文本，必须能看出监控对象）；Service 缺失退化 [集群]。
+func TestAlertTitleIncludesService(t *testing.T) {
+	e := &store.IngestEvent{Service: "web", Type: store.EventPortDown, Msg: "TCP 10.0.0.5:8080 不可达：refused"}
+	if got, want := AlertTitle("dev", e), "[dev/web] 端口不可达：TCP 10.0.0.5:8080 不可达：refused"; got != want {
+		t.Fatalf("port_down title = %q, want %q", got, want)
+	}
+	e.Type = store.EventHTTPUnhealthy
+	e.Msg = "http GET http://10.0.0.5:8080/health failed"
+	if got, want := AlertTitle("dev", e), "[dev/web] HTTP 健康检查失败：http GET http://10.0.0.5:8080/health failed"; got != want {
+		t.Fatalf("http_unhealthy title = %q, want %q", got, want)
+	}
+	e.Service = ""
+	e.Type = store.EventPortDown
+	e.Msg = "TCP 10.0.0.5:8080 不可达：refused"
+	if got, want := AlertTitle("dev", e), "[dev] 端口不可达：TCP 10.0.0.5:8080 不可达：refused"; got != want {
+		t.Fatalf("no-service title = %q, want %q", got, want)
+	}
+}
+
+// TestTitleBody 恢复类通知剥标题前缀，避免 [集群/服务] 重复；无前缀原样返回。
+func TestTitleBody(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"[dev/web] 端口不可达：TCP 1.2.3.4:80 不可达", "端口不可达：TCP 1.2.3.4:80 不可达"},
+		{"端口不可达：TCP 1.2.3.4:80 不可达", "端口不可达：TCP 1.2.3.4:80 不可达"}, // 历史告警无前缀
+		{"[dev/web]未跟空格", "[dev/web]未跟空格"},
+	}
+	for _, c := range cases {
+		if got := TitleBody(c.in); got != c.want {
+			t.Fatalf("TitleBody(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestHandleEventAlertTitleStored 落库告警标题带服务名（通知 subject 即标题）。
+func TestHandleEventAlertTitleStored(t *testing.T) {
+	svc := newTestIngest(t)
+	if err := svc.HandleEvent("dev", &store.IngestEvent{ID: "e1", Service: "orders", Type: store.EventPortDown, Level: store.LevelError, Msg: "port tcp/80 unreachable"}); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	a, err := svc.st.GetAlert(store.AlertID("dev", "orders", store.EventPortDown))
+	if err != nil || a == nil {
+		t.Fatalf("get alert: %v %v", a, err)
+	}
+	if want := "[dev/orders] 端口不可达：port tcp/80 unreachable"; a.Title != want {
+		t.Fatalf("stored title = %q, want %q", a.Title, want)
+	}
+}

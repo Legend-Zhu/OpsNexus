@@ -12,28 +12,48 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 )
 
-// AlertTitle 由事件生成默认告警标题。
+// AlertTitle 由事件生成默认告警标题：[集群/服务] 类型：详情。服务名取事件
+// 的 Service（纳管对象名 / swarm 服务名），探测明细（IP:端口等）留在 Msg，
+// 保证通知渠道（飞书等只投递标题文本）能直接看出是哪个监控对象；Service
+// 为空时退化为 [集群] 前缀。
 func AlertTitle(cluster string, e *store.IngestEvent) string {
+	prefix := cluster
+	if e.Service != "" {
+		prefix = cluster + "/" + e.Service
+	}
 	switch e.Type {
 	case store.EventPortDown:
-		return fmt.Sprintf("[%s] 端口不可达：%s", cluster, e.Msg)
+		return fmt.Sprintf("[%s] 端口不可达：%s", prefix, e.Msg)
 	case store.EventHTTPUnhealthy:
-		return fmt.Sprintf("[%s] HTTP 健康检查失败：%s", cluster, e.Msg)
+		return fmt.Sprintf("[%s] HTTP 健康检查失败：%s", prefix, e.Msg)
 	case store.EventLogMatch:
-		return fmt.Sprintf("[%s] 日志异常匹配：%s", cluster, e.Msg)
+		return fmt.Sprintf("[%s] 日志异常匹配：%s", prefix, e.Msg)
 	case store.EventResourceOver:
-		return fmt.Sprintf("[%s] 资源超限：%s", cluster, e.Msg)
+		return fmt.Sprintf("[%s] 资源超限：%s", prefix, e.Msg)
 	case store.EventContainerDown:
-		return fmt.Sprintf("[%s] 容器不可用：%s", cluster, e.Msg)
+		return fmt.Sprintf("[%s] 容器不可用：%s", prefix, e.Msg)
 	default:
-		return fmt.Sprintf("[%s] %s：%s", cluster, e.Type, e.Msg)
+		return fmt.Sprintf("[%s] %s：%s", prefix, e.Type, e.Msg)
 	}
+}
+
+// TitleBody 去掉标题开头的 "[前缀] " 段。告警标题已带 [集群/服务] 前缀，
+// 恢复类通知的 subject 会再拼一次前缀，复用本函数避免前缀重复；
+// 无前缀的标题（历史告警）原样返回。
+func TitleBody(title string) string {
+	if strings.HasPrefix(title, "[") {
+		if i := strings.Index(title, "] "); i >= 0 {
+			return title[i+2:]
+		}
+	}
+	return title
 }
 
 // RecoverTypeOf 判断事件是否触发恢复（resource_recovered / recovered 通用恢复）。
@@ -210,7 +230,7 @@ func (s *Service) recoverByService(cluster, service string) error {
 				return err
 			}
 			if recovered != nil {
-				s.enqueueNotify(recovered, fmt.Sprintf("[%s/%s] 告警已恢复：%s", recovered.Cluster, recovered.Service, recovered.Title))
+				s.enqueueNotify(recovered, fmt.Sprintf("[%s/%s] 告警已恢复：%s", recovered.Cluster, recovered.Service, TitleBody(recovered.Title)))
 			}
 		}
 	}
