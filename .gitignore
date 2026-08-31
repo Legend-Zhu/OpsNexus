@@ -41,3 +41,6 @@ deploy/internet-proxy/proxy.env
 
 # ZCode 会话计划（本地工具产物）
 .zcode/
+
+# IDE 配置目录
+.idea/
