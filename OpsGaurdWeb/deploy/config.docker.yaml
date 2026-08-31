@@ -64,3 +64,8 @@ ainexus:
     max_context_tokens: 800000
     keep_tool_rounds: 5
   mcp_servers: []
+
+# 智能巡检：cron 调度时区（IANA 名称）。默认 Asia/Shanghai——
+# 0 9 * * * 即北京时间 9 点，不随容器时区漂移。
+patrol:
+  timezone: "Asia/Shanghai"

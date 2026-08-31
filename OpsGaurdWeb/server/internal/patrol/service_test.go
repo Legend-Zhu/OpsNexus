@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
@@ -55,6 +56,44 @@ func TestValidCron(t *testing.T) {
 	}
 	if err := ValidCron("bad cron"); err == nil {
 		t.Fatal("invalid cron accepted")
+	}
+}
+
+// TestSchedulerLocation cron 调度按传入时区解释，不随进程/容器时区漂移：
+// 同一表达式 0 9 * * * 在 Asia/Shanghai 下下次触发为北京 9 点；若错用 UTC
+// 调度器则会是北京 17 点（历史故障模式：UTC 容器下巡检 17:00 才跑）。
+func TestSchedulerLocation(t *testing.T) {
+	sh, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("load Asia/Shanghai: %v", err)
+	}
+	next := func(loc *time.Location) time.Time {
+		c := newScheduler(loc)
+		if _, err := c.AddFunc("0 9 * * *", func() {}); err != nil {
+			t.Fatalf("add func: %v", err)
+		}
+		c.Start()
+		defer c.Stop()
+		// run 循环启动后异步计算首次 Next，轮询等待
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if es := c.Entries(); len(es) > 0 && !es[0].Next.IsZero() {
+				return es[0].Next
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatal("cron 未在 2s 内计算出首次 Next")
+		return time.Time{}
+	}
+	shNext, utcNext := next(sh), next(time.UTC)
+	if shNext.In(sh).Hour() != 9 {
+		t.Fatalf("Asia/Shanghai 调度下次触发小时 = %d，应为 9（实际时刻 %v）", shNext.In(sh).Hour(), shNext)
+	}
+	if utcNext.In(sh).Hour() != 17 {
+		t.Fatalf("UTC 调度映射到北京小时 = %d，应为 17（即 UTC 09:00）", utcNext.In(sh).Hour())
+	}
+	if shNext.Equal(utcNext) {
+		t.Fatal("两个时区调度触发同一时刻——时区未生效")
 	}
 }
 
@@ -213,7 +252,7 @@ func newTestPatrol(t *testing.T) (*Service, string) {
 	if err := st.PutCluster(&store.Cluster{Name: "dev", WorkerURL: url, Status: store.ClusterOnline}); err != nil {
 		t.Fatalf("put cluster: %v", err)
 	}
-	return New(st, cs, nil, nil), url
+	return New(st, cs, nil, nil, nil), url
 }
 
 // TestCreateAndRun 创建流程 → 立即执行 → 异常采集 + 保底报告。
@@ -402,7 +441,7 @@ func TestClosedLoop(t *testing.T) {
 		t.Fatalf("setting: %v", err)
 	}
 
-	svc := New(st, cs, nil, notifySvc)
+	svc := New(st, cs, nil, notifySvc, nil)
 	p, err := svc.Create("pl", "", "0 2 * * *", `
 name: pl
 checks:
