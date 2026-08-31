@@ -26,6 +26,9 @@ FROM alpine:3.20
 # 宿主 docker.sock（registry.enabled 时管理端用 docker CLI 构建并 push 本机仓库）。
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
     apk add --no-cache ca-certificates tzdata docker-cli
+# 容器时区固定为北京时间：patrol cron 等 time.Local 语义随之正确
+#（tzdata 已装；配合 patrol.timezone 显式绑定，双保险）
+ENV TZ=Asia/Shanghai
 WORKDIR /app
 COPY --from=build /out/server /app/server
 # 前端静态托管目录固定为工作目录下的 ./web（router.NoRoute 回退 index.html）

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	_ "time/tzdata" // 内嵌 IANA 时区库：cron 调度时区不依赖容器 /usr/share/zoneinfo
 
 	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
@@ -163,18 +164,29 @@ type Service struct {
 	clusters *cluster.Service
 	ainxRT   *ainexusrt.Service // 内嵌 AiNexus 运行时（Server() 为空 = 无报告生成）
 	notify   *notify.Service    // 报告投递 + 异常转告警通知（nil = 不投递）
+	loc      *time.Location     // cron 调度时区（nil = time.Local）
 	sched    *cron.Cron
 	// onRun 调度触发的执行（供测试注入/替换）。
 	onRun func(patrolID string)
 }
 
 // New 创建巡检服务。sched 为 nil 时自动创建（单实例调度器）。
-func New(st *store.Store, clusters *cluster.Service, ainxRT *ainexusrt.Service, notifySvc *notify.Service) *Service {
-	s := &Service{st: st, clusters: clusters, ainxRT: ainxRT, notify: notifySvc}
+// loc 为 cron 表达式解释时区：传 nil 回退 time.Local（容器时区）；
+// 生产请显式传业务时区（如 Asia/Shanghai），避免容器 TZ 影响调度时刻。
+func New(st *store.Store, clusters *cluster.Service, ainxRT *ainexusrt.Service, notifySvc *notify.Service, loc *time.Location) *Service {
+	s := &Service{st: st, clusters: clusters, ainxRT: ainxRT, notify: notifySvc, loc: loc}
 	// 5 字段标准 cron（与 ValidCron 的 ParseStandard 一致）
-	s.sched = cron.New()
+	s.sched = newScheduler(loc)
 	s.onRun = func(id string) { _, _ = s.Run(context.Background(), id) }
 	return s
+}
+
+// newScheduler 创建按指定时区解释 cron 的调度器（nil = 进程本地时区）。
+func newScheduler(loc *time.Location) *cron.Cron {
+	if loc == nil {
+		loc = time.Local
+	}
+	return cron.New(cron.WithLocation(loc))
 }
 
 // Start 启动调度器并加载已启用的流程。
@@ -187,7 +199,7 @@ func (s *Service) Stop() { s.sched.Stop() }
 func (s *Service) Reload() {
 	ctx := s.sched.Stop() // 停止并等待已开始的作业结束（单实例）
 	_ = ctx
-	s.sched = cron.New()
+	s.sched = newScheduler(s.loc)
 	patrols, err := s.st.ListPatrols()
 	if err != nil {
 		return
