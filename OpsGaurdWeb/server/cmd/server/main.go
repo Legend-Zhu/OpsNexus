@@ -122,8 +122,10 @@ func main() {
 	}
 
 	// 智能巡检服务（P5：YAML 流程 + 单实例 cron 调度 + AI 报告 +
-	// 报告渠道投递/异常转告警闭环）
-	patrolSvc := patrol.New(st, clusterSvc, ainexusRT, notifySvc)
+	// 报告渠道投递/异常转告警闭环）。cron 显式绑定业务时区
+	//（patrol.timezone，默认 Asia/Shanghai），不随容器 TZ 漂移——
+	// 0 9 * * * 即北京时间 9 点。
+	patrolSvc := patrol.New(st, clusterSvc, ainexusRT, notifySvc, patrolLocation(cfg.Patrol.Timezone, log))
 	h.SetPatrolService(patrolSvc)
 	patrolSvc.Start()
 	defer patrolSvc.Stop()
@@ -260,6 +262,21 @@ func main() {
 		log.Error("server exited", "err", err)
 		os.Exit(1)
 	}
+}
+
+// patrolLocation 解析巡检 cron 调度时区；空或非法一律回退 Asia/Shanghai
+//（平台业务时区），绝不静默退回容器时区（UTC 容器曾导致 0 9 * * *
+// 在北京时间 17 点才触发）。
+func patrolLocation(tz string, log *slog.Logger) *time.Location {
+	if tz == "" {
+		tz = "Asia/Shanghai"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		log.Warn("patrol.timezone invalid, falling back to Asia/Shanghai", "timezone", tz, "err", err)
+		loc, _ = time.LoadLocation("Asia/Shanghai")
+	}
+	return loc
 }
 
 // notifyAdapter 把 notify.Service 适配为 mlops.NotifySender（预算通知走

@@ -36,6 +36,16 @@ type Config struct {
 	// nil 或 enabled=false = 不启用：/api/v1/mlops/* 不注册，网关提示词
 	// 用代码内置默认，无计量。详见 docs/MLOps-方案.md。
 	Mlops *MlopsConfig `yaml:"mlops,omitempty" json:"mlops,omitempty"`
+	// Patrol 智能巡检调度配置（cron 时区等）。
+	Patrol PatrolConfig `yaml:"patrol" json:"patrol"`
+}
+
+// PatrolConfig 智能巡检（P5）调度配置。
+type PatrolConfig struct {
+	// Timezone cron 调度时区（IANA 名称，如 Asia/Shanghai；默认
+	// Asia/Shanghai——平台业务时区，保证 0 9 * * * = 北京时间 9 点，
+	// 不随容器 TZ 漂移）。
+	Timezone string `yaml:"timezone" json:"timezone"`
 }
 
 // MlopsConfig MLOps 运营层配置。
@@ -142,6 +152,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Registry.MaxUploadMB <= 0 {
 		c.Registry.MaxUploadMB = 500
+	}
+	if c.Patrol.Timezone == "" {
+		c.Patrol.Timezone = "Asia/Shanghai"
 	}
 }
 
