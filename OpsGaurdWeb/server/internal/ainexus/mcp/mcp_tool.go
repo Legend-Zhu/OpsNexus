@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"hash/fnv"
 	"regexp"
+	"strings"
 	"unicode/utf8"
 
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/provider"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/tool"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -43,12 +45,33 @@ var toolNameInvalidChars = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
 // 集群 server 名形如 "cluster:prod"，含 ":" 等 OpenAI function name 非法字符，
 // 部分 openai_compatible 提供商会直接拒绝整个 tools 定义——统一清洗成合法名，
 // 超长则以哈希后缀截断保唯一。原始 server 名仍保留在 Description 中供 LLM 识别集群。
+//
+// 中文等非 ASCII server 名（如 "cluster:自然灾害集群"）清洗后整段折叠成 "_"，
+// 不同集群的工具名会完全同名、注册时互相挤掉——检测到非 ASCII 字符时在
+// 尾部追加 server 名指纹（fnv32a 前 8 位 hex）保证跨集群唯一。
 func (t *MCPTool) Name() string {
 	// 如果工具名已经有 mcp_ 前缀就不重复加
 	if len(t.toolName) > 4 && t.toolName[:4] == "mcp_" {
 		return sanitizeToolName(t.toolName)
 	}
-	return sanitizeToolName("mcp_" + t.serverName + "_" + t.toolName)
+	base := "mcp_" + t.serverName + "_" + t.toolName
+	if hasNonASCII(t.serverName) {
+		h := fnv.New32a()
+		h.Write([]byte(t.serverName))
+		base += fmt.Sprintf("_%08x", h.Sum32())
+	}
+	return sanitizeToolName(base)
+}
+
+// hasNonASCII 报告 s 是否含非 ASCII 字符（这些字符会被 sanitizeToolName
+// 折叠成 "_"，导致原名的区分信息丢失、不同 server 清洗后同名）。
+func hasNonASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] > 127 {
+			return true
+		}
+	}
+	return false
 }
 
 // sanitizeToolName 清洗成合法 OpenAI function name（[a-zA-Z0-9_-]，≤64）。
@@ -67,6 +90,20 @@ func sanitizeToolName(name string) string {
 // Description 返回工具描述
 func (t *MCPTool) Description() string {
 	return fmt.Sprintf("[MCP:%s] %s", t.serverName, t.toolDesc)
+}
+
+// ToolScopeFilter 返回会话级集群工具过滤器：保留内置工具（描述无 [MCP:]
+// 前缀）与指定 server 的工具，其余集群的工具不下发给模型——多集群工具
+// 全部在册的前提下，把模型可见面收敛到目标集群，杜绝跨集群误调用。
+// serverName 形如 "cluster:自然灾害集群"（MCP server 原始名）。
+func ToolScopeFilter(serverName string) func(provider.ToolDefinition) bool {
+	prefix := "[MCP:" + serverName + "]"
+	return func(td provider.ToolDefinition) bool {
+		if !strings.HasPrefix(td.Description, "[MCP:") {
+			return true
+		}
+		return strings.HasPrefix(td.Description, prefix)
+	}
 }
 
 // Parameters 返回工具参数 JSON Schema

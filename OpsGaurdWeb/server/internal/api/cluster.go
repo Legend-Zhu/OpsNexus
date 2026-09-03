@@ -146,5 +146,9 @@ func (h *Handlers) RemoveCluster(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "remove cluster: "+err.Error())
 		return
 	}
+	// 同步断开该集群的 Worker MCP 并注销其工具（防"幽灵工具"）
+	if srv := h.gateway(); srv != nil {
+		srv.RemoveMCPCluster(c.Param("name"))
+	}
 	ok(c, http.StatusOK, gin.H{"removed": c.Param("name")})
 }

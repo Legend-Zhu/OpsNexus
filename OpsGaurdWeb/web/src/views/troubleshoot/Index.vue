@@ -23,8 +23,23 @@
       <el-button size="small" @click="router.push('/system')">启用网关</el-button>
     </el-alert>
 
-    <!-- 会话工具栏：告警可选（不选 = 自由提问） -->
+    <!-- 会话工具栏：集群/告警可选（自由提问时服务端也会从问题中识别集群） -->
     <div class="toolbar">
+      <el-select
+        v-model="clusterName"
+        placeholder="目标集群（可选，不选则从问题中识别）"
+        filterable
+        clearable
+        style="width: 300px"
+        :disabled="running || !!alertId"
+      >
+        <el-option
+          v-for="cl in clusters"
+          :key="cl.name"
+          :label="cl.desc ? `${cl.name}（${cl.desc}）` : cl.name"
+          :value="cl.name"
+        />
+      </el-select>
       <el-select
         v-model="alertId"
         placeholder="关联告警（可选，不选则自由提问）"
@@ -135,8 +150,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RefreshLeft, Search } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ainexusApi, alertApi, investigationApi } from '@/api'
-import type { Alert, Investigation } from '@/types'
+import { ainexusApi, alertApi, clusterApi, investigationApi } from '@/api'
+import type { Alert, ClusterSummary, Investigation } from '@/types'
 
 interface ToolEvent {
   name: string
@@ -154,6 +169,8 @@ const router = useRouter()
 const route = useRoute()
 const alerts = ref<Alert[]>([])
 const alertId = ref('')
+const clusters = ref<ClusterSummary[]>([])
+const clusterName = ref('')
 const useMCP = ref(true)
 
 const gatewayActive = ref(false)
@@ -206,6 +223,15 @@ async function loadAlerts() {
     alerts.value = resp.items ?? []
   } catch {
     alerts.value = []
+  }
+}
+
+async function loadClusters() {
+  try {
+    const resp = await clusterApi.list()
+    clusters.value = resp.items ?? []
+  } catch {
+    clusters.value = []
   }
 }
 
@@ -270,6 +296,8 @@ async function send(typed: string) {
         stream: true,
         use_mcp: useMCP.value,
         alert_id: sessionAlertId.value || undefined,
+        // 自由提问显式指定目标集群（关联告警时集群由告警决定，不传）
+        cluster: !withAlert && clusterName.value ? clusterName.value : undefined,
         messages: [...apiHistory.current, ...sendUserMsg],
       }),
       signal: abort.signal,
@@ -413,6 +441,7 @@ onMounted(async () => {
     configLoading.value = false
   }
   await loadAlerts()
+  await loadClusters()
   // 从告警页「排查」跳转进来时预选该告警
   const q = route.query.alert
   if (typeof q === 'string' && q && alerts.value.some((a) => a.id === q)) {

@@ -48,6 +48,18 @@ func (r *Registry) Get(name string) (Tool, bool) {
 	return t, ok
 }
 
+// Unregister 按 tool.Name() 注销工具（MCP server 移除/重建时清理其工具，
+// 防止连接已断的"幽灵工具"继续暴露给模型）。返回是否确有删除。
+func (r *Registry) Unregister(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.tools[name]; !ok {
+		return false
+	}
+	delete(r.tools, name)
+	return true
+}
+
 // List 列出所有工具
 func (r *Registry) List() []Tool {
 	r.mu.RLock()

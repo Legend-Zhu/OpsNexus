@@ -11,6 +11,7 @@ import (
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/agent"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/mcp"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/provider"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/tool"
 )
@@ -77,6 +78,9 @@ func (h *AnthropicHandler) Messages(c *gin.Context) {
 	}
 
 	ag := agent.New(p, h.registry, h.config.Agent, h.logger, h.promptSrc)
+	if scope := agent.ToolScopeFromContext(c.Request.Context()); scope != "" {
+		ag.SetToolFilter(mcp.ToolScopeFilter(scope))
+	}
 
 	conv := agent.NewConversation(req.Model)
 	if req.System != "" {

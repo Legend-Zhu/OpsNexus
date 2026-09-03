@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/tool"
@@ -28,7 +29,21 @@ type Manager struct {
 	servers map[string]*MCPServerClient
 	mu      sync.RWMutex
 	logger  *log.Logger
+
+	// registry 健康自愈时工具重注册/注销的目标（SetRegistry 注入；
+	// nil = 只探测连接，不维护 registry）。
+	registry *tool.Registry
+	// stopCh 健康循环停止信号（StartHealthLoop 创建，Close 关闭）。
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
+
+// 健康自愈参数：探测周期 30s，单次探测/重建握手超时 10s。设计文档 P2
+// 规划的指数退避暂以固定周期重试替代（Worker 重启后最多 30s 恢复采证）。
+const (
+	defaultHealthInterval = 30 * time.Second
+	healthProbeTimeout    = 10 * time.Second
+)
 
 // NewManager 创建 MCP 管理器
 func NewManager(logger *log.Logger) *Manager {
@@ -37,6 +52,9 @@ func NewManager(logger *log.Logger) *Manager {
 		logger:  logger,
 	}
 }
+
+// SetRegistry 注入工具注册中心（健康自愈的注销/重注册目标）。
+func (m *Manager) SetRegistry(r *tool.Registry) { m.registry = r }
 
 // Initialize 初始化所有配置的 MCP Server
 func (m *Manager) Initialize(ctx context.Context, configs []config.MCPServerConfig) error {
@@ -64,39 +82,13 @@ func (m *Manager) AddServer(ctx context.Context, cfg config.MCPServerConfig) err
 		config: cfg,
 	}
 
-	// 根据传输方式创建客户端
-	var client *mcpclient.Client
-	var err error
-
-	switch cfg.Transport {
-	case "stdio":
-		client, err = m.createStdioClient(cfg)
-	case "sse":
-		client, err = m.createSSEClient(cfg)
-	case "streamable-http":
-		client, err = m.createStreamableHTTPClient(cfg)
-	default:
-		return fmt.Errorf("unsupported transport: %s", cfg.Transport)
-	}
-
+	// 创建客户端并完成初始化握手
+	client, err := m.createClient(cfg)
 	if err != nil {
-		return fmt.Errorf("create mcp client for %q: %w", cfg.Name, err)
+		return err
 	}
-
-	// 初始化握手
-	initReq := mcp.InitializeRequest{
-		Params: mcp.InitializeParams{
-			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
-			Capabilities:    mcp.ClientCapabilities{},
-			ClientInfo: mcp.Implementation{
-				Name:    "AiNexus",
-				Version: "1.0.0",
-			},
-		},
-	}
-
-	_, err = client.Initialize(ctx, initReq)
-	if err != nil {
+	if err := handshakeInit(ctx, client); err != nil {
+		_ = client.Close()
 		return fmt.Errorf("initialize mcp server %q: %w", cfg.Name, err)
 	}
 
@@ -113,6 +105,42 @@ func (m *Manager) AddServer(ctx context.Context, cfg config.MCPServerConfig) err
 		cfg.Name, cfg.Transport, len(sc.tools))
 
 	return nil
+}
+
+// createClient 按传输方式创建 MCP 客户端。
+func (m *Manager) createClient(cfg config.MCPServerConfig) (*mcpclient.Client, error) {
+	var client *mcpclient.Client
+	var err error
+	switch cfg.Transport {
+	case "stdio":
+		client, err = m.createStdioClient(cfg)
+	case "sse":
+		client, err = m.createSSEClient(cfg)
+	case "streamable-http":
+		client, err = m.createStreamableHTTPClient(cfg)
+	default:
+		return nil, fmt.Errorf("unsupported transport: %s", cfg.Transport)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("create %s client for %q: %w", cfg.Transport, cfg.Name, err)
+	}
+	return client, nil
+}
+
+// handshakeInit 完成 MCP 初始化握手（AddServer 与健康自愈重建共用）。
+func handshakeInit(ctx context.Context, client *mcpclient.Client) error {
+	initReq := mcp.InitializeRequest{
+		Params: mcp.InitializeParams{
+			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+			Capabilities:    mcp.ClientCapabilities{},
+			ClientInfo: mcp.Implementation{
+				Name:    "AiNexus",
+				Version: "1.0.0",
+			},
+		},
+	}
+	_, err := client.Initialize(ctx, initReq)
+	return err
 }
 
 // createStdioClient 创建 stdio 传输客户端
@@ -193,20 +221,206 @@ func (m *Manager) Tools() []tool.Tool {
 	return allTools
 }
 
-// RegisterAllTools 将所有 MCP 工具注册到 ToolRegistry
+// RegisterAllTools 将所有 MCP 工具注册到 ToolRegistry。
+// 重名冲突说明清洗后命名不唯一（会挤掉已有工具、agent 不可见该工具），
+// 记 ERROR 级日志留痕，不中断其他工具注册。
 func (m *Manager) RegisterAllTools(registry *tool.Registry) error {
 	tools := m.Tools()
 	for _, t := range tools {
 		if err := registry.Register(t); err != nil {
-			m.logger.Printf("Warning: failed to register MCP tool %q: %v", t.Name(), err)
+			if mt, ok := t.(*MCPTool); ok {
+				m.logger.Printf("ERROR: MCP tool registration conflict: server %q tool %q: %v "+
+					"(tool not visible to agent; check server naming)", mt.serverName, t.Name(), err)
+			} else {
+				m.logger.Printf("ERROR: failed to register MCP tool %q: %v", t.Name(), err)
+			}
 			continue
 		}
 	}
 	return nil
 }
 
-// Close 关闭所有 MCP Server 连接
+// RemoveServer 断开并移除一个 MCP server，其工具一并从 registry 注销
+// （集群删除时调用，防"幽灵工具"）。server 不存在时幂等返回 nil。
+func (m *Manager) RemoveServer(name string) error {
+	m.mu.Lock()
+	sc, ok := m.servers[name]
+	if !ok {
+		m.mu.Unlock()
+		return nil
+	}
+	delete(m.servers, name)
+	tools := sc.toolsSnapshot()
+	m.mu.Unlock()
+
+	if m.registry != nil {
+		for _, t := range tools {
+			m.registry.Unregister(t.Name())
+		}
+	}
+	if err := sc.client.Close(); err != nil {
+		return fmt.Errorf("close mcp server %q: %w", name, err)
+	}
+	m.logger.Printf("MCP server %q removed (%d tools unregistered)", name, len(tools))
+	return nil
+}
+
+// StartHealthLoop 启动健康自愈循环（幂等）：周期性对每个 server 执行
+// ListTools 探测——成功则增量同步工具清单变更（新增注册/移除注销）；
+// 失败则整连接重建（关旧客户端 → 重新握手 → 重注册工具），覆盖 Worker
+// 重启/网络抖动后的采证自愈。Close 停止循环。
+func (m *Manager) StartHealthLoop(interval time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopCh != nil {
+		return
+	}
+	stop := make(chan struct{})
+	m.stopCh = stop
+	go func() {
+		if interval <= 0 {
+			interval = defaultHealthInterval
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				m.healthCheckOnce()
+			}
+		}
+	}()
+}
+
+// healthCheckOnce 单轮健康检查：逐 server 探测 → 失败重建 → 成功刷新工具清单。
+func (m *Manager) healthCheckOnce() {
+	for _, name := range m.ServerNames() {
+		m.mu.RLock()
+		sc := m.servers[name]
+		m.mu.RUnlock()
+		if sc == nil {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), healthProbeTimeout)
+		if err := sc.probe(ctx); err != nil {
+			m.logger.Printf("mcp server %q probe failed (%v), rebuilding connection", name, err)
+			m.rebuildServer(ctx, sc)
+		} else {
+			m.refreshServerTools(ctx, sc)
+		}
+		cancel()
+	}
+}
+
+// probe 以 ListTools 作轻量连通性探测。
+func (sc *MCPServerClient) probe(ctx context.Context) error {
+	sc.mu.RLock()
+	client := sc.client
+	sc.mu.RUnlock()
+	if client == nil {
+		return fmt.Errorf("mcp server %q has no client", sc.Name)
+	}
+	_, err := client.ListTools(ctx, mcp.ListToolsRequest{})
+	return err
+}
+
+// refreshServerTools 连接正常时同步工具清单变更：Worker 侧新增的工具注册
+// 进 registry，被移除的注销（防幽灵工具）。既有工具静默保留。
+func (m *Manager) refreshServerTools(ctx context.Context, sc *MCPServerClient) {
+	if m.registry == nil {
+		return
+	}
+	oldNames := map[string]bool{}
+	for _, t := range sc.toolsSnapshot() {
+		oldNames[t.Name()] = true
+	}
+	if err := sc.refreshTools(ctx); err != nil {
+		return // 下个周期重试
+	}
+	fresh := sc.toolsSnapshot()
+	newNames := map[string]bool{}
+	for _, t := range fresh {
+		newNames[t.Name()] = true
+	}
+	for _, t := range fresh {
+		if oldNames[t.Name()] {
+			continue
+		}
+		if err := m.registry.Register(t); err != nil {
+			m.logger.Printf("Warning: register refreshed tool %q: %v", t.Name(), err)
+		} else {
+			m.logger.Printf("mcp server %q tool added: %s", sc.Name, t.Name())
+		}
+	}
+	for n := range oldNames {
+		if !newNames[n] && m.registry.Unregister(n) {
+			m.logger.Printf("mcp server %q tool removed: %s", sc.Name, n)
+		}
+	}
+}
+
+// rebuildServer 重建一个 server 的连接（Worker 重启/网络抖动后自愈）：
+// 先注销其全部工具（摘除悬空客户端的调用面），再重建客户端并重新握手，
+// 成功后重注册工具。失败保留 server 条目（工具已摘除），下个周期重试。
+func (m *Manager) rebuildServer(ctx context.Context, sc *MCPServerClient) {
+	name := sc.Name
+	if m.registry != nil {
+		for _, t := range sc.toolsSnapshot() {
+			m.registry.Unregister(t.Name())
+		}
+	}
+	sc.mu.RLock()
+	old := sc.client
+	sc.mu.RUnlock()
+	if old != nil {
+		_ = old.Close()
+	}
+
+	client, err := m.createClient(sc.config)
+	if err != nil {
+		m.logger.Printf("ERROR: mcp server %q rebuild failed: %v (tools unregistered, retry next cycle)", name, err)
+		return
+	}
+	if err := handshakeInit(ctx, client); err != nil {
+		_ = client.Close()
+		m.logger.Printf("ERROR: mcp server %q rebuild handshake failed: %v (retry next cycle)", name, err)
+		return
+	}
+	sc.mu.Lock()
+	sc.client = client
+	sc.mu.Unlock()
+	if err := sc.refreshTools(ctx); err != nil {
+		m.logger.Printf("Warning: mcp server %q reconnected but list tools failed: %v", name, err)
+	}
+	if m.registry != nil {
+		for _, t := range sc.toolsSnapshot() {
+			if err := m.registry.Register(t); err != nil {
+				m.logger.Printf("Warning: re-register tool %q after rebuild: %v", t.Name(), err)
+			}
+		}
+	}
+	m.logger.Printf("MCP server %q reconnected (%d tools)", name, len(sc.toolsSnapshot()))
+}
+
+// toolsSnapshot 返回工具列表快照。
+func (sc *MCPServerClient) toolsSnapshot() []tool.Tool {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return append([]tool.Tool(nil), sc.tools...)
+}
+
+// Close 关闭所有 MCP Server 连接（并停止健康自愈循环）
 func (m *Manager) Close() error {
+	m.stopOnce.Do(func() {
+		m.mu.Lock()
+		if m.stopCh != nil {
+			close(m.stopCh)
+			m.stopCh = nil
+		}
+		m.mu.Unlock()
+	})
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

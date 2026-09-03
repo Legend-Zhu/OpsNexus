@@ -42,6 +42,44 @@ type Agent struct {
 	logger     *log.Logger
 	compressor Compressor // 旧轮次摘要压缩器（nil=仅硬删）
 	prompts    ScenarioTemplateSource
+	// toolFilter 可选工具过滤器（nil = 全量下发）。返回 false 的工具定义
+	// 不进入模型请求（会话级集群 scoping：多集群工具全部在册，模型只见
+	// 目标集群的，杜绝跨集群误调用）。过滤只影响下发，registry.Get 执行
+	// 不受限。
+	toolFilter func(provider.ToolDefinition) bool
+}
+
+// SetToolFilter 设置工具定义过滤器（须在 Run/RunStream 前调用）。
+func (a *Agent) SetToolFilter(f func(provider.ToolDefinition) bool) { a.toolFilter = f }
+
+// toolDefinitions 返回本轮下发给模型的工具定义（应用过滤器）。
+func (a *Agent) toolDefinitions() []provider.ToolDefinition {
+	defs := a.registry.ToolDefinitions()
+	if a.toolFilter == nil {
+		return defs
+	}
+	out := make([]provider.ToolDefinition, 0, len(defs))
+	for _, d := range defs {
+		if a.toolFilter(d) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// toolScopeCtxKey request context 中的工具作用域 key（会话级集群 scoping）。
+type toolScopeCtxKey struct{}
+
+// WithToolScope 在 ctx 中声明本次请求仅下发的 MCP server 名
+// （如 "cluster:自然灾害集群"），与 mcp.ToolScopeFilter 配套使用。
+func WithToolScope(ctx context.Context, serverName string) context.Context {
+	return context.WithValue(ctx, toolScopeCtxKey{}, serverName)
+}
+
+// ToolScopeFromContext 读取工具作用域（"" = 未声明，全量下发）。
+func ToolScopeFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(toolScopeCtxKey{}).(string)
+	return v
 }
 
 // ScenarioTemplateSource 提示词场景模板来源（mlops 运营层注入；nil =
@@ -82,7 +120,7 @@ func (a *Agent) trimContext(ctx context.Context, conv *Conversation) {
 
 // RunStream 流式运行 Agent，返回事件 channel
 func (a *Agent) RunStream(ctx context.Context, conv *Conversation) (<-chan AgentEvent, error) {
-	toolDefs := a.registry.ToolDefinitions()
+	toolDefs := a.toolDefinitions()
 	a.trimContext(ctx, conv)
 	req := conv.ToRequest(toolDefs, true)
 
@@ -115,7 +153,7 @@ func (a *Agent) RunStream(ctx context.Context, conv *Conversation) (<-chan Agent
 
 // Run 非流式运行 Agent
 func (a *Agent) Run(ctx context.Context, conv *Conversation) (*provider.ChatResponse, error) {
-	toolDefs := a.registry.ToolDefinitions()
+	toolDefs := a.toolDefinitions()
 
 	var total provider.UsageInfo
 	for round := 0; round < a.config.MaxToolRounds; round++ {
@@ -278,7 +316,7 @@ func (a *Agent) reactLoop(ctx context.Context, conv *Conversation, eventCh <-cha
 	}
 
 	// 再次调用 Provider，继续 ReAct 循环
-	toolDefs := a.registry.ToolDefinitions()
+	toolDefs := a.toolDefinitions()
 	a.trimContext(ctx, conv)
 	req := conv.ToRequest(toolDefs, true)
 	newEventCh, err := a.provider.ChatCompletionStream(usage.WithRound(ctx, round+1), req)

@@ -11,6 +11,7 @@ import (
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/agent"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/mcp"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/provider"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/tool"
 )
@@ -81,6 +82,11 @@ func (h *OpenAIHandler) ChatCompletions(c *gin.Context) {
 	}
 
 	ag := h.agentFactory(p)
+	// 会话级集群 scoping：请求 ctx 声明了目标 MCP server 时，只把内置工具
+	// 与该集群的工具下发给模型（见 mcp.ToolScopeFilter）。
+	if scope := agent.ToolScopeFromContext(c.Request.Context()); scope != "" {
+		ag.SetToolFilter(mcp.ToolScopeFilter(scope))
+	}
 
 	conv := agent.NewConversation(req.Model)
 	for _, msg := range req.Messages {

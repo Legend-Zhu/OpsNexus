@@ -146,6 +146,23 @@ func (s *Service) InvestigateMessages(data InvestigateData) ([]map[string]any, b
 	}, true
 }
 
+// ChatSystemMessage 渲染对话排查的 system 前缀（chat_system 场景）。
+// 场景未自定义返回 ok=false（调用方使用代码内置组装，二者字节等价由
+// api 包回归测试守护）；渲染失败留痕（日志 + fallbacks 计数）并回退。
+func (s *Service) ChatSystemMessage(data ChatData) (string, bool) {
+	c := s.compiledFor(ScenarioChatSystem)
+	if c == nil || len(c.msgs) == 0 {
+		return "", false
+	}
+	txt, err := execLimited(c.msgs[0].tpl, &data)
+	if err != nil {
+		s.logger.Printf("chat_system prompt render failed (%v), falling back to builtin", err)
+		s.fallbacks.Add(1)
+		return "", false
+	}
+	return txt, true
+}
+
 // RenderBuiltinMessages 用内置 v1 模板渲染单消息场景（等价性回归测试用：
 // 验证模板路径与代码内置组装逐字节一致；线上混合路径内部同源）。
 func RenderBuiltinMessages(scenario string, data any) (string, error) {

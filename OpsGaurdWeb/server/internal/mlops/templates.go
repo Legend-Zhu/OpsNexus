@@ -11,6 +11,7 @@ const (
 	ScenarioInvestigateUser   = "investigate_user"   // 深度排查 user 消息（告警+证据）
 	ScenarioCompressSystem    = "compress_system"    // Agent 会话压缩 system 提示词
 	ScenarioPatrolSystem      = "patrol_system"      // 巡检 AI 报告 system 提示词
+	ScenarioChatSystem        = "chat_system"        // 对话排查 system 前缀（集群目录+守则）
 	ScenarioCustom            = "custom"             // 用户自定义（不接入线上入口）
 )
 
@@ -41,6 +42,25 @@ type InvestigateData struct {
 type CompressData struct {
 	MaxWords int    `json:"max_words"`
 	Content  string `json:"content"`
+}
+
+// ChatCluster chat_system 场景的集群目录条目（均已格式化为字符串）。
+type ChatCluster struct {
+	Name   string `json:"name"`
+	Desc   string `json:"desc"`
+	Status string `json:"status"`
+}
+
+// ChatData chat_system 场景渲染数据。HasTarget/HasCandidates 显式区分
+// 「已解析目标 / 多候选待澄清 / 未识别」三种形态（空串无法区分目标态）。
+type ChatData struct {
+	Clusters      []ChatCluster `json:"clusters"`
+	HasTarget     bool          `json:"has_target"`
+	Target        string        `json:"target,omitempty"`
+	TargetDesc    string        `json:"target_desc,omitempty"`
+	HasCandidates bool          `json:"has_candidates"`
+	Candidates    string        `json:"candidates,omitempty"`
+	ConnectErr    string        `json:"connect_err,omitempty"`
 }
 
 // 内置 v1 模板。逐字节对应当前代码里的硬编码提示词（api/investigate.go、
@@ -88,6 +108,30 @@ const builtinCompressSystemTpl = `你是会话压缩器。把下面的对话轮�
 // 用短段落与列表输出，少产 Markdown 装饰（转换器仍会兜底降级）。
 const builtinPatrolSystemTpl = `你是智能运维巡检报告助手。基于巡检检查结果，给出简明、结构化的报告：异常概况、逐项说明、处置建议。不要编造数据。报告将在飞书通知中逐行展示：用短段落和以 - 开头的列表组织内容，不要输出 Markdown 表格，不要使用 # 标题、** 加粗、> 引用等标记。`
 
+// builtinChatSystemTpl 与 api.builtinChatSystemPrefix 保持一致（等价性由
+// api 包回归测试守护）：平台角色 + 集群目录 + 目标集群三态声明 + 工具守则。
+const builtinChatSystemTpl = `你是 OpsGaurd 智能运维平台的 AI 排查助手，运行在管理面，可通过各集群 Worker 的 MCP 工具对纳管集群做实时采证与受控操作。
+
+{{if .Clusters}}【纳管集群目录】
+{{range .Clusters}}- 名称: {{.Name}}{{if .Desc}}  描述: {{.Desc}}{{end}}  状态: {{.Status}}
+{{end}}
+{{end}}{{if .HasTarget}}【本次目标集群】{{.Target}}
+{{if .TargetDesc}}（描述: {{.TargetDesc}}）
+{{end}}用户问题涉及的集群已解析为上述目标集群，所有集群工具调用均只针对该集群执行。
+
+{{if .ConnectErr}}【注意】目标集群的 MCP 采证通道连接失败（{{.ConnectErr}}），本次无法实时采证；请基于已有信息分析，并在结论开头明确说明此限制。
+
+{{end}}{{else if .HasCandidates}}用户提到的集群名匹配到多个集群（{{.Candidates}}），请先向用户确认具体是哪一个，确认前不要调用任何集群工具。
+
+{{else}}未能从用户消息中确定目标集群：如果问题涉及某个集群，请结合【纳管集群目录】先向用户澄清；确认目标集群前不要调用集群工具。
+
+{{end}}【工具使用守则】
+1. 集群工具按描述中的 [MCP:cluster:<集群名>] 前缀区分归属，只能调用目标集群的工具；
+2. 排查服务异常的方法论：先 list_services/get_service 确认服务与副本状态 → get_service_logs 看日志 → HTTP 类问题用 check_http/check_flow 从集群节点网络复现（URL 按 get_service 返回的 Endpoint.Ports 拼接）→ 需要时 exec_in_container 深挖；
+3. http_request/command_executor/file_read 是管理面本机工具，访问不到集群业务网络，不要用它们做集群内排查；
+4. restart_service/scale_service/update_service/remove_service 是变更类操作，必须先征得用户明确确认才能执行；
+5. 结论必须引用工具返回的具体证据支撑；证据不足就明确说不足，不要编造。`
+
 // scenarioDef 内置场景定义。
 type scenarioDef struct {
 	Key  string
@@ -101,6 +145,7 @@ var scenarioDefs = []scenarioDef{
 	{Key: ScenarioInvestigateUser, Name: "深度排查 · 证据消息模板", Prototype: func() any { return &InvestigateData{} }},
 	{Key: ScenarioCompressSystem, Name: "会话压缩 · 系统提示词", Prototype: func() any { return &CompressData{MaxWords: 80, Content: "…"} }},
 	{Key: ScenarioPatrolSystem, Name: "巡检报告 · 系统提示词", Prototype: func() any { return &struct{}{} }},
+	{Key: ScenarioChatSystem, Name: "对话排查 · 系统提示词", Prototype: func() any { return &ChatData{} }},
 }
 
 func findScenarioDef(key string) *scenarioDef {
@@ -123,6 +168,8 @@ func builtinMessages(key string) []builtinMsg {
 		return []builtinMsg{{Role: "system", Template: builtinCompressSystemTpl}}
 	case ScenarioPatrolSystem:
 		return []builtinMsg{{Role: "system", Template: builtinPatrolSystemTpl}}
+	case ScenarioChatSystem:
+		return []builtinMsg{{Role: "system", Template: builtinChatSystemTpl}}
 	}
 	return nil
 }
@@ -155,6 +202,16 @@ func builtinVariables(key string) []promptVariableView {
 		return []promptVariableView{
 			{Name: "MaxWords", Required: true, Note: "纪要字数上限（当前固定 80）"},
 			{Name: "Content", Required: true, Note: "待压缩的对话轮次"},
+		}
+	case ScenarioChatSystem:
+		return []promptVariableView{
+			{Name: "Clusters", Note: "纳管集群目录（Name/Desc/Status，Public 脱敏后）"},
+			{Name: "HasTarget", Note: "是否已解析到唯一目标集群"},
+			{Name: "Target", Note: "目标集群名"},
+			{Name: "TargetDesc", Note: "目标集群描述"},
+			{Name: "HasCandidates", Note: "是否命中多个候选集群（需澄清）"},
+			{Name: "Candidates", Note: "候选集群名（、分隔）"},
+			{Name: "ConnectErr", Note: "采证通道连接失败原因（空 = 已连接）"},
 		}
 	}
 	return nil

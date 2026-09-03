@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/agent"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/usage"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/mlops"
@@ -72,8 +73,17 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 	// 2. 拉上下文（证据：近期事件 + 审计 + 服务日志；失败不阻塞排查）
 	events, audit, logs := gatherEvidence(c.Request.Context(), cli, alert.Service, maxEvents, logTail)
 
-	// 3. 可选：连接该集群 Worker MCP，供 ReAct Agent 采证
-	useMCP := req.UseMCP && connectClusterMCP(srv, h.clusters, alert.Cluster)
+	// 3. 可选：连接该集群 Worker MCP，供 ReAct Agent 采证（失败显性提示，
+	// 提示词模板随之省略"已连接"表述）
+	var mcpErr error
+	if req.UseMCP {
+		mcpErr = connectClusterMCP(srv, h.clusters, alert.Cluster)
+	}
+	useMCP := req.UseMCP && mcpErr == nil
+	if useMCP {
+		// 会话级集群 scoping：模型只见该集群的 MCP 工具
+		c.Request = c.Request.WithContext(agent.WithToolScope(c.Request.Context(), "cluster:"+alert.Cluster))
+	}
 
 	// 4. 组装注入上下文后的请求体，进程内 SSE 直通。
 	// 显式指定被禁用的模型 → 明确 400（区别于未知模型）；未指定时按
@@ -84,6 +94,10 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 	}
 	model := h.AINexusRT.EffectiveModel(usage.ScenarioInvestigate, req.Model)
 	messages := h.investigateMessages(alert, events, audit, logs, useMCP)
+	// 采证通道连接失败 → 流开始前显性提示（模板随之省略"已连接"表述）
+	if req.UseMCP && mcpErr != nil {
+		sseStreamNotice(c, fmt.Sprintf("【提示】未能连接集群「%s」的采证通道（%v），本次仅基于注入证据分析。\n\n", alert.Cluster, mcpErr))
+	}
 	body, err := json.Marshal(map[string]any{
 		"model":    model,
 		"messages": messages,
@@ -138,13 +152,14 @@ func gatherEvidence(ctx context.Context, cli *workerproxy.Client, service string
 	return events, audit, logs
 }
 
-// connectClusterMCP 按需连接集群 Worker MCP（失败降级为 false，不阻断排查）。
-func connectClusterMCP(srv *ainexusserver.Server, clusters *cluster.Service, clusterName string) bool {
+// connectClusterMCP 按需连接集群 Worker MCP。失败返回错误，由调用方决定
+// 如何显性告知用户（不再静默降级为"无采证"）。
+func connectClusterMCP(srv *ainexusserver.Server, clusters *cluster.Service, clusterName string) error {
 	url, tok, err := clusters.MCPEndpoint(clusterName)
-	if err != nil || url == "" {
-		return false
+	if err != nil {
+		return fmt.Errorf("get mcp endpoint: %w", err)
 	}
-	return srv.AddMCPCluster(clusterName, url, tok) == nil
+	return srv.AddMCPCluster(clusterName, url, tok)
 }
 
 // investigateMessages 组装深度排查消息：MLOps 启用且任一 investigate 场景

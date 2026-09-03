@@ -96,6 +96,8 @@ func New(cfg *ainexuscfg.Config, opts ...Option) *Server {
 	for _, opt := range opts {
 		opt(s)
 	}
+	// 健康自愈的注销/重注册目标（先于 Initialize/MCP 连接注入）
+	s.mcpMgr.SetRegistry(s.registry)
 	return s
 }
 
@@ -116,6 +118,10 @@ func (s *Server) Initialize(ctx context.Context) error {
 	if err := s.mcpMgr.RegisterAllTools(s.registry); err != nil {
 		s.logger.Printf("Warning: MCP tool registration failed: %v", err)
 	}
+
+	// 健康自愈循环（探测周期 30s）：Worker 重启/网络抖动后自动重建连接
+	// 并同步工具清单变更；Server.Close → mcpMgr.Close 停止。
+	s.mcpMgr.StartHealthLoop(0)
 
 	// 构建 gin handlers（管理端路由直接挂载）
 	s.openaiH = handler.NewOpenAIHandler(s.modelRoutes, s.registry, *s.config, s.logger, s.promptSource)
@@ -354,6 +360,14 @@ func (s *Server) AddMCPCluster(name, url, token string) error {
 	return s.mcpMgr.RegisterAllTools(s.registry)
 }
 
+// RemoveMCPCluster 断开并移除集群 Worker MCP（集群删除时调用），其全部
+// 工具一并从 registry 注销。server 不存在时幂等。
+func (s *Server) RemoveMCPCluster(name string) {
+	if err := s.mcpMgr.RemoveServer("cluster:" + name); err != nil {
+		s.logger.Printf("remove mcp cluster %q: %v", name, err)
+	}
+}
+
 // ToolCount 返回已注册工具数
 func (s *Server) ToolCount() int { return s.registry.ToolCount() }
 
@@ -388,10 +402,22 @@ func (s *Server) ModelsHandler(c *gin.Context) {
 }
 
 // ToolsHandler godoc: GET /ainexus/api/tools
-// 工具定义列表，兼容 AiNexus 原生 /api/tools 契约
+// 工具定义列表，兼容 AiNexus 原生 /api/tools 契约；by_source 按
+// 内置/[MCP:server] 分组计数，供接入页对账（每个集群应注册满其工具数，
+// 缺口说明注册被重名挤掉或连接不全）。
 func (s *Server) ToolsHandler(c *gin.Context) {
 	tools := s.registry.ToolDefinitions()
-	c.JSON(http.StatusOK, gin.H{"count": len(tools), "tools": tools})
+	bySource := map[string]int{}
+	for _, t := range tools {
+		src := "builtin"
+		if strings.HasPrefix(t.Description, "[MCP:") {
+			if end := strings.Index(t.Description, "]"); end > 0 {
+				src = t.Description[:end+1]
+			}
+		}
+		bySource[src]++
+	}
+	c.JSON(http.StatusOK, gin.H{"count": len(tools), "tools": tools, "by_source": bySource})
 }
 
 // MCPHandler godoc: GET /ainexus/api/mcp
