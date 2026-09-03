@@ -9,7 +9,13 @@
     </div>
 
     <div v-loading="loading" class="proj-grid">
-      <div v-for="v in views" :key="v.project.id" class="proj-card">
+      <div
+        v-for="v in views"
+        :key="v.project.id"
+        class="proj-card"
+        :title="`查看「${v.project.name}」下的集群`"
+        @click="goClusters(v.project)"
+      >
         <div class="proj-top">
           <span class="proj-name">{{ v.project.name }}</span>
           <el-tag size="small" effect="plain">{{ v.cluster_count }} 集群</el-tag>
@@ -24,7 +30,7 @@
 
         <div class="proj-foot">
           <span class="og-dim">{{ new Date(v.project.created_at).toLocaleDateString() }}</span>
-          <div>
+          <div @click.stop>
             <el-button link type="primary" @click="openEdit(v.project)">编辑</el-button>
             <el-button link type="danger" @click="remove(v.project)">删除</el-button>
           </div>
@@ -52,13 +58,20 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { projectApi } from '@/api'
 import type { Project, ProjectView } from '@/types'
 
+const router = useRouter()
 const loading = ref(false)
 const views = ref<ProjectView[]>([])
+
+/** 单击项目卡片 → 集群页并按该项目筛选（/clusters?project_id=…） */
+function goClusters(p: Project) {
+  router.push({ path: '/clusters', query: { project_id: p.id } })
+}
 
 const dialogVisible = ref(false)
 const editing = ref(false)
@@ -152,6 +165,7 @@ onMounted(fetchProjects)
   border: 1px solid var(--el-border-color-light);
   border-radius: 12px;
   padding: 16px;
+  cursor: pointer;
   transition: border-color 0.15s, transform 0.15s;
 }
 .proj-card:hover {

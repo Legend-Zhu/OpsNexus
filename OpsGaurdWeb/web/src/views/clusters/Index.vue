@@ -8,8 +8,26 @@
       <el-button type="primary" :icon="Plus" :loading="adding" @click="openDialog">接入集群</el-button>
     </div>
 
-    <el-table v-loading="loading" :data="clusters" empty-text="暂无集群，点击右上角「接入集群」">
-      <el-table-column label="名称" min-width="150">
+    <div class="toolbar">
+      <el-select
+        v-model="filterProjectId"
+        class="project-filter"
+        clearable
+        filterable
+        placeholder="按项目筛选（输入名称模糊搜索）"
+        :filter-method="onProjectFilter"
+        @visible-change="(v: boolean) => { if (!v) projectQuery = '' }"
+        @change="syncFilterQuery"
+      >
+        <el-option v-for="p in projectOptions" :key="p.id" :label="p.name" :value="p.id" />
+      </el-select>
+      <span class="filter-summary">
+        共 {{ filteredClusters.length }} 个集群<template v-if="filterProjectId"> / 全部 {{ clusters.length }}</template>
+      </span>
+    </div>
+
+    <el-table ref="tableRef" v-loading="loading" :data="filteredClusters" :empty-text="emptyText">
+      <el-table-column label="名称" :width="colW.name">
         <template #default="{ row }">
           <el-link type="primary" @click="$router.push(`/clusters/${row.name}`)">
             <span class="cluster-name">{{ row.name }}</span>
@@ -17,24 +35,24 @@
           <span v-if="row.desc" class="cluster-desc">{{ row.desc }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="项目" width="130">
+      <el-table-column label="项目" :width="colW.project">
         <template #default="{ row }">
           <el-tag v-if="projectName(row)" size="small" effect="plain">{{ projectName(row) }}</el-tag>
           <span v-else class="muted">—</span>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="100">
+      <el-table-column label="状态" :width="colW.status">
         <template #default="{ row }">
           <el-tooltip :disabled="!row.err" :content="row.err" placement="top">
             <el-tag :type="statusTag(row.status)" size="small" effect="dark">{{ statusText(row.status) }}</el-tag>
           </el-tooltip>
         </template>
       </el-table-column>
-      <el-table-column label="Manager 端点" prop="worker_url" min-width="200" show-overflow-tooltip />
-      <el-table-column label="最近探测" width="170">
+      <el-table-column label="Manager 端点" prop="worker_url" :width="colW.endpoint" show-overflow-tooltip />
+      <el-table-column label="最近探测" :width="colW.lastSeen">
         <template #default="{ row }">{{ formatTime(row.last_seen) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="160" fixed="right">
+      <el-table-column label="操作" :width="colW.actions" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="$router.push(`/clusters/${row.name}`)">详情</el-button>
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
@@ -82,16 +100,136 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { clusterApi, projectApi } from '@/api'
 import type { AddClusterPayload, ClusterSummary, Project } from '@/types'
 
+const route = useRoute()
+const router = useRouter()
+
 const loading = ref(false)
 const adding = ref(false)
 const clusters = ref<ClusterSummary[]>([])
 const projects = ref<Project[]>([])
+
+// 按项目筛选：支持项目名称模糊搜索；与路由 ?project_id= 双向同步（项目页跳转落点）
+const filterProjectId = ref(typeof route.query.project_id === 'string' ? route.query.project_id : '')
+const projectQuery = ref('')
+
+const projectOptions = computed(() => {
+  const q = projectQuery.value.trim().toLowerCase()
+  if (!q) return projects.value
+  return projects.value.filter((p) => fuzzyMatch(p.name, q))
+})
+
+const filteredClusters = computed(() => {
+  if (!filterProjectId.value) return clusters.value
+  return clusters.value.filter((c) => c.project_id === filterProjectId.value)
+})
+
+const emptyText = computed(() => {
+  if (!clusters.value.length) return '暂无集群，点击右上角「接入集群」'
+  const p = projects.value.find((x) => x.id === filterProjectId.value)
+  return p ? `项目「${p.name}」下暂无集群` : '暂无匹配的集群'
+})
+
+/** 模糊匹配：子串命中，或查询字符按顺序全部出现在名称中（如“灾监”命中“自然灾害…监测…”） */
+function fuzzyMatch(text: string, query: string) {
+  const t = text.toLowerCase()
+  const q = query.toLowerCase().trim()
+  if (!q) return true
+  if (t.includes(q)) return true
+  let i = 0
+  for (const ch of t) {
+    if (ch === q[i]) i++
+    if (i === q.length) return true
+  }
+  return false
+}
+
+function onProjectFilter(query: string) {
+  projectQuery.value = query
+}
+
+function syncFilterQuery() {
+  router.replace({ query: { ...route.query, project_id: filterProjectId.value || undefined } })
+}
+
+watch(
+  () => route.query.project_id,
+  (v) => {
+    filterProjectId.value = typeof v === 'string' ? v : ''
+  },
+)
+
+// 深链指向已删除/不存在的项目时自动清空筛选，避免停留在空列表
+watch(projects, (list) => {
+  if (filterProjectId.value && !list.some((p) => p.id === filterProjectId.value)) {
+    filterProjectId.value = ''
+  }
+})
+
+// —— 列宽自适应：按表头与单元格实际内容测量宽度（canvas measureText），
+//    名称/端点两列在容器剩余空间内弹性分摊，保证表格恰好铺满不出现横向滚动 ——
+const FONT_STACK = `'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif`
+const CELL_PAD = 24 // el-table 单元格左右内边距 12px × 2
+const TAG_PAD = 20 // el-tag small 左右 padding 9px × 2 + 边框
+const BUFFER = 10
+const measureCtx = document.createElement('canvas').getContext('2d')
+const tableRef = ref()
+const tableWidth = ref(0)
+let tableResizeObserver: ResizeObserver | undefined
+
+function textWidth(text: string, px: number, weight = 400) {
+  if (!measureCtx || !text) return 0
+  measureCtx.font = `${weight} ${px}px ${FONT_STACK}`
+  return measureCtx.measureText(text).width
+}
+
+const colW = computed(() => {
+  const cs = clusters.value
+  const longest = (f: (c: ClusterSummary) => number) => Math.max(0, ...cs.map(f))
+  const col = (label: string, content: number, min: number, max: number) =>
+    Math.min(max, Math.max(min, Math.ceil(Math.max(textWidth(label, 14), content) + CELL_PAD + BUFFER)))
+  const statusTextW =
+    Math.max(textWidth('在线', 12), textWidth('离线', 12), textWidth('未知', 12)) + TAG_PAD
+
+  const project = col('项目', longest((c) => (projectName(c) ? textWidth(projectName(c)!, 12) + TAG_PAD : 0)), 90, 320)
+  const status = col('状态', statusTextW, 80, 140)
+  const lastSeen = col('最近探测', longest((c) => textWidth(formatTime(c.last_seen), 14)), 150, 220)
+  const actions = Math.max(150, Math.ceil(3 * textWidth('详情', 14) + 2 * 12 + 3 * 10 + CELL_PAD))
+  const nameNeed = col('名称', longest((c) => textWidth(c.name, 14, 600) + (c.desc ? 8 + textWidth(c.desc, 12) : 0)), 120, 520)
+  const endpointNeed = col('Manager 端点', longest((c) => textWidth(c.worker_url ?? '', 14)), 160, 420)
+
+  // 容器减去固定内容列后，剩余宽度按两列的内容占比分摊（不足时按比例压缩）
+  const avail = Math.max(320, (tableWidth.value || 1040) - project - status - lastSeen - actions)
+  const need = nameNeed + endpointNeed
+  const nameW = Math.max(90, Math.floor((avail * nameNeed) / need))
+  return {
+    name: nameW,
+    project,
+    status,
+    endpoint: Math.max(90, avail - nameW),
+    lastSeen,
+    actions,
+  }
+})
+
+onMounted(() => {
+  const el = tableRef.value?.$el as HTMLElement | undefined
+  if (el && typeof ResizeObserver !== 'undefined') {
+    tableResizeObserver = new ResizeObserver((entries) => {
+      tableWidth.value = entries[0]?.contentRect.width ?? el.clientWidth
+    })
+    tableResizeObserver.observe(el)
+    tableWidth.value = el.clientWidth
+  }
+})
+
+onBeforeUnmount(() => tableResizeObserver?.disconnect())
 
 const dialogVisible = ref(false)
 const editing = ref(false)
@@ -217,6 +355,19 @@ onMounted(async () => {
 }
 .page-sub {
   margin: 4px 0 0;
+  color: var(--og-text-dim);
+  font-size: 12px;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.project-filter {
+  width: 280px;
+}
+.filter-summary {
   color: var(--og-text-dim);
   font-size: 12px;
 }

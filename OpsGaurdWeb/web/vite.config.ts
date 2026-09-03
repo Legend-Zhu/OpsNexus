@@ -12,10 +12,10 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    // 开发期代理：/api 到管理端后端（Go+Gin，默认 :8090）
+    // 开发期代理：/api 到管理端后端（Go+Gin，默认 :8090；可用 VITE_API_PROXY_TARGET 覆盖）
     proxy: {
       '/api': {
-        target: 'http://localhost:8090',
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:8090',
         changeOrigin: true,
       },
     },

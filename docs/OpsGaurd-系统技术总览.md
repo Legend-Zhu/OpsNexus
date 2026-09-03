@@ -266,7 +266,7 @@ server 始终是 gRPC **客户端**，Worker 是**服务端**（gRPC `:9080`）�
 
 - **版本现状**：server 1.2.12、Worker 1.2.7。
 
-## 十二、开发与构建
+## 十二、开发与构建  
 
 - proto 变更：`proto/gen.sh` 双端生成；环境无 protoc / 无 module proxy 时，回退 `Worker/cmd/genpatch`（`genpatch.exe` 即其产物）离线给两端 pb.go 打 TunnelFrame 字段增量补丁，幂等且带 verify 往返校验。
 - Worker 构建：`Worker/deploy/Dockerfile`（golang:1.25-alpine 多阶段，CGO_ENABLED=0 静态编译，alpine 3.20 运行时）；版本号经 `-ldflags` 注入 `internal/version`。

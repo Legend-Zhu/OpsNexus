@@ -75,6 +75,11 @@ curl http://10.50.182.57:7070/v1/models \
 # 自测走服务端口即可（直跑二进制不继承 systemd 的 EnvironmentFile）：
 curl -X POST http://10.50.182.57:7072/notify -H 'Content-Type: application/json' \
   -d '{"channel_type":"feishu","content":"测试"}' # 群里应收到消息
+# 卡片样式（代理 ≥ 2026-09 版本）：请求体带可选 "card" 对象即以
+# msg_type=interactive 发送（/notify 直发卡片；/urgent 应用消息 content 传
+# 卡片 JSON 字符串）。不带 card 时保持纯文本，旧版管理端不受影响。
+curl -X POST http://10.50.182.57:7072/notify -H 'Content-Type: application/json' \
+  -d '{"channel_type":"feishu","content":"文本兜底","card":{"header":{"title":{"tag":"plain_text","content":"告警 - 资源超限"},"template":"red"},"elements":[{"tag":"div","text":{"tag":"lark_md","content":"**摘要:** cpu usage 98.6% >= 85%"}}]}}'
 # 加急链路会 buzz 5 名值班用户，建议明确告知后执行：
 curl -X POST http://10.50.182.57:7072/urgent -H 'Content-Type: application/json' \
   -d '{"channel_type":"feishu","content":"[测试] 加急链路验证"}'

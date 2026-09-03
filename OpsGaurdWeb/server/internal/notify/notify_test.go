@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 )
@@ -120,10 +122,72 @@ func TestNotifyViaProxy(t *testing.T) {
 	if got == nil || got["channel_type"] != "feishu" || got["content"] == nil {
 		t.Fatalf("unexpected proxy payload: %+v", got)
 	}
+	// 飞书渠道必须附 interactive 卡片（对齐群内告警模板）
+	if got["card"] == nil {
+		t.Fatal("feishu via_proxy payload should carry card")
+	}
 	// 公网凭据不落内网库
 	ch2, _ := svc.st.GetChannel(ch.ID)
 	if _, ok := ch2.Config["webhook_url"]; ok {
 		t.Fatal("public webhook_url should not be stored for via_proxy channel")
+	}
+}
+
+// TestAlertCardFormat 卡片构造：恢复态绿头、触发态红头；字段/摘要/详情去前缀与建议语。
+func TestAlertCardFormat(t *testing.T) {
+	svc := newTestNotify(t)
+
+	firing := &store.Alert{
+		Cluster: "azbx-cluster", Service: "insurance", Type: store.EventResourceOver,
+		Level: store.LevelError, Title: "[azbx-cluster] 资源超限：cpu usage 98.6% >= 85%",
+		Status: store.AlertActive, LastTS: time.Date(2026, 9, 2, 8, 50, 0, 0, time.UTC),
+	}
+	card := svc.alertCard(firing, firing.Title)
+
+	header := card["header"].(map[string]any)
+	title := header["title"].(map[string]any)["content"]
+	if title != "告警 - 资源超限" || header["template"] != "red" {
+		t.Fatalf("firing header: %v / %v", title, header["template"])
+	}
+
+	recovered := *firing
+	recovered.Status = store.AlertRecovered
+	rcard := svc.alertCard(&recovered, "[azbx-cluster/insurance] 告警已恢复：[azbx-cluster] 资源超限：cpu usage 98.6% >= 85%")
+	rheader := rcard["header"].(map[string]any)
+	if rheader["title"].(map[string]any)["content"] != "恢复 - 资源超限" || rheader["template"] != "green" {
+		t.Fatalf("recovered header: %+v", rheader)
+	}
+
+	// 字段区：对象 cluster/service、级别彩点
+	fields := card["elements"].([]any)[0].(map[string]any)["fields"].([]any)
+	joined := ""
+	for _, f := range fields {
+		joined += f.(map[string]any)["text"].(map[string]any)["content"].(string) + "\n"
+	}
+	for _, want := range []string{"**对象:** azbx-cluster/insurance", "**级别:** 🔴 紧急", "**系统:** azbx-cluster"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("fields missing %q: %s", want, joined)
+		}
+	}
+
+	// 摘要/详情：去 [cluster] 前缀；触发态补充建议语；恢复态保留原文
+	summary := card["elements"].([]any)[1].(map[string]any)["text"].(map[string]any)["content"].(string)
+	if summary != "**摘要:** 资源超限：cpu usage 98.6% >= 85%" {
+		t.Fatalf("summary: %q", summary)
+	}
+	detail := card["elements"].([]any)[2].(map[string]any)["text"].(map[string]any)["content"].(string)
+	if detail != "**详情:** 资源超限：cpu usage 98.6% >= 85%，请检查服务状态" {
+		t.Fatalf("detail: %q", detail)
+	}
+	rdetail := rcard["elements"].([]any)[2].(map[string]any)["text"].(map[string]any)["content"].(string)
+	if rdetail != "**详情:** 告警已恢复：资源超限：cpu usage 98.6% >= 85%" {
+		t.Fatalf("recovered detail: %q", rdetail)
+	}
+
+	// 时间字段
+	last := card["elements"].([]any)[4].(map[string]any)["text"].(map[string]any)["content"].(string)
+	if !strings.Contains(last, "2026-09-02") {
+		t.Fatalf("time field: %q", last)
 	}
 }
 

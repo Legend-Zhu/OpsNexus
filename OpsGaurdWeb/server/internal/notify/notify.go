@@ -317,13 +317,21 @@ func (s *Service) send(ctx context.Context, ch *store.NotifyChannel, content str
 			"config":       ch.Config, // 无公网凭据（如短信签名在代理侧）
 			"content":      content,
 		}
+		// 飞书附 interactive 卡片（对齐群内告警模板）；content 保留为纯文本
+		// 兜底——旧版代理忽略 card 字段时退回文本样式，行为不变。
+		if ch.Type == store.ChannelFeishu {
+			payload["card"] = s.alertCard(alert, content)
+		}
 		body, _ := json.Marshal(payload)
 		return s.postJSON(ctx, ch.ProxyURL, body)
 	}
 	switch ch.Type {
 	case store.ChannelFeishu:
 		url, _ := ch.Config["webhook_url"].(string)
-		body, _ := json.Marshal(map[string]any{"msg_type": "text", "content": map[string]any{"text": content}})
+		body, _ := json.Marshal(map[string]any{
+			"msg_type": "interactive",
+			"card":     s.alertCard(alert, content),
+		})
 		return s.postJSON(ctx, url, body)
 	case store.ChannelWebhook:
 		url, _ := ch.Config["url"].(string)
@@ -332,6 +340,145 @@ func (s *Service) send(ctx context.Context, ch *store.NotifyChannel, content str
 	default:
 		return ErrInvalid{"unsupported channel type " + string(ch.Type)}
 	}
+}
+
+// --- 飞书告警卡片 ---
+
+// alertCard 构造告警通知的飞书 interactive 卡片，样式对齐群内既有模板：
+// 红色头「告警 - X」/ 绿色头「恢复 - X」，双列字段（告警/级别/对象/系统）
+// + 摘要/详情 + 分隔线 + 时间。
+func (s *Service) alertCard(alert *store.Alert, subject string) map[string]any {
+	kind, template := "告警", "red"
+	switch alert.Status {
+	case store.AlertRecovered:
+		kind, template = "恢复", "green"
+	case store.AlertAcked:
+		kind, template = "认领", "orange"
+	}
+	name := eventTypeLabel(alert.Type)
+	md := func(format string, args ...any) map[string]any {
+		return map[string]any{"tag": "lark_md", "content": fmt.Sprintf(format, args...)}
+	}
+	short := func(text map[string]any) map[string]any {
+		return map[string]any{"is_short": true, "text": text}
+	}
+	elements := []any{
+		map[string]any{"tag": "div", "fields": []any{
+			short(md("**告警:** %s", name)),
+			short(md("**级别:** %s", levelLabel(alert.Level))),
+			short(md("**对象:** %s", alertTarget(alert))),
+			short(md("**系统:** %s", s.systemName(alert.Cluster))),
+		}},
+		map[string]any{"tag": "div", "text": md("**摘要:** %s", alertSummary(alert))},
+		map[string]any{"tag": "div", "text": md("**详情:** %s", alertDetail(alert, subject))},
+		map[string]any{"tag": "hr"},
+		map[string]any{"tag": "div", "text": md("**时间:** %s", alert.LastTS.Local().Format("2006-01-02 15:04:05"))},
+	}
+	return map[string]any{
+		"config": map[string]any{"wide_screen_mode": true},
+		"header": map[string]any{
+			"title":    map[string]any{"tag": "plain_text", "content": kind + " - " + name},
+			"template": template,
+		},
+		"elements": elements,
+	}
+}
+
+// eventTypeLabel 事件类型中文名（兜底展示原值）。
+func eventTypeLabel(t store.EventType) string {
+	switch t {
+	case store.EventPortDown:
+		return "端口不可达"
+	case store.EventHTTPUnhealthy:
+		return "HTTP 健康检查失败"
+	case store.EventLogMatch:
+		return "日志异常匹配"
+	case store.EventResourceOver:
+		return "资源超限"
+	case store.EventContainerDown:
+		return "容器不可用"
+	case store.EventPatrolFailed:
+		return "巡检异常"
+	case store.EventResourceRecover, store.EventRecovered:
+		return "恢复"
+	default:
+		return string(t)
+	}
+}
+
+// levelLabel 告警级别展示（彩色圆点对齐群模板「🔴 紧急」）。
+func levelLabel(l store.Level) string {
+	switch l {
+	case store.LevelError:
+		return "🔴 紧急"
+	case store.LevelWarn:
+		return "🟠 重要"
+	default:
+		return "🔵 提示"
+	}
+}
+
+// alertTarget 告警对象：cluster 或 cluster/service。
+func alertTarget(a *store.Alert) string {
+	if a.Service == "" {
+		return a.Cluster
+	}
+	return a.Cluster + "/" + a.Service
+}
+
+// systemName 解析集群所属项目名（卡片「系统」字段）；未归属或项目缺失时回退集群名。
+func (s *Service) systemName(cluster string) string {
+	if c, err := s.st.GetCluster(cluster); err == nil && c != nil && c.ProjectID != "" {
+		if p, err := s.st.GetProject(c.ProjectID); err == nil && p != nil && p.Name != "" {
+			return p.Name
+		}
+	}
+	return cluster
+}
+
+// stripBracketPrefixes 去掉消息开头连续的「[xxx] 」前缀。
+func stripBracketPrefixes(s string) string {
+	for strings.HasPrefix(s, "[") {
+		end := strings.Index(s, "]")
+		if end < 0 {
+			return s
+		}
+		s = strings.TrimLeft(s[end+1:], " ")
+	}
+	return s
+}
+
+// stripTargetRefs 去掉消息中的对象标记（"[cluster]"、"[cluster/service]"）——
+// 对象信息已由卡片「对象」字段单独展示，正文不再重复；随后再剥离开头剩余的
+// 连续 "[xxx] " 前缀（兼容其他来源的标记）。
+func stripTargetRefs(a *store.Alert, s string) string {
+	// 先替换「标记+后随空格」再替换裸标记，避免残留孤立空格
+	for _, tok := range []string{
+		"[" + a.Cluster + "/" + a.Service + "] ",
+		"[" + a.Cluster + "] ",
+		"[" + a.Cluster + "/" + a.Service + "]",
+		"[" + a.Cluster + "]",
+	} {
+		s = strings.ReplaceAll(s, tok, "")
+	}
+	// 兼容其他来源的前缀标记；subject 均为单行文案，空白收敛安全
+	return strings.TrimLeft(stripBracketPrefixes(collapseSpaces(s)), " ")
+}
+
+// collapseSpaces 连续空白收敛为单空格。
+func collapseSpaces(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// alertSummary 摘要：告警标题去掉对象标记（如「资源超限：cpu usage 98.6% >= 85%」）。
+func alertSummary(a *store.Alert) string { return stripTargetRefs(a, a.Title) }
+
+// alertDetail 详情：通知原文去掉对象标记。新建告警时原文与标题相同，补充处理
+// 建议对齐群模板「…，请检查服务状态」；恢复/累计等场景保留原文语境。
+func alertDetail(a *store.Alert, subject string) string {
+	d := stripTargetRefs(a, subject)
+	if d == alertSummary(a) {
+		d += "，请检查服务状态"
+	}
+	return d
 }
 
 func (s *Service) postJSON(ctx context.Context, url string, body []byte) error {
