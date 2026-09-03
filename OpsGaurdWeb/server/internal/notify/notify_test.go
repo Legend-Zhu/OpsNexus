@@ -237,6 +237,115 @@ func TestSendGenericRecordsSuccess(t *testing.T) {
 	}
 }
 
+// TestReportPostFormat 巡检报告 post 富文本构造：标题保留、结果标记转
+// 彩点、列表符转 •、标题行/加粗/代码装饰剥离、Markdown 链接转 a 标签、
+// 表格降级为「a ｜ b」逐行文本（分隔行跳过）、> 引用去前缀。
+func TestReportPostFormat(t *testing.T) {
+	content := "## 巡检结论\n" +
+		"整体**正常**，详见 `明细`。\n" +
+		"- [正常] 端口探活（dev/web）：200 OK\n" +
+		"- [异常] 磁盘水位（dev/db）：使用率 92%\n" +
+		"| 检查项 | 结果 |\n" +
+		"|---|---|\n" +
+		"| 端口探活 | ✅ 正常 |\n" +
+		"> 以上结果来自 [控制台](http://ogw.example/patrol)\n"
+	post := reportPost("巡检报告「夜间巡检」：正常 1 / 异常 1", content)
+	zh := post["zh_cn"].(map[string]any)
+	if zh["title"] != "巡检报告「夜间巡检」：正常 1 / 异常 1" {
+		t.Fatalf("title: %v", zh["title"])
+	}
+	rows := zh["content"].([][]map[string]any)
+	var plain string
+	var hasLink bool
+	for _, row := range rows {
+		for _, seg := range row {
+			if seg["tag"] == "a" {
+				hasLink = seg["href"] == "http://ogw.example/patrol" && seg["text"] == "控制台"
+			} else {
+				plain += seg["text"].(string) + "\n"
+			}
+		}
+	}
+	for _, want := range []string{
+		"巡检结论",                // 标题行去井号
+		"整体正常，详见 明细。",        // 加粗/代码装饰剥离
+		"• 🟢 端口探活（dev/web）",  // 列表符 + 正常标记
+		"• 🔴 磁盘水位（dev/db）",   // 列表符 + 异常标记
+		"检查项 ｜ 结果",           // 表头行降级
+		"端口探活 ｜ ✅ 正常",        // 表数据行降级
+		"以上结果来自", // 引用去 > 前缀（链接文本由 hasLink 覆盖）
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("missing %q in:\n%s", want, plain)
+		}
+	}
+	if !hasLink {
+		t.Fatalf("markdown link should become a-tag: %+v", rows)
+	}
+	for _, junk := range []string{"**", "`", "|", "> ", "#"} {
+		if strings.Contains(plain, junk) {
+			t.Fatalf("markup junk %q should be stripped: %s", junk, plain)
+		}
+	}
+}
+
+// TestSendRichFeishuPost 富文本发送：直连飞书发 post 消息体；走代理时
+// payload 附 post 对象且 content 保留纯文本兜底（旧代理兼容）；普通
+// Send 仍为纯文本。
+func TestSendRichFeishuPost(t *testing.T) {
+	svc := newTestNotify(t)
+	var got map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = nil
+		_ = jsonDecode(r, &got)
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	// 直连：SendRich → post，Send → text
+	ch, err := svc.CreateChannel(store.ChannelFeishu, "fs-direct", map[string]any{"webhook_url": ts.URL}, false, "", true)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := svc.SendRich(context.Background(), []string{ch.ID}, "标题", "- [异常] 磁盘水位（dev/db）：92%"); err != nil {
+		t.Fatalf("send rich: %v", err)
+	}
+	if got == nil || got["msg_type"] != "post" {
+		t.Fatalf("rich send should be post: %+v", got)
+	}
+	post := got["content"].(map[string]any)["post"].(map[string]any)["zh_cn"].(map[string]any)
+	if post["title"] != "标题" {
+		t.Fatalf("post title: %v", post["title"])
+	}
+	if err := svc.Send(context.Background(), []string{ch.ID}, "标题", "正文"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if got == nil || got["msg_type"] != "text" {
+		t.Fatalf("plain send should stay text: %+v", got)
+	}
+
+	// 走代理：SendRich → payload 带 post，content 兜底纯文本
+	var pgot map[string]any
+	pts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = jsonDecode(r, &pgot)
+		w.WriteHeader(200)
+	}))
+	defer pts.Close()
+	pch, err := svc.CreateChannel(store.ChannelFeishu, "fs-proxy", map[string]any{}, true, pts.URL, true)
+	if err != nil {
+		t.Fatalf("create proxy: %v", err)
+	}
+	if err := svc.SendRich(context.Background(), []string{pch.ID}, "标题", "内容"); err != nil {
+		t.Fatalf("send rich via proxy: %v", err)
+	}
+	if pgot == nil || pgot["post"] == nil {
+		t.Fatalf("proxy rich payload should carry post: %+v", pgot)
+	}
+	if pgot["content"] != "标题\n\n内容" {
+		t.Fatalf("proxy payload should keep text fallback: %v", pgot["content"])
+	}
+}
+
 func jsonDecode(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }

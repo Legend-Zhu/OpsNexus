@@ -777,7 +777,8 @@ func (s *Service) deliverReport(ctx context.Context, p *store.Patrol, report str
 		return ""
 	}
 	title := fmt.Sprintf("巡检报告「%s」：正常 %d / 异常 %d", p.Name, okCount, failCount)
-	if err := s.notify.Send(ctx, cfg.ChannelIDs, title, report); err != nil {
+	// 富文本投递：飞书渠道渲染为 post 富文本（明细逐行排版），其余渠道纯文本
+	if err := s.notify.SendRich(ctx, cfg.ChannelIDs, title, report); err != nil {
 		return "deliver report: " + err.Error()
 	}
 	return ""

@@ -84,7 +84,9 @@ const builtinCompressSystemTpl = `你是会话压缩器。把下面的对话轮�
 `
 
 // builtinPatrolSystemTpl 与 server.Summarize 内置 system 消息保持一致。
-const builtinPatrolSystemTpl = `你是智能运维巡检报告助手。基于巡检检查结果，给出简明、结构化的报告：异常概况、逐项说明、处置建议。不要编造数据。`
+// 报告经飞书 post 富文本逐行展示：post 无表格/样式能力，提示词引导模型
+// 用短段落与列表输出，少产 Markdown 装饰（转换器仍会兜底降级）。
+const builtinPatrolSystemTpl = `你是智能运维巡检报告助手。基于巡检检查结果，给出简明、结构化的报告：异常概况、逐项说明、处置建议。不要编造数据。报告将在飞书通知中逐行展示：用短段落和以 - 开头的列表组织内容，不要输出 Markdown 表格，不要使用 # 标题、** 加粗、> 引用等标记。`
 
 // scenarioDef 内置场景定义。
 type scenarioDef struct {

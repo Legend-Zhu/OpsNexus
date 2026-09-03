@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -234,10 +235,21 @@ func (s *Service) sendAndRecord(ctx context.Context, ch *store.NotifyChannel, al
 	return sendErr
 }
 
-// Send 向指定渠道发送任意内容（巡检报告等非告警场景）。
+// Send 向指定渠道发送任意内容（预算通知、渠道测试等纯文本场景）。
 // 逐渠道发送并记录；不存在/禁用的渠道跳过；单渠道失败不阻断其余渠道，
 // 返回首个错误（逐渠道明细见发送记录）。
 func (s *Service) Send(ctx context.Context, channelIDs []string, title, content string) error {
+	return s.sendTo(ctx, channelIDs, title, content, false)
+}
+
+// SendRich 向指定渠道发送富文本内容（巡检报告）：飞书渠道渲染为 post
+// 富文本消息（正文按常见 Markdown 语法解析排版），其余渠道与 Send 一致。
+func (s *Service) SendRich(ctx context.Context, channelIDs []string, title, content string) error {
+	return s.sendTo(ctx, channelIDs, title, content, true)
+}
+
+// sendTo 逐渠道发送并记录，rich 控制飞书渠道是否渲染 post 富文本。
+func (s *Service) sendTo(ctx context.Context, channelIDs []string, title, content string, rich bool) error {
 	var firstErr error
 	for _, cid := range channelIDs {
 		ch, err := s.st.GetChannel(cid)
@@ -250,7 +262,7 @@ func (s *Service) Send(ctx context.Context, channelIDs []string, title, content 
 		if ch == nil || !ch.Enabled {
 			continue
 		}
-		if err := s.sendAndRecordGeneric(ctx, ch, title, content); err != nil && firstErr == nil {
+		if err := s.sendAndRecordGeneric(ctx, ch, title, content, rich); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -258,7 +270,7 @@ func (s *Service) Send(ctx context.Context, channelIDs []string, title, content 
 }
 
 // sendAndRecordGeneric 通用内容发送并记录（alert_id 留空），返回发送错误。
-func (s *Service) sendAndRecordGeneric(ctx context.Context, ch *store.NotifyChannel, title, content string) error {
+func (s *Service) sendAndRecordGeneric(ctx context.Context, ch *store.NotifyChannel, title, content string, rich bool) error {
 	rec := &store.NotifyRecord{
 		ID:        fmt.Sprintf("nr-%d", time.Now().UnixNano()),
 		TS:        time.Now().UTC(),
@@ -267,7 +279,7 @@ func (s *Service) sendAndRecordGeneric(ctx context.Context, ch *store.NotifyChan
 		Target:    ch.Name,
 		Status:    "success",
 	}
-	err := s.sendGeneric(ctx, ch, title, content)
+	err := s.sendGeneric(ctx, ch, title, content, rich)
 	if err != nil {
 		rec.Status = "failed"
 		rec.Error = err.Error()
@@ -282,7 +294,8 @@ func (s *Service) sendAndRecordGeneric(ctx context.Context, ch *store.NotifyChan
 
 // sendGeneric 按渠道类型发送通用内容（与告警负载区分开：webhook 为
 // {title, content} 而非内嵌告警对象；文本类渠道为「标题+正文」纯文本）。
-func (s *Service) sendGeneric(ctx context.Context, ch *store.NotifyChannel, title, content string) error {
+// rich 且为飞书渠道时改发 post 富文本（巡检报告排版）。
+func (s *Service) sendGeneric(ctx context.Context, ch *store.NotifyChannel, title, content string, rich bool) error {
 	text := title + "\n\n" + content
 	if ch.ViaProxy {
 		payload := map[string]any{
@@ -290,12 +303,24 @@ func (s *Service) sendGeneric(ctx context.Context, ch *store.NotifyChannel, titl
 			"config":       ch.Config,
 			"content":      text,
 		}
+		// 飞书附 post 富文本；content 保留纯文本兜底——旧版代理忽略
+		// post 字段时退回文本样式，行为不变（与告警 card 字段同一模式）。
+		if ch.Type == store.ChannelFeishu && rich {
+			payload["post"] = reportPost(title, content)
+		}
 		body, _ := json.Marshal(payload)
 		return s.postJSON(ctx, ch.ProxyURL, body)
 	}
 	switch ch.Type {
 	case store.ChannelFeishu:
 		url, _ := ch.Config["webhook_url"].(string)
+		if rich {
+			body, _ := json.Marshal(map[string]any{
+				"msg_type": "post",
+				"content":  map[string]any{"post": reportPost(title, content)},
+			})
+			return s.postJSON(ctx, url, body)
+		}
 		body, _ := json.Marshal(map[string]any{"msg_type": "text", "content": map[string]any{"text": text}})
 		return s.postJSON(ctx, url, body)
 	case store.ChannelWebhook:
@@ -480,6 +505,113 @@ func alertDetail(a *store.Alert, subject string) string {
 	}
 	return d
 }
+
+// --- 飞书 post 富文本（巡检报告） ---
+
+// postLinkRe Markdown 行内链接 [文本](url)。
+var postLinkRe = regexp.MustCompile(`\[([^\[\]]+)\]\(([^()\s]+)\)`)
+
+// reportPost 把「标题+正文」渲染为飞书 post 富文本消息体（zh_cn 结构）。
+// webhook 与 im API 通用：webhook 包在 content.post 下，im API 把该对象
+// 直接序列化为 content 字符串。正文逐行解析常见 Markdown：标题行去井号、
+// 列表符转 •、检查明细的 [正常]/[异常] 标记转 🟢/🔴、**加粗**与 `代码`
+// 去装饰（post 文本段无样式能力）、[文本](url) 转 a 标签、表格行降级为
+// 「a ｜ b」逐行文本（post 无表格能力）、> 引用去前缀；其余行原样保留
+// 为文本段，任意内容安全降级。
+func reportPost(title, content string) map[string]any {
+	var rows [][]map[string]any
+	for _, line := range strings.Split(content, "\n") {
+		if segs := reportLine(strings.TrimSpace(line)); segs != nil {
+			rows = append(rows, segs)
+		}
+	}
+	if len(rows) == 0 { // 空正文兜底：飞书拒绝空 content 数组
+		rows = [][]map[string]any{{postText(title)}}
+	}
+	return map[string]any{
+		"zh_cn": map[string]any{
+			"title":   title,
+			"content": rows,
+		},
+	}
+}
+
+// reportLine 单行 → 一段 post 段落（若干 tag 段）；空行与分隔线返回 nil（跳过）。
+func reportLine(line string) []map[string]any {
+	// 引用行：去 > 前缀（post 无引用块，保留原样会漏出标记符）
+	line = strings.TrimPrefix(line, "> ")
+	line = strings.TrimPrefix(line, ">")
+	switch line {
+	case "", "---", "***", "___":
+		return nil
+	}
+	// 表格行：post 无表格能力，降级为「a ｜ b ｜ c」逐行文本；
+	// 表头分隔行（|---|---|）整行跳过
+	if strings.HasPrefix(line, "|") {
+		if strings.Trim(line, "|-: \t") == "" {
+			return nil
+		}
+		cells := strings.Split(strings.Trim(line, "|"), "|")
+		for i := range cells {
+			cells[i] = strings.TrimSpace(cells[i])
+		}
+		return inlineSegs(strings.Join(cells, " ｜ "))
+	}
+	// 标题行：去井号（post 文本段无样式，仅保留层级文字）
+	if h := strings.TrimLeft(line, "#"); h != line {
+		line = strings.TrimSpace(h)
+	}
+	// 前缀：列表符转 •；检查结果标记转彩点（保底报告的明细行格式）
+	prefix := ""
+	if rest := strings.TrimLeft(line, "-*+"); len(rest) < len(line) && strings.HasPrefix(rest, " ") {
+		line = strings.TrimSpace(rest)
+		prefix = "• "
+	}
+	for _, m := range []struct{ token, dot string }{{"[正常]", "🟢"}, {"[异常]", "🔴"}} {
+		if strings.HasPrefix(line, m.token) {
+			line = strings.TrimSpace(strings.TrimPrefix(line, m.token))
+			prefix += m.dot + " "
+			break
+		}
+	}
+	segs := inlineSegs(line)
+	if prefix != "" { // 彩点/列表符并入首个文本段
+		segs[0]["text"] = prefix + segs[0]["text"].(string)
+	}
+	return segs
+}
+
+// inlineSegs 行内文本切段：Markdown 链接转 a 标签，其余文本去装饰后保留。
+func inlineSegs(text string) []map[string]any {
+	var segs []map[string]any
+	for {
+		loc := postLinkRe.FindStringSubmatchIndex(text)
+		if loc == nil {
+			break
+		}
+		if t := stripInlineDeco(text[:loc[0]]); t != "" {
+			segs = append(segs, postText(t))
+		}
+		segs = append(segs, map[string]any{
+			"tag":  "a",
+			"text": stripInlineDeco(text[loc[2]:loc[3]]),
+			"href": text[loc[4]:loc[5]],
+		})
+		text = text[loc[1]:]
+	}
+	if t := stripInlineDeco(text); t != "" || len(segs) == 0 {
+		segs = append(segs, postText(t))
+	}
+	return segs
+}
+
+// stripInlineDeco 去掉 post 不支持的行内装饰（**加粗** 与 `代码`）。
+func stripInlineDeco(s string) string {
+	s = strings.ReplaceAll(s, "**", "")
+	return strings.ReplaceAll(s, "`", "")
+}
+
+func postText(t string) map[string]any { return map[string]any{"tag": "text", "text": t} }
 
 func (s *Service) postJSON(ctx context.Context, url string, body []byte) error {
 	if url == "" {

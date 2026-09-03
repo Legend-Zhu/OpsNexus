@@ -13,8 +13,11 @@
 //     请求体为 OpsGaurd notify 的 via_proxy 协议：
 //     {"channel_type":"feishu","config":{...},"content":"文本"}；可选
 //     "card":{...} 交互卡片对象——非空时以 msg_type=interactive 发送
-//     （webhook 直发卡片对象；应用消息 content 传卡片 JSON 字符串），
-//     旧版管理端不带 card 时保持纯文本，双向兼容。
+//     （webhook 直发卡片对象；应用消息 content 传卡片 JSON 字符串）；
+//     可选 "post":{...} 富文本对象（zh_cn 结构，巡检报告）——以
+//     msg_type=post 发送（webhook 包在 content.post 下；应用消息 content
+//     传 zh_cn JSON 字符串）。card 优先于 post；均缺省时保持纯文本，
+//     旧版管理端不受影响。
 //     公网凭据（webhook、加签密钥、应用 secret）全部持有在本服务侧，不进内网。
 //
 // 自测：internet-proxy -selftest（机器人 + 应用各发一条群消息，不加急）；
@@ -130,8 +133,8 @@ func newFeishu(c *config) *feishuClient {
 // sendWebhook 经群机器人自定义 webhook 发消息（安全设置为加签时自动签名）。
 // 飞书加签算法：key = timestamp + "\n" + secret，消息体为空，HMAC-SHA256 后
 // base64，timestamp 与 sign 作为 query 参数传递。
-// card 非空时发 interactive 卡片（msg_type=interactive），否则发纯文本。
-func (f *feishuClient) sendWebhook(ctx context.Context, text string, card map[string]any) error {
+// card 非空发 interactive 卡片，post 非空发 post 富文本，否则发纯文本。
+func (f *feishuClient) sendWebhook(ctx context.Context, text string, card, post map[string]any) error {
 	if f.webhook == "" {
 		return errors.New("FEISHU_WEBHOOK 未配置")
 	}
@@ -146,8 +149,11 @@ func (f *feishuClient) sendWebhook(ctx context.Context, text string, card map[st
 		"msg_type": "text",
 		"content":  map[string]any{"text": text},
 	}
-	if card != nil {
+	switch {
+	case card != nil:
 		payload = map[string]any{"msg_type": "interactive", "card": card}
+	case post != nil:
+		payload = map[string]any{"msg_type": "post", "content": map[string]any{"post": post}}
 	}
 	body, _ := json.Marshal(payload)
 	ep := f.webhook
@@ -199,8 +205,9 @@ func (f *feishuClient) tenantToken(ctx context.Context) (string, error) {
 }
 
 // sendAppMessage 以应用身份发群消息，返回 message_id（加急作用其上）。
-// card 非空时发 interactive 卡片（im API 的 content 为卡片 JSON 字符串）。
-func (f *feishuClient) sendAppMessage(ctx context.Context, text string, card map[string]any) (string, error) {
+// card 非空发 interactive 卡片，post 非空发 post 富文本——im API 的
+// content 均为对应消息体 JSON 字符串（card 即卡片对象，post 即 zh_cn 对象）。
+func (f *feishuClient) sendAppMessage(ctx context.Context, text string, card, post map[string]any) (string, error) {
 	if f.appID == "" || f.chatID == "" {
 		return "", errors.New("FEISHU_APP_ID / FEISHU_CHAT_ID 未配置")
 	}
@@ -210,9 +217,13 @@ func (f *feishuClient) sendAppMessage(ctx context.Context, text string, card map
 	}
 	msgType := "text"
 	var contentObj any = map[string]any{"text": text}
-	if card != nil {
+	switch {
+	case card != nil:
 		msgType = "interactive"
 		contentObj = card
+	case post != nil:
+		msgType = "post"
+		contentObj = post
 	}
 	contentJSON, _ := json.Marshal(contentObj)
 	body, _ := json.Marshal(map[string]any{
@@ -314,9 +325,10 @@ func notifyHandler(f *feishuClient, urgent bool) http.HandlerFunc {
 		defer cancel()
 
 		var p struct {
-			ChannelType string           `json:"channel_type"`
-			Content     string           `json:"content"`
-			Card        map[string]any   `json:"card"`
+			ChannelType string         `json:"channel_type"`
+			Content     string         `json:"content"`
+			Card        map[string]any `json:"card"`
+			Post        map[string]any `json:"post"`
 		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
@@ -343,15 +355,16 @@ func notifyHandler(f *feishuClient, urgent bool) http.HandlerFunc {
 		}
 
 		if !urgent {
-			if err := f.sendWebhook(ctx, p.Content, p.Card); err != nil {
-				slog.Error("notify(webhook) 失败", "err", err, "content_len", len(p.Content), "card", p.Card != nil)
+			if err := f.sendWebhook(ctx, p.Content, p.Card, p.Post); err != nil {
+				slog.Error("notify(webhook) 失败", "err", err, "content_len", len(p.Content),
+					"card", p.Card != nil, "post", p.Post != nil)
 				writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 			return
 		}
-		msgID, err := f.sendAppMessage(ctx, p.Content, p.Card)
+		msgID, err := f.sendAppMessage(ctx, p.Content, p.Card, p.Post)
 		if err != nil {
 			slog.Error("notify(urgent) 应用消息失败", "err", err)
 			writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
@@ -426,12 +439,12 @@ func runSelftest(c *config, f *feishuClient, urgent bool) {
 	defer cancel()
 	host, _ := os.Hostname()
 	msg := fmt.Sprintf("[internet-proxy 自测] host=%s time=%s（部署验证消息，可忽略）", host, time.Now().Format("15:04:05"))
-	if err := f.sendWebhook(ctx, msg, nil); err != nil {
+	if err := f.sendWebhook(ctx, msg, nil, nil); err != nil {
 		slog.Error("自测失败：webhook", "err", err)
 		os.Exit(1)
 	}
 	slog.Info("自测通过：webhook 群消息已发送")
-	msgID, err := f.sendAppMessage(ctx, msg, nil)
+	msgID, err := f.sendAppMessage(ctx, msg, nil, nil)
 	if err != nil {
 		slog.Error("自测失败：应用消息（检查应用是否入群、im 权限）", "err", err)
 		os.Exit(1)

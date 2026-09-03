@@ -31,8 +31,9 @@ import (
 const ScenarioPatrolSystem = "patrol_system"
 
 // patrolSystemPrompt 巡检报告内置 system 消息（与 mlops 内置 v1 模板等价，
-// 由回归测试守护一致）。
-const patrolSystemPrompt = "你是智能运维巡检报告助手。基于巡检检查结果，给出简明、结构化的报告：异常概况、逐项说明、处置建议。不要编造数据。"
+// 由回归测试守护一致）。报告经飞书 post 富文本逐行展示，引导模型用列表
+// 而非表格/样式标记（转换器仍会兜底降级）。
+const patrolSystemPrompt = "你是智能运维巡检报告助手。基于巡检检查结果，给出简明、结构化的报告：异常概况、逐项说明、处置建议。不要编造数据。报告将在飞书通知中逐行展示：用短段落和以 - 开头的列表组织内容，不要输出 Markdown 表格，不要使用 # 标题、** 加粗、> 引用等标记。"
 
 // PromptSource 提示词场景模板来源（mlops 运营层注入；nil = 代码内置默认）。
 // 引擎只依赖此最小接口，不依赖 mlops 包。

@@ -80,6 +80,10 @@ curl -X POST http://10.50.182.57:7072/notify -H 'Content-Type: application/json'
 # 卡片 JSON 字符串）。不带 card 时保持纯文本，旧版管理端不受影响。
 curl -X POST http://10.50.182.57:7072/notify -H 'Content-Type: application/json' \
   -d '{"channel_type":"feishu","content":"文本兜底","card":{"header":{"title":{"tag":"plain_text","content":"告警 - 资源超限"},"template":"red"},"elements":[{"tag":"div","text":{"tag":"lark_md","content":"**摘要:** cpu usage 98.6% >= 85%"}}]}}'
+# 富文本样式（代理 ≥ 2026-09 版本）：请求体带可选 "post" 对象（zh_cn
+# 结构，巡检报告）即以 msg_type=post 发送；card 优先于 post，均缺省时
+# 保持纯文本。
+curl -X POST http://10.50.182.57:7072/notify -H 'Content-Type: application/json'   -d '{"channel_type":"feishu","content":"文本兜底","post":{"zh_cn":{"title":"巡检报告","content":[[{"tag":"text","text":"• 🟢 端口探活：正常"}]]}}}'
 # 加急链路会 buzz 5 名值班用户，建议明确告知后执行：
 curl -X POST http://10.50.182.57:7072/urgent -H 'Content-Type: application/json' \
   -d '{"channel_type":"feishu","content":"[测试] 加急链路验证"}'
