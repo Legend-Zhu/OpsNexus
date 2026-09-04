@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
@@ -169,12 +170,18 @@ func (m *Manager) createSSEClient(cfg config.MCPServerConfig) (*mcpclient.Client
 	return client, nil
 }
 
-// createStreamableHTTPClient 创建 Streamable HTTP 传输客户端
+// createStreamableHTTPClient 创建 Streamable HTTP 传输客户端。挂载
+// outputSchema 剥除传输层：Worker go-sdk 生成的数组形 "type" outputSchema
+// 会导致 mark3labs 客户端 tools/list 整包解码失败（见 transport_strip.go），
+// 在传输层统一消解，Worker 侧零改动。
 func (m *Manager) createStreamableHTTPClient(cfg config.MCPServerConfig) (*mcpclient.Client, error) {
 	var opts []transport.StreamableHTTPCOption
 	if len(cfg.Headers) > 0 {
 		opts = append(opts, transport.WithHTTPHeaders(cfg.Headers))
 	}
+	opts = append(opts, transport.WithHTTPBasicClient(&http.Client{
+		Transport: schemaStrippingTransport{base: http.DefaultTransport},
+	}))
 	client, err := mcpclient.NewStreamableHttpClient(cfg.URL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create StreamableHTTP client: %w", err)

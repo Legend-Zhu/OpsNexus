@@ -26,7 +26,7 @@
 
 | 文件 | 部署位置 | 说明 |
 |---|---|---|
-| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.17，离线重打见记录 10/11/12/14/16/17/18/19/20） |
+| bundle/opsguard-server-1.0.0.tar … opsguard-server-1.2.0.tar | /opt/opsguard/images/ | 管理端镜像（本地构建导出；当前线 = 1.2.21，离线重打见记录 10/11/12/14/16/17/18/19/20/21） |
 | bundle/opsguard-worker-1.0.0.tar … opsguard-worker-1.1.0.tar | /opt/opsguard/images/ | Worker 镜像（当前线 = 1.2.7，离线重打/中继分发见记录 10/11/12/15） |
 | bundle/docker-27.5.1.tgz | /opt/opsguard/offline/ | docker 静态二进制 |
 | install-docker.sh / docker.service / containerd.service / daemon.json | /opt/opsguard/offline/ | 离线安装（含 swarm init、insecure-registries=10.60.189.6:8080） |
@@ -294,6 +294,139 @@
       两渠道）；删除临时条目后孤儿清理自动 recovered + 恢复通知同样新格式。
     - **回滚**：`docker rm -f opsguard-server` 后用 `opsguard-server:1.2.16`
       原样 run。
+
+21. **AiNexus 集群路由与工具注册治理 + MCP outputSchema 兼容修复
+    （2026-09-04，server 1.2.20→1.2.21 + 前端，worker 无改动仍 1.2.7）**：
+    提交 `cb0458e`（集群解析/工具名唯一化/会话 scoping/MCP 生命周期自愈/
+    chat_system 场景，方案见 `docs/AiNexus-集群路由排查问题与优化方案.md`）
+    及本次 `transport_strip` 修复。**本次排查发现线上 tools/list 从来就没
+    成功过**（详见下方 outputSchema 坑），AiNexus 排查此前实际上没有集群
+    工具可用。
+    - **坑：worker go-sdk v1.7.0 的 outputSchema 与管理端 mark3labs v0.57.0
+      客户端不兼容**：go-sdk 为类型化工具自动生成 `outputSchema`，可空字段
+      的 `"type"` 是数组（实测 51 处：`["null","array"]`×32、
+      `["null","object"]`×18、`["null","integer"]`×1），而 mark3labs 把
+      `outputSchema.type` 解析为 string → 整个 tools/list 解码失败
+      （`cannot unmarshal array into ... outputSchema.Alias.type`），该集群
+      20 个工具全不可见且 **AddServer 只记 Warning 不阻断**，一直未被发现。
+      另注意 go-sdk 对 POST 请求默认也回 **text/event-stream**（不是
+      application/json），修复必须处理 SSE 帧。
+    - **修法（服务端零依赖、worker 零改动）**：管理端 MCP 客户端挂载
+      `schemaStrippingTransport`——JSON 响应剥 `outputSchema` 键；SSE 响应
+      逐 `data:` 行解析-剥除-重序列化（保持事件帧结构，GET 长流直通）。
+      离线回归：用真实 worker 响应字节做 fixture
+      （`TestRewriteSSEAgainstRealWorkerResponse`，改写前复现报错、改写后
+      20 工具解码成功）。根治可等 mark3labs 升级或 worker 关闭 outputSchema
+      自动生成，届时移除传输层补丁。
+    - **发版**（aishell 全程，见下方「AiShell 部署流程」）：本地交叉编译
+      `server-1.2.21`（30.3MB，sha256 e3c89633…）+ `web-1.2.21.tar.gz`
+      （546KB，tar 带 `web/` 前缀，含排查页集群下拉）→ sftp 上传
+      `/opt/opsguard/build/1.2.21/`（sha256 校验一致）→ `FROM
+      opsguard-server:1.2.20 + COPY server + chmod + rm -rf /app/web/* +
+      COPY web/` 重打 → 旧容器 rename 留 `opsguard-server-1.2.20-backup` →
+      新容器原样 run。**教训**：rename 不停止旧容器，8080 仍被占用，新容器
+      `create` 成功但 `start` 报 port allocated——先 `docker stop` backup 再
+      `docker start` 新容器。
+    - **已验证**：healthz 200；`/ainexus/health` 显示 mcp_servers=
+      `["cluster:local","cluster:nxyj-cluster"]`、**tools=42**；`/ainexus/api/tools`
+      `by_source` 对账 `[MCP:cluster:local]`:20 / `[MCP:cluster:nxyj-cluster]`:20 /
+      builtin:2；健康循环静默（无 probe failed）；首页 bundle
+      `index-CjkopqIy.js` = 本地构建产物。
+    - **回滚**：`docker rm -f opsguard-server` 后用
+      `opsguard-server-1.2.20-backup`（rename 回原名或原样 run 新名）。
+
+## AiShell 部署流程（推荐）
+
+管理机到 189.6 只有 SSH 通道（无外网、无内网直连桌面），发版操作全部经
+**AiShell（aishell MCP 工具）** 完成：本地构建 → sftp 上传 → 终端执行离线
+重打与容器切换。aishell 的标签页即一条持久 SSH 会话（当前
+`root@10.60.189.6`，经网关 `127.0.0.1:17918`），工作目录与状态跨命令保持。
+
+### 前置
+
+- 本地：Go 交叉编译环境（module cache 齐全，无需外网）、Node（构建前端 dist）。
+- aishell：已连接 189.6 的标签页（`list_tabs` 确认 connected）。
+- 非白名单命令（`docker build/run/rm/stop`、`sha256sum`、写文件等）会进入
+  pending 队列，用 `approve_pending` 逐条放行；`&&`、`|`、`>` 等复合 token
+  被直接拒绝，**命令必须逐条执行**（重定向/管道放本地脚本或用 sftp 传文件）。
+
+### 标准发版步骤（server，含前端）
+
+1. **本地构建产物**（版本号 = 线上 patch +1，下例 1.2.21）：
+
+   ```bash
+   cd OpsGaurdWeb/server
+   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" \
+     -o ../../.deploytmp/server-1.2.21 ./cmd/server
+   # 前端：npm run build（web/），打包成带 web/ 前缀的 tar（解包即 COPY，免归拢）
+   rm -rf /tmp/og-web && mkdir -p /tmp/og-web && cp -r OpsGaurdWeb/web/dist /tmp/og-web/web
+   tar -czf .deploytmp/web-1.2.21.tar.gz -C /tmp/og-web web
+   sha256sum .deploytmp/server-1.2.21 .deploytmp/web-1.2.21.tar.gz   # 记录哈希
+   ```
+
+2. **aishell 上传**（`sftp_upload` 异步，`sftp_progress` 轮询；覆盖已存在文件
+   会进 pending，批准后断点续传）：
+
+   ```
+   sftp_mkdir  /opt/opsguard/build/1.2.21
+   sftp_upload .deploytmp/server-1.2.21   -> /opt/opsguard/build/1.2.21/server-1.2.21
+   sftp_upload .deploytmp/web-1.2.21.tar.gz -> /opt/opsguard/build/1.2.21/web-1.2.21.tar.gz
+   run_command: sha256sum /opt/opsguard/build/1.2.21/*    # 必须与本地一致
+   ```
+
+3. **构建文件**（Dockerfile 本地写好随 sftp 上传，aishell 无重定向）：
+
+   ```
+   FROM opsguard-server:1.2.20            # 上一线上版本
+   COPY server-1.2.21 /app/server
+   RUN chmod 0755 /app/server             # 记录 10 坑①：必须 chmod，勿 docker cp
+   RUN rm -rf /app/web/*                  # 记录 14/16：防旧 chunk 残留
+   COPY web/ /app/web/
+   ```
+
+4. **重打 + 换容器**（每条一个命令，等待前条完成）：
+
+   ```
+   run_command: tar -xzf web-1.2.21.tar.gz                        # 在 build 目录
+   run_command: docker build -t opsguard-server:1.2.21 /opt/opsguard/build/1.2.21/
+   run_command: docker rename opsguard-server opsguard-server-1.2.20-backup
+   run_command: docker stop opsguard-server-1.2.20-backup          # 关键！否则 8080 占用
+   run_command: docker run -d --name opsguard-server --restart unless-stopped \
+                -p 8080:8080 \
+                -v /opt/opsguard/server/data:/app/data \
+                -v /opt/opsguard/server/config.yaml:/app/configs/config.yaml:ro \
+                -v /var/run/docker.sock:/var/run/docker.sock opsguard-server:1.2.21
+   ```
+
+5. **验证**（curl + docker logs）：
+
+   ```
+   curl -s http://127.0.0.1:8080/healthz        # {"code":200,...}
+   curl -s http://127.0.0.1:8080/ainexus/health # mcp_servers/tools 计数
+   curl -s http://127.0.0.1:8080/ainexus/api/tools | by_source 对账（每集群 20）
+   grep -o 'index-[A-Za-z0-9_-]*\.js' <(curl -s :8080/)  # 与本地 dist bundle 一致
+   docker logs opsguard-server --since 5m        # 无 error/probe failed
+   ```
+
+   （`<(...)` 仅本地 shell 用法；aishell 内无管道，先 `-o /tmp/idx.html` 再 grep。）
+
+6. **回滚**：`docker rm -f opsguard-server` → `docker rename` backup 回原名 →
+   `docker start`；镜像 tar 均保留在本机 docker 里。
+
+### aishell 使用要点（踩坑记录）
+
+- **复合 token 黑名单**：`&&`、`|`、`>`（含重定向、`=>` 出现在引号内的
+  docker --format 模板也会被拦）一律拒绝 → 复合逻辑放本地脚本经 sftp 上传
+  后 `bash` 执行（如 `mcp-probe.sh` 对 worker MCP 做 initialize + tools/list
+  探测），或拆成逐条命令。
+- **curl 保存响应**：`-o /tmp/x` 可用（属 curl 参数，不是 shell 重定向）。
+- **上传覆盖**：目标文件已存在时 sftp_upload 不直接覆盖，进 pending 批准后
+  断点续传；大文件（30MB）约 90s，`sftp_progress` 轮询百分比。
+- **read_output 判断**：命令结果要看全（读到的内容须覆盖命令回显行），
+  否则不要下结论，加大 `lines` 再读。
+- **worker 端 MCP 连通性探测**：本地 worker（auth disabled）可直接
+  `bash /tmp/mcp-probe.sh http://10.60.189.6:8090/mcp`，脚本做 initialize →
+  取 Mcp-Session-Id → tools/list，并统计 outputSchema 数组 type 出现次数。
 
 ### 安责险集群（3 节点）部署记录（2026-08-14）
 
