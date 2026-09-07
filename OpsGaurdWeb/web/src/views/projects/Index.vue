@@ -213,13 +213,13 @@ onMounted(fetchProjects)
   border-radius: 50%;
 }
 .dot.online {
-  background: #34d399;
+  background: var(--el-color-success);
 }
 .dot.offline {
-  background: #f87171;
+  background: var(--el-color-danger);
 }
 .dot.unknown {
-  background: #94a3b8;
+  background: var(--og-text-dim);
 }
 .proj-foot {
   display: flex;

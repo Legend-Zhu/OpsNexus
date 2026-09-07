@@ -335,6 +335,37 @@
     - **回滚**：`docker rm -f opsguard-server` 后用
       `opsguard-server-1.2.20-backup`（rename 回原名或原样 run 新名）。
 
+22. **总览页改版：模型用量概览 + 四面板（2026-09-07，仅前端 1.2.21→1.2.22，
+    server 二进制/worker 无改动）**：dashboard 重做（页头健康胶囊/KPI/模型用量
+    概览卡：今日本月指标 + 30 天趋势 SVG 图；底部集群健康/最近告警/智能巡检/
+    AI 异常排查四张列表面板，双列瀑布布局）；修 patrol 报告框写死浅底深色主题
+    不可读（`report-box` 改 `--og-bg-code/--og-text-code`）与 projects 状态点
+    写死色值两处。改动仅 `web/src` 三个 Vue 文件（dashboard/patrol/projects）。
+    - **发版**：同记录 17/18 仅前端路径——本地 `npm run build` →
+      `web-1.2.22.tar.gz`（tar 带 `web/` 前缀，538KB）上传
+      `/opt/opsguard/build/1.2.22/`（sha256 `b2fd69ec…` 一致）→
+      `FROM opsguard-server:1.2.21 + rm -rf /app/web/* + COPY web/` 重打 →
+      旧容器 rename `opsguard-server-1.2.21-backup` + stop → 新容器原样 run
+      （三挂载/unless-stopped/8080 不变）。
+    - **已验证**：healthz 200；首页 bundle `index-Cb4byp1C.js` = 本地构建；
+      启动日志 error/failed/probe 零命中；三隧道池建立（local/232/66）；
+      `/ainexus/health` 与 1.2.21 基线一致（mcp_servers=2、tools=42）。
+    - **回滚**：`docker rm -f opsguard-server` → `docker rename
+      opsguard-server-1.2.21-backup opsguard-server` → `docker start`。
+
+23. **总览四面板对齐修正（2026-09-07，仅前端 1.2.22→1.2.23）**：记录 22 的
+    双列瀑布布局在真实数据下两列卡片顶边错位（用户反馈），改回 2×2 对齐
+    网格（集群健康|智能巡检 / 最近告警|AI 异常排查，短卡与长卡错开配对），
+    同行卡片等高、列表区 `flex:1` 撑满卡片——卡外无空白带、卡内由边框
+    收拢。仅 `dashboard/Index.vue` 布局改动。
+    - **发版**：同记录 22 路径，`web-1.2.23.tar.gz`（sha256 `17b60f62…`）
+      → `FROM opsguard-server:1.2.22` 重打 → rename/stop backup → 原样 run。
+    - **已验证**：healthz 200；容器内 assets 39 个、首页入口
+      `index-Ci4fU992.js` 均与本地 dist 一致；error/probe 日志零命中；
+      三隧道池建立；浏览器实测两行卡片 top/bottom 逐像素对齐。
+    - **回滚**：`docker rm -f opsguard-server` → `docker rename
+      opsguard-server-1.2.22-backup opsguard-server` → `docker start`。
+
 ## AiShell 部署流程（推荐）
 
 管理机到 189.6 只有 SSH 通道（无外网、无内网直连桌面），发版操作全部经

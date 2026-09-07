@@ -485,9 +485,10 @@ onMounted(async () => {
   overflow: auto;
   white-space: pre-wrap;
 }
-/* 报告区刻意保持纸张质感（浅底），各主题下均作为文档展示 */
+/* 报告区走代码底色 token，深浅主题均可读 */
 .report-box {
-  background: #f6f8fa;
+  background: var(--og-bg-code);
+  color: var(--og-text-code);
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
   padding: 10px;
