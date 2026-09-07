@@ -353,7 +353,25 @@ r-nacos 是平台内置的注册/配置中心（见《注册配置中心-r-nacos
 - **健康与刷新**：Worker 定期心跳被代理端点，失败标记并隔离——**不影响自有 20 工具的服务**（错误隔离是硬要求）；工具列表变更（如 r-nacos 新增 mcp_server）定期重拉生效。
 - **安全与审计**：转发调用写入 Worker 既有操作审计（工具名含来源前缀，可追溯到端点）；每条代理可配 `require_confirm`（默认关，r-nacos 声明的多为查询类工具）；转发超时在 Worker→被代理端→业务实例链路上叠加，透传错误并在结果中标注来源端点，便于排障。
 
-**分期**：P2 随 Worker 版本落地代理能力，r-nacos MCP 作为首个接入用例（试点验证转发链路）；P3 的形态 B"一键部署引导"默认改为生成"不发布端口 + 进 ops-net + Worker 代理"形态。
+**动态发现与动态注册（r-nacos 作为发现源）——可行性评估**：
+
+代理端点可静态配置，也可由 Worker 从 r-nacos 动态发现 mcp_server 列表并增删代理。结论：**可行，且管理端零新增概念**：
+
+1. Worker 定时（60s）调 r-nacos 的 mcp_server 列表接口，diff 出新增/移除 → 增删代理端点（握手 + listTools）；Worker /mcp 为 stateless 模式，tools/list 实时反映当前工具集，无会话失效问题。
+2. r-nacos 上的增删对管理端表现为**同一个 `cluster:<name>` server 的工具列表增减**——由 4.4 心跳的 tools hash 比对自动刷新。即"动态注册到 server"实际退化为"工具列表刷新"，不需要管理端动态增删 server 条目、不需要热重载。
+3. registry 为运行时可变结构（RWMutex），新增工具下一轮请求即生效。
+
+前提与风险：
+
+| # | 项 | 说明 | 对策 |
+|---|---|---|---|
+| 1 | **r-nacos 发现 API 未文档化**（最大不确定点） | mcp_server 经 r-nacos 控制台（10848）管理，走其自有 API，**非 Nacos 标准协议**（且与 Nacos 3.x MCP Registry 不兼容）；列表接口的路径/鉴权需实测确认 | 发现源抽象为接口：静态配置（先行）/ r-nacos API（实测后启用）/ 未来 Nacos 3.x MCP Registry（若切回 Nacos）|
+| 2 | **registry 尚无 Unregister**（现状） | 动态场景下 r-nacos 删除 mcp_server 后，管理端若残留 stale 工具定义，模型会尝试调用已不存在的工具 | P2 的 `Unregister`/前缀注销必须**先于**动态发现落地；心跳 diff 出工具消失时同步从 registry 注销 |
+| 3 | mcp-go server 侧工具热增删 | Worker 工具集热更新的 API 支持需确认 | 必要时按当前代理集重建 handler（stateless 模式无会话迁移成本）|
+| 4 | 工具集不可预知 | 动态发现会引入未经预审的工具 | MaxTotalTools、`rn_` 前缀整组排除、操作审计、页面工具清单可见性须与动态发现**同期**上线，不做裸发现 |
+| 5 | Worker 新增凭据 | 发现接口的鉴权凭据存 Worker agent 配置 | 不进管理端配置，回显打码 |
+
+**分期**：P2a 落地静态代理 + 4.4 工具变更刷新 + registry Unregister（验证转发链路与刷新机制）；P2b 在 r-nacos 列表 API 实测通过后启用动态发现（凭据与治理同期）。P3 的形态 B"一键部署引导"默认改为生成"不发布端口 + 进 ops-net + Worker 代理"形态。
 
 ---
 
@@ -418,7 +436,9 @@ r-nacos 是平台内置的注册/配置中心（见《注册配置中心-r-nacos
 |---|---|---|
 | **P1a Skill MVP** | SkillSource 接口 + read_skill 工具 + L1 注入（chat/investigate）+ 手动挂载字段 + Skill Hub CRUD（单版本）+ 3 个内置技能 + 使用计数 | `ainexus/agent|server`（接口+工具+注入）、`mlops/skill.go`、`store`、`api/mlops` 路由、前端 mlops 技能 tab + 对话页挂载器 |
 | **P1b MCP 基础管理** | **传输收口（用户自定义仅 sse/streamable-http，见 4.1）** + enabled/description 字段 + 单 server CRUD/test API（全量热重载实现）+ 前端 MCP 接入 tab（含部署引导文案） | `ainexus/config`（Validate）、`mcp/manager`（状态字段）、`ainexusrt`（增量封装）、`api`、前端 |
-| **P2 自愈与治理** | 心跳/重连/工具变更刷新；增量 RemoveServer/ReplaceServer；disabled_tools、冲突报告、MaxTotalTools、工具清单 API；**Worker 集群侧 MCP 代理（4.8：代理 r-nacos 等集群内端点，管理端零改动）**；skill 版本化 | `mcp/manager`、`tool/registry`（Unregister）、`mlops`、`Worker/internal/mcp`（客户端代理层） |
+| **P2 自愈与治理** | 心跳/重连/工具变更刷新；增量 RemoveServer/ReplaceServer；disabled_tools、冲突报告、MaxTotalTools、工具清单 API；skill 版本化 | `mcp/manager`、`tool/registry`（Unregister）、`mlops` |
+| **P2a Worker 静态代理** | Worker 集群侧 MCP 代理（4.8：静态配置代理 r-nacos 等集群内端点）+ registry Unregister/前缀注销 + 工具变更刷新联调（管理端零改动） | `Worker/internal/mcp`（客户端代理层）、`tool/registry` |
+| **P2b Worker 动态发现** | Worker 从 r-nacos 列表 API 动态发现 mcp_server 并增删代理（4.8 可行性评估：发现源抽象接口；r-nacos API 实测通过后启用；治理与凭据同期落地） | `Worker/internal/mcp`（发现源） |
 | **P3 运营深化** | 场景→技能绑定（告警类型自动挂载）；技能使用趋势看板；L3 资源引用；http-5xx 等更多内置技能；MCP 工具调用埋点统计；"MCP 部署为集群 service"一键引导（默认生成"ops-net + Worker 代理"免发布端口形态）；Worker 代理配置管理端下发（gRPC） | `mlops`、前端 |
 
 依赖关系：P1a 与 P1b 相互独立可并行；P2 依赖 P1b；P3 依赖 P1a。
