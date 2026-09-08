@@ -27,10 +27,9 @@ deploy/offline/bundle/
 !deploy/offline/docker-27.5.1.tgz
 
 # 离线部署的运行时/集群特定文件（含 worker token、集群地址等，不进 git；
-# 仅 deploy/offline/README.md 作为部署 runbook 入仓并保持最新）
+# deploy/offline/README.md 与 install-docker 脚本作为部署 runbook 入仓并保持最新）
 deploy/offline/agent-config*.yaml
 deploy/offline/stack*.yml
-deploy/offline/install-docker*.sh
 
 # 互联网代理运行时密钥（飞书凭据、LLM key）——不进 git，仅 example 模板入仓
 deploy/internet-proxy/proxy.env
