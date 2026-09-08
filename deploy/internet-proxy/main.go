@@ -1,24 +1,22 @@
 // internet-proxy 部署在互联网服务器（如 10.50.182.57）上，为内网 OpsGaurd
-// 管理端（经网闸 TCP 映射进入）提供两类受控出网能力：
+// 管理端（经网闸 TCP 映射进入）提供飞书通知代理。LLM 等通用反向代理由
+// nginx 承担（见 nginx-llm.conf，新加上游只改配置 reload），本服务只做
+// nginx 做不了的协议逻辑：
 //
-//  1. LLM 反向代理（LISTEN_LLM，默认 :7070，网闸任务 1731 → 50376）
-//     任意路径原样转发到 LLM_UPSTREAM（OpenAI 兼容网关），Authorization 头
-//     透传，SSE 流式响应逐块 flush。管理端「模型接入」base_url 填
-//     http://10.60.114.2:50376/v1 即可（程序自动拼 /chat/completions）。
+// 飞书通知代理（LISTEN_NOTIFY，默认 :7072，网闸任务 1733 → 50378）
 //
-//  2. 飞书通知代理（LISTEN_NOTIFY，默认 :7072，网闸任务 1733 → 50378）
-//     POST /notify  群机器人 webhook 代发（自动加签），绑所有级别
-//     POST /urgent  飞书应用发群消息 + 对值班用户应用内加急，绑 error 级
-//     GET  /healthz
-//     请求体为 OpsGaurd notify 的 via_proxy 协议：
-//     {"channel_type":"feishu","config":{...},"content":"文本"}；可选
-//     "card":{...} 交互卡片对象——非空时以 msg_type=interactive 发送
-//     （webhook 直发卡片对象；应用消息 content 传卡片 JSON 字符串）；
-//     可选 "post":{...} 富文本对象（zh_cn 结构，巡检报告）——以
-//     msg_type=post 发送（webhook 包在 content.post 下；应用消息 content
-//     传 zh_cn JSON 字符串）。card 优先于 post；均缺省时保持纯文本，
-//     旧版管理端不受影响。
-//     公网凭据（webhook、加签密钥、应用 secret）全部持有在本服务侧，不进内网。
+//	POST /notify  群机器人 webhook 代发（自动加签），绑所有级别
+//	POST /urgent  飞书应用发群消息 + 对值班用户应用内加急，绑 error 级
+//	GET  /healthz
+//	请求体为 OpsGaurd notify 的 via_proxy 协议：
+//	{"channel_type":"feishu","config":{...},"content":"文本"}；可选
+//	"card":{...} 交互卡片对象——非空时以 msg_type=interactive 发送
+//	（webhook 直发卡片对象；应用消息 content 传卡片 JSON 字符串）；
+//	可选 "post":{...} 富文本对象（zh_cn 结构，巡检报告）——以
+//	msg_type=post 发送（webhook 包在 content.post 下；应用消息 content
+//	传 zh_cn JSON 字符串）。card 优先于 post；均缺省时保持纯文本，
+//	旧版管理端不受影响。
+//	公网凭据（webhook、加签密钥、应用 secret）全部持有在本服务侧，不进内网。
 //
 // 自测：internet-proxy -selftest（机器人 + 应用各发一条群消息，不加急）；
 // internet-proxy -selftest-urgent（额外走加急链路，会 buzz 值班用户，慎用）。
@@ -29,7 +27,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -38,7 +35,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"strconv"
@@ -52,10 +48,7 @@ const feishuBase = "https://open.feishu.cn"
 // --- 配置 ---
 
 type config struct {
-	ListenLLM    string
 	ListenNotify string
-	LLMUpstream  string
-	LLMInsecure  bool
 
 	FeishuWebhook       string
 	FeishuWebhookSecret string
@@ -82,10 +75,7 @@ func envBool(k string) bool {
 
 func loadConfig() *config {
 	c := &config{
-		ListenLLM:    envStr("LISTEN_LLM", ":7070"),
 		ListenNotify: envStr("LISTEN_NOTIFY", ":7072"),
-		LLMUpstream:  strings.TrimRight(envStr("LLM_UPSTREAM", ""), "/"),
-		LLMInsecure:  envBool("LLM_INSECURE"),
 	}
 	if s := envStr("FEISHU_URGENT_USER_IDS", ""); s != "" {
 		for _, id := range strings.Split(s, ",") {
@@ -383,7 +373,6 @@ func healthHandler(c *config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":           true,
-			"llm_upstream": c.LLMUpstream,
 			"webhook":      c.FeishuWebhook != "",
 			"app":          c.FeishuAppID != "" && c.FeishuChatID != "",
 			"urgent_users": len(c.FeishuUrgentUsers),
@@ -410,28 +399,6 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
-}
-
-// newLLMProxy 构建到 LLM_UPSTREAM 的反向代理。SSE 必须立即 flush
-// （FlushInterval=-1），否则管理端 AI 排查对话退化为"卡住后一次性吐完"。
-func newLLMProxy(c *config) (http.Handler, error) {
-	u, err := url.Parse(c.LLMUpstream)
-	if err != nil {
-		return nil, err
-	}
-	rp := httputil.NewSingleHostReverseProxy(u)
-	rp.FlushInterval = -1
-	tr := &http.Transport{
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: c.LLMInsecure},
-		ResponseHeaderTimeout: 2 * time.Minute,
-		IdleConnTimeout:       90 * time.Second,
-	}
-	rp.Transport = tr
-	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		slog.Error("llm proxy 上游错误", "err", err, "path", r.URL.Path)
-		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "upstream: " + err.Error()})
-	}
-	return rp, nil
 }
 
 func runSelftest(c *config, f *feishuClient, urgent bool) {
@@ -473,12 +440,11 @@ func main() {
 	}
 
 	slog.Info("internet-proxy 启动",
-		"listen_llm", c.ListenLLM, "listen_notify", c.ListenNotify,
-		"llm_upstream", c.LLMUpstream, "llm_insecure", c.LLMInsecure,
+		"listen_notify", c.ListenNotify,
 		"webhook", c.FeishuWebhook != "", "app", c.FeishuAppID != "",
 		"urgent_users", len(c.FeishuUrgentUsers))
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 1)
 
 	notifyMux := http.NewServeMux()
 	notifyMux.HandleFunc("/notify", notifyHandler(f, false))
@@ -488,21 +454,6 @@ func main() {
 	go func() {
 		errCh <- http.ListenAndServe(c.ListenNotify, withLog(notifyMux))
 	}()
-
-	if c.LLMUpstream != "" {
-		llm, err := newLLMProxy(c)
-		if err != nil {
-			slog.Error("LLM_UPSTREAM 非法", "err", err)
-			os.Exit(1)
-		}
-		llmMux := http.NewServeMux()
-		llmMux.Handle("/", llm)
-		go func() {
-			errCh <- http.ListenAndServe(c.ListenLLM, withLog(llmMux))
-		}()
-	} else {
-		slog.Warn("LLM_UPSTREAM 未配置，LLM 反代未启动（仅通知代理模式）")
-	}
 
 	slog.Error("退出", "err", <-errCh)
 	os.Exit(1)

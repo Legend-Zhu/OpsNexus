@@ -3,6 +3,8 @@
 #   internet-proxy        （linux-amd64 二进制）
 #   proxy.env             （运行配置，含凭据）
 # 安装为 systemd 服务 opsguard-internet-proxy 并启动。
+# 本脚本只装飞书通知代理；LLM 反代由 nginx 承担，单独部署 nginx-llm.conf
+# （见 README），与本脚本互不依赖。
 set -euo pipefail
 
 INSTALL_DIR=/opt/opsguard/internet-proxy
@@ -18,7 +20,7 @@ install -m 0600 proxy.env "$ENV_FILE"
 
 cat > /etc/systemd/system/opsguard-internet-proxy.service <<'EOF'
 [Unit]
-Description=OpsGaurd internet proxy (LLM reverse proxy + Feishu notify relay)
+Description=OpsGaurd internet proxy (Feishu notify relay; LLM reverse proxy runs on nginx)
 After=network-online.target
 Wants=network-online.target
 
@@ -46,3 +48,4 @@ echo "已安装。验证："
 echo "  curl http://10.50.182.57:7072/healthz"
 echo "  /opt/opsguard/internet-proxy/internet-proxy -selftest         # 群内收两条自测消息"
 echo "  /opt/opsguard/internet-proxy/internet-proxy -selftest-urgent  # 额外加急值班用户（慎用）"
+echo "LLM 反代（7070）由 nginx 承担：部署 nginx-llm.conf 后 nginx -t && nginx -s reload"
