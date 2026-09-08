@@ -366,6 +366,94 @@
     - **回滚**：`docker rm -f opsguard-server` → `docker rename
       opsguard-server-1.2.22-backup opsguard-server` → `docker start`。
 
+24. **总览模型用量概览卡布局收敛（2026-09-08，仅前端 1.2.25→1.2.26）**：
+    趋势图此前 `width:100%; height:auto` 随宽度线性膨胀（宽屏 ~400px 高），
+    改为定高 148px + `preserveAspectRatio="none"` 拉伸（SVG 内仅形状，日期
+    刻度/峰值标注移至 HTML 层防拉伸变形）；卡内改左右两列——左侧四项指标
+    竖排、右侧图表 + 采集脚注，卡总高 ~350px → ~250px。
+    - **前置说明**：1.2.24/1.2.25 为同期其他改动发版（线上 20 分钟前刚更新），
+      本版 FROM 1.2.25 仅覆盖 web 层，携累计的前端改动（含 usage 卡压缩）。
+    - **发版**：`web-1.2.26.tar.gz`（sha256 `68981c21…`）→ `FROM
+      opsguard-server:1.2.25` 重打 → rename/stop `opsguard-server-1.2.25-backup`
+      → 新容器原样 run。
+    - **已验证**：healthz 200；首页 bundle `index-BXA-m-Bg.js` = 本地 dist；
+      error/probe 日志零命中；三隧道池建立。
+    - **回滚**：`docker rm -f opsguard-server` → `docker rename
+      opsguard-server-1.2.25-backup opsguard-server` → `docker start`。
+
+25. **模型用量趋势图可读性修正（2026-09-08，仅前端 1.2.26→1.2.27）**：
+    记录 24 的回归修正——① 柱状图基线用了 border-color-lighter 在深色主题
+    近乎不可见，柱子呈"悬浮"观感，改 `--el-border-color`；② HTML 层日期
+    刻度缺 `white-space:nowrap`，末位"09-08"折行；③ 左列指标 space-between
+    随列高散开、字号偏大，改 flex-start 固定 gap 并收紧（label 11/值 16/
+    sub 10px），趋势图定高 148→120px。
+    - **发版**：`web-1.2.27.tar.gz`（sha256 `431c36fb…`）→ `FROM
+      opsguard-server:1.2.26` 重打 → rename/stop `opsguard-server-1.2.26-backup`
+      → 新容器原样 run。**坑**：打包前 /tmp/og-web 未重拷 dist，打包出旧
+      内容（sha 与 1.2.26 相同暴露）；发版前务必核对 tar sha 与上版不同
+      + 入口 bundle 名变化。
+    - **已验证**：无头 Chrome 实测——30 根柱底与基线 top 逐像素一致（442），
+      刻度单行，usage 卡总高 320px；healthz 200；首页 bundle
+      `index-wA8Tq1Sn.js` = 本地 dist；error 日志零命中；三隧道池正常。
+    - **回滚**：`docker rm -f opsguard-server` → `docker rename
+      opsguard-server-1.2.26-backup opsguard-server` → `docker start`。
+
+26. **模型用量概览卡移除指标列（2026-09-08，仅前端 1.2.27→1.2.28）**：
+    记录 25 后用户仍嫌高，**整个 usage-stats 指标列移除**（今日/本月指标
+    详单以「用量费用」页为准），卡片收敛为：标题行（含指标切换/跳转）+
+    120px 趋势图 + 采集脚注，总高 440→255px；基线色加深
+    （`color-mix(--og-text-dim 70%)`）解决靛蓝主题下柱子悬浮观感。
+    - **发版**：`web-1.2.28.tar.gz`（sha256 `f40d635e…`）→ `FROM
+      opsguard-server:1.2.27` 重打 → rename/stop `opsguard-server-1.2.27-backup`
+      → 新容器原样 run。
+    - **已验证**：无头 Chrome 实测 stats 已移除、柱底=基线（440 逐像素）、
+      刻度零折行、卡高 255px、无横向溢出；healthz 200；首页 bundle
+      `index-BM5klBfi.js` = 本地 dist；error 日志零命中；三隧道池正常。
+    - **回滚**：`docker rm -f opsguard-server` → `docker rename
+      opsguard-server-1.2.27-backup opsguard-server` → `docker start`。
+
+27. **头部环境标签改为使用文档入口 + 新增文档中心页（2026-09-08，仅前端
+    1.2.28→1.2.29）**：头部「管理面」静态标签替换为「使用文档」链接
+    （Document 图标，跳 `/docs`）；新增 `/docs` 文档中心页——平台简介 /
+    快速上手 / 功能导览 / 常用场景 / 角色与权限 / 常见问题六板块，左侧粘性
+    目录，内容取自项目文档、只讲使用不讲实现。
+    - **发版**：`web-1.2.29.tar.gz`（sha256 `dc1d5b76…`）→ `FROM
+      opsguard-server:1.2.28` 重打 → rename/stop `opsguard-server-1.2.28-backup`
+      → 新容器原样 run。
+    - **已验证**：healthz 200；首页 bundle `index-C3XaJt-Q.js` = 本地 dist
+      且含「使用文档」；assets 41 个；error 日志零命中；三集群 online。
+    - **回滚**：`docker rm -f opsguard-server` → `docker rename
+      opsguard-server-1.2.28-backup opsguard-server` → `docker start`。
+
+28. **文档中心加厚:新增部署管理端 / 接入 Worker 章节（2026-09-08，仅前端
+    1.2.29→1.2.30）**：依据 deploy/offline runbook 与 Worker 部署手册，文档页
+    新增「部署管理端」（离线构建→load→run 三挂载、升级先 Worker 后 server）
+    与「接入 Worker」（前置检查、每节点安装、agent-config/token、stack 部署、
+    自检、页面接入两地址一 token、失败排查）两章；功能导览/常用场景/FAQ
+    全面扩充（场景补验证与坑位、FAQ 12 条）。TOC 增至 8 项。
+    - **发版**：`web-1.2.30.tar.gz`（sha256 `b3a860cf…`）→ `FROM
+      opsguard-server:1.2.29` 重打 → rename/stop `opsguard-server-1.2.29-backup`
+      → 新容器原样 run。
+    - **已验证**：healthz 与 /docs(SPA 回退)均 200；首页 bundle
+      `index-PdJNUram.js` = 本地 dist；文档分包 `Index-Cfrs5Lc2.js` 含新章节；
+      error 日志零命中。
+    - **回滚**：`docker rm -f opsguard-server` → `docker rename
+      opsguard-server-1.2.29-backup opsguard-server` → `docker start`。
+
+29. **文档中心补 Docker Swarm 配置章节（2026-09-08，仅前端 1.2.30→1.2.31）**：
+    「接入 Worker」章在集群侧安装与部署 Worker 服务之间补「初始化 / 加入
+    Swarm」小节——swarm init --advertise-addr、join-token worker/manager、
+    swarm join、可选 HA(promote)；要点：swarm 自身节点间放行
+    2377/tcp+7946/tcp+udp+4789/udp（与管理端→manager 双端口放行是两回事）、
+    docker node ls 验证、已有 Docker 环境用 docker info 核对。
+    - **发版**：`web-1.2.31.tar.gz`（sha256 `971e2916…`）→ `FROM
+      opsguard-server:1.2.30` 重打 → rename/stop `opsguard-server-1.2.30-backup`
+      → 新容器原样 run。
+    - **已验证**：healthz 200；首页 bundle `index-BYILjL9j.js` = 本地 dist；
+      文档分包 `Index-Yy1G35f7.js` 含 swarm join 等新内容；error 日志零命中。
+    - **回滚**：`docker rm -f opsguard-server` → `docker rename
+      opsguard-server-1.2.30-backup opsguard-server` → `docker start`。
+
 ## AiShell 部署流程（推荐）
 
 管理机到 189.6 只有 SSH 通道（无外网、无内网直连桌面），发版操作全部经

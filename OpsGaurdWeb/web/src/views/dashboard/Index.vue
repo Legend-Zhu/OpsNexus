@@ -67,29 +67,6 @@
         </div>
       </header>
 
-      <div class="usage-stats">
-        <div class="ustat">
-          <span class="ustat-label">今日调用</span>
-          <span class="ustat-value">{{ todayTotals.calls.toLocaleString() }}</span>
-          <span class="ustat-sub">成功率 {{ todaySuccessRate }} · 失败/取消 {{ todayTotals.error_calls + todayTotals.canceled_calls }}</span>
-        </div>
-        <div class="ustat">
-          <span class="ustat-label">今日 Tokens</span>
-          <span class="ustat-value">{{ fmtCompact(todayTotals.total_tokens) }}</span>
-          <span class="ustat-sub">输入 {{ fmtCompact(todayTotals.prompt_tokens) }} · 输出 {{ fmtCompact(todayTotals.completion_tokens) }}</span>
-        </div>
-        <div class="ustat">
-          <span class="ustat-label">今日费用</span>
-          <span class="ustat-value">{{ fmtMoney(todayTotals.cost_minor) }}</span>
-          <span class="ustat-sub">未计价调用 {{ todayTotals.unpriced_calls }}</span>
-        </div>
-        <div class="ustat">
-          <span class="ustat-label">本月费用</span>
-          <span class="ustat-value">{{ fmtMoney(monthTotals.cost_minor) }}</span>
-          <span class="ustat-sub">本月调用 {{ monthTotals.calls.toLocaleString() }} · Tokens {{ fmtCompact(monthTotals.total_tokens) }}</span>
-        </div>
-      </div>
-
       <div ref="chartEl" class="chart">
         <template v-if="hasTrend">
           <div class="chart-plot">
@@ -335,19 +312,9 @@ const trend = ref<MLOpsCostTrendRow[]>([])
 const usageLoaded = ref(false)
 const usageVisible = computed(() => usageLoaded.value && overview.value != null)
 
-const todayTotals = computed<MLOpsCostTotals>(
-  () => overview.value?.today_totals ?? ({} as MLOpsCostTotals),
-)
-const monthTotals = computed<MLOpsCostTotals>(
-  () => overview.value?.month_totals ?? ({} as MLOpsCostTotals),
-)
 const collector = computed(
   () => overview.value?.collector ?? { queue_len: 0, queue_cap: 0, dropped: 0, deduped: 0, failed: 0, retain_days: 0 },
 )
-const todaySuccessRate = computed(() => {
-  const t = todayTotals.value
-  return t.calls > 0 ? `${Math.round((t.success_calls / t.calls) * 100)}%` : '—'
-})
 
 // 微元 → 金额字符串（最多 4 位小数，随币种带符号）
 function fmtMoney(minor: number): string {
@@ -730,33 +697,6 @@ onBeforeUnmount(() => window.clearInterval(clockTimer))
   color: var(--og-accent-strong);
   font-weight: 600;
 }
-.usage-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  padding: 8px 0 12px;
-}
-.ustat {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.ustat-label {
-  font-size: 12px;
-  color: var(--og-text-dim);
-}
-.ustat-value {
-  font-size: 20px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  color: var(--el-text-color-primary);
-  font-variant-numeric: tabular-nums;
-}
-.ustat-sub {
-  font-size: 11px;
-  color: var(--og-text-dim);
-}
-
 /* 趋势图：定高拉伸，宽度随卡片、高度不随宽度膨胀 */
 .chart {
   position: relative;
@@ -765,7 +705,7 @@ onBeforeUnmount(() => window.clearInterval(clockTimer))
 }
 .chart-plot {
   position: relative;
-  height: 160px;
+  height: 120px;
 }
 .chart-svg {
   display: block;
@@ -780,7 +720,7 @@ onBeforeUnmount(() => window.clearInterval(clockTimer))
   color: var(--og-text-dim);
 }
 .baseline {
-  stroke: var(--el-border-color-lighter);
+  stroke: color-mix(in srgb, var(--og-text-dim) 70%, transparent);
   stroke-width: 1;
 }
 .bar {
@@ -803,6 +743,7 @@ onBeforeUnmount(() => window.clearInterval(clockTimer))
   font-size: 10px;
   color: var(--og-text-dim);
   font-family: var(--og-mono);
+  white-space: nowrap;
 }
 .chart-empty {
   display: grid;
@@ -848,8 +789,8 @@ onBeforeUnmount(() => window.clearInterval(clockTimer))
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  margin-top: 12px;
-  padding-top: 10px;
+  margin-top: 10px;
+  padding-top: 8px;
   border-top: 1px solid var(--el-border-color-extra-light);
   color: var(--og-text-dim);
   font-size: 11px;
