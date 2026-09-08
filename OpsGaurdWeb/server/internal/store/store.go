@@ -52,10 +52,16 @@ const (
 	BucketMLPricing   = "mlpricing"    // 模型单价快照（编码 provider/model）
 	BucketMLBinding   = "mlbinding"    // 场景模型绑定（scenario -> model，P3）
 	BucketMLBudget    = "mlbudget"     // 月度预算与通知档位（yyyy-mm，P3）
+
+	// 管理端 MCP Server（外部 AI 助手经 /mcp 调用平台工具）bucket。
+	// v4 新增，纯 key 前缀，无历史数据迁移。
+	BucketMCPAudit = "mcp_audit" // MCP 写工具调用审计（token×工具×结果留痕）
+	BucketMCPToken = "mcp_token" // MCP token 运行时表（admin API 管理）
+	BucketMCPUsage = "mcp_usage" // MCP 调用用量日聚合（actor|tool|ok 计数）
 )
 
 // schemaVersion 当前数据版本；每次不兼容变更 +1 并追加 migrate 函数。
-const schemaVersion = 3
+const schemaVersion = 4
 
 // Store 是 LevelDB 数据存储的门面。
 type Store struct {
@@ -120,6 +126,11 @@ var migrations = map[int]func(*Store) error{
 		// mlusage_day/mlbudget/mlbinding/mlops_audit，均为纯 key 前缀）。
 		// 无历史数据转换，仅推进版本号。
 		return s.putVersion(3)
+	},
+	4: func(s *Store) error {
+		// v4：新增管理端 MCP bucket（mcp_audit/mcp_token/mcp_usage，均为
+		// 纯 key 前缀）。无历史数据转换，仅推进版本号。
+		return s.putVersion(4)
 	},
 }
 

@@ -44,3 +44,6 @@ deploy/internet-proxy/proxy.env
 
 # IDE 配置目录
 .idea/
+
+# 本地部署验证配置（含 token secret，不入库）
+deploy-local/

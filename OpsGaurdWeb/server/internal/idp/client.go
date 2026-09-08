@@ -23,11 +23,11 @@ func NewClientService(st *store.Store) *ClientService {
 
 // CreateClientInput 创建 client 的入参。Public=true 时忽略 Secret，成为 PKCE-only 公共客户端。
 type CreateClientInput struct {
-	Name          string   `json:"name"`
-	RedirectURIs  []string `json:"redirect_uris"`
-	Scopes        []string `json:"scopes"`
-	Public        bool     `json:"public"`
-	TokenTTL      string   `json:"token_ttl,omitempty"`
+	Name         string   `json:"name"`
+	RedirectURIs []string `json:"redirect_uris"`
+	Scopes       []string `json:"scopes"`
+	Public       bool     `json:"public"`
+	TokenTTL     string   `json:"token_ttl,omitempty"`
 }
 
 // CreateClient 创建 client。返回创建后的 client（SecretHash 已哈希）与一次性明文 secret。
@@ -164,9 +164,9 @@ func (cs *ClientService) Authenticate(clientID, clientSecret string) (*store.Cli
 }
 
 // Get / List / Delete 透传到 store。
-func (cs *ClientService) Get(id string) (*store.Client, error)   { return cs.st.GetClient(id) }
-func (cs *ClientService) List() ([]*store.Client, error)        { return cs.st.ListClients() }
-func (cs *ClientService) Delete(id string) error                 { return cs.st.DeleteClient(id) }
+func (cs *ClientService) Get(id string) (*store.Client, error) { return cs.st.GetClient(id) }
+func (cs *ClientService) List() ([]*store.Client, error)       { return cs.st.ListClients() }
+func (cs *ClientService) Delete(id string) error               { return cs.st.DeleteClient(id) }
 
 // --- helpers ---
 

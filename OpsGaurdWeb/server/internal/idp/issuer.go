@@ -10,8 +10,8 @@ import (
 // Config 是 IdP（OpsGaurd 作为 OIDC 身份提供者）的配置。
 type Config struct {
 	Enabled         bool   `yaml:"enabled" json:"enabled"`
-	Issuer          string `yaml:"issuer" json:"issuer"`                   // 对外可达地址，须 https（localhost 例外）
-	AccessTokenTTL  string `yaml:"access_token_ttl" json:"accessTokenTtl"`  // 默认 1h
+	Issuer          string `yaml:"issuer" json:"issuer"`                     // 对外可达地址，须 https（localhost 例外）
+	AccessTokenTTL  string `yaml:"access_token_ttl" json:"accessTokenTtl"`   // 默认 1h
 	RefreshTokenTTL string `yaml:"refresh_token_ttl" json:"refreshTokenTtl"` // 默认 720h（30d）
 }
 
@@ -26,9 +26,9 @@ const (
 // Service 是 IdP 核心服务，聚合签名密钥、client 管理、token 签发与会话。
 // 它由路由层（router.go）在 IdP 启用时装配，端点方法直接挂在 *Service 上。
 type Service struct {
-	cfg    *Config
-	st     *store.Store
-	keys   *SigningKeys
+	cfg     *Config
+	st      *store.Store
+	keys    *SigningKeys
 	clients *ClientService
 
 	// 解析后的 TTL（构造时算好，避免每请求解析）。

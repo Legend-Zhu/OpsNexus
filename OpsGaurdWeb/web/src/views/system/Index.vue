@@ -70,6 +70,11 @@
         <AINexusGateway />
       </el-tab-pane>
 
+      <!-- MCP 接入（管理端 MCP Server：外部 AI 助手经 /mcp 自然语言运维） -->
+      <el-tab-pane label="MCP 接入" name="mcp">
+        <McpAccess />
+      </el-tab-pane>
+
       <!-- 密钥（巡检 flow 拨测账号等 ${secret:} 引用） -->
       <el-tab-pane label="密钥" name="secrets">
         <Secrets />
@@ -127,6 +132,7 @@ import { authApi } from '@/api'
 import { isAdmin, loadAdminFlag } from '@/composables/admin'
 import type { SSOStatus, User } from '@/types'
 import AINexusGateway from './AINexusGateway.vue'
+import McpAccess from './McpAccess.vue'
 import Secrets from './Secrets.vue'
 import IdpClients from './IdpClients.vue'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'

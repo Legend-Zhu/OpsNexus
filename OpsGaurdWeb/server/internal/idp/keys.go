@@ -30,11 +30,11 @@ import (
 type SigningKeys struct {
 	st *store.Store
 
-	mu       sync.RWMutex
-	kid      string                    // 当前 active KID
-	priv     *rsa.PrivateKey           // 当前 active 私钥（内存缓存）
-	jwks     jose.JSONWebKeySet        // 全部公钥（含历史，供轮换）
-	signer   jose.Signer               // 当前 active 签名器
+	mu     sync.RWMutex
+	kid    string             // 当前 active KID
+	priv   *rsa.PrivateKey    // 当前 active 私钥（内存缓存）
+	jwks   jose.JSONWebKeySet // 全部公钥（含历史，供轮换）
+	signer jose.Signer        // 当前 active 签名器
 }
 
 // LoadSigningKeys 加载（或在首次启动时生成）IdP 签名密钥。

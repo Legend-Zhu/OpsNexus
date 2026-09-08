@@ -113,6 +113,9 @@ func (s *Service) DeleteChannel(id string) error {
 // ListChannels 列出渠道。
 func (s *Service) ListChannels() ([]*store.NotifyChannel, error) { return s.st.ListChannels() }
 
+// GetChannel 按 id 读取渠道（MCP 工具更新前取现有 config 用）。
+func (s *Service) GetChannel(id string) (*store.NotifyChannel, error) { return s.st.GetChannel(id) }
+
 func validateChannelConfig(typ store.ChannelType, config map[string]any, viaProxy bool, proxyURL string) error {
 	switch typ {
 	case store.ChannelFeishu:

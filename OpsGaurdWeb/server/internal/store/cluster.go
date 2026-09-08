@@ -24,13 +24,17 @@ const (
 type Cluster struct {
 	Name string `json:"name"`
 	// ProjectID 所属项目（管理层级「项目 → 集群」）；空 = 未归属。
-	ProjectID string        `json:"project_id,omitempty"`
-	WorkerURL string        `json:"worker_url"`
-	MCPURL    string        `json:"mcp_url,omitempty"`
-	Token     string        `json:"token,omitempty"` // 落盘持久化；对外响应经 Public() 抹除
-	Desc      string        `json:"desc,omitempty"`
-	Status    ClusterStatus `json:"status"`
-	LastSeen  time.Time     `json:"last_seen"`
+	ProjectID string `json:"project_id,omitempty"`
+	WorkerURL string `json:"worker_url"`
+	// WorkerHTTPURL Worker 的 HTTP 端点（默认 http://<管理节点IP>:8080），
+	// /mcp 与 /healthz 的基地址；与 gRPC 管理端口（WorkerURL，默认 9080）是
+	// 两个独立端口。空 = 旧记录（MCP 地址沿用 mcp_url 原值）。
+	WorkerHTTPURL string        `json:"worker_http_url,omitempty"`
+	MCPURL        string        `json:"mcp_url,omitempty"`
+	Token         string        `json:"token,omitempty"` // 落盘持久化；对外响应经 Public() 抹除
+	Desc          string        `json:"desc,omitempty"`
+	Status        ClusterStatus `json:"status"`
+	LastSeen      time.Time     `json:"last_seen"`
 	// HasToken 仅在 Public() 输出时填充：true=已配 token。不暴露值本身。
 	HasToken bool `json:"has_token,omitempty"`
 	// Inventory 纳管清单：声明集群里要纳管的外部对象（非 OpsGaurd 部署的

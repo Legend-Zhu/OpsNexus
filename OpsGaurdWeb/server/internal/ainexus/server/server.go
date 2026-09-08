@@ -232,6 +232,101 @@ func (s *Server) IsModelDisabled(model string) bool {
 	return s.disabledModels[model]
 }
 
+// ChatTurn 进程内编排的一条对话消息（RunInvestigation 用；与网关外部
+// 的 JSON 消息形态解耦）。
+type ChatTurn struct {
+	Role    string // "system" | "user" | "assistant"（其余角色忽略）
+	Content string
+}
+
+// RunInvestigation 以 ReAct Agent 跑一次委托排查（进程内，非流式聚合）：
+// 返回最终文本结论与工具调用轨迹（供调用方落库/展示证据链）。计费归属
+// scenario=investigate；toolCluster 非空时把 Agent 可见工具限定为该集群
+// 的 MCP 工具（同 /ainexus/chat 的会话级 scoping）。connection 由调用方
+// 预先经 AddMCPCluster 建立。分钟级耗时，调用方须在后台 goroutine 中使用。
+func (s *Server) RunInvestigation(ctx context.Context, model, system string, turns []ChatTurn, toolCluster string) (answer, transcript string, err error) {
+	if s.openaiH == nil {
+		return "", "", fmt.Errorf("ainexus gateway not initialized")
+	}
+	model = s.ResolveModel(model)
+	p, ok := s.modelRoutes[model]
+	if !ok {
+		return "", "", fmt.Errorf("model %q not routable", model)
+	}
+	// 计量入口：委托排查的全部底层 LLM 调用归属 scenario=investigate
+	ctx = usage.NewOperation(ctx, usage.ScenarioInvestigate, "mcp_investigation")
+
+	ag := agent.New(p, s.registry, s.config.Agent, s.logger, s.promptSource)
+	if toolCluster != "" {
+		ag.SetToolFilter(mcp.ToolScopeFilter("cluster:" + toolCluster))
+	}
+	conv := agent.NewConversation(model)
+	conv.AddSystemMessage(system)
+	for _, t := range turns {
+		switch t.Role {
+		case "user":
+			conv.AddUserMessage(t.Content)
+		case "assistant":
+			conv.AddAssistantMessage(t.Content)
+		}
+	}
+
+	ch, err := ag.RunStream(ctx, conv)
+	if err != nil {
+		return "", "", fmt.Errorf("investigation stream: %w", err)
+	}
+	var ans, tr strings.Builder
+	runErr := error(nil)
+	done := false
+	for ev := range ch {
+		switch ev.Type {
+		case agent.AgentEventText:
+			ans.WriteString(ev.Content)
+			tr.WriteString(ev.Content)
+		case agent.AgentEventToolStart:
+			if ev.ToolCall != nil {
+				fmt.Fprintf(&tr, "\n→ %s(%s)\n", ev.ToolCall.Name, clip(ev.ToolCall.Arguments, 300))
+			}
+		case agent.AgentEventToolEnd:
+			if ev.ToolCall != nil && ev.ToolResult != nil {
+				mark := ""
+				if ev.ToolResult.IsError {
+					mark = " [error]"
+				}
+				fmt.Fprintf(&tr, "← %s%s: %s\n", ev.ToolCall.Name, mark, clip(ev.ToolResult.Content, 800))
+			}
+		case agent.AgentEventDone:
+			done = true
+		case agent.AgentEventError:
+			if ev.Error != nil {
+				runErr = ev.Error
+			}
+		}
+	}
+	if runErr != nil {
+		return ans.String(), tr.String(), runErr
+	}
+	if !done && ans.Len() == 0 {
+		return ans.String(), tr.String(), fmt.Errorf("investigation produced no output")
+	}
+	return ans.String(), tr.String(), nil
+}
+
+// clip 截断助手轨迹中的大片段（轨迹是给证据展示用的，不需要全文）。
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
+// CallClusterTool 对指定集群的 Worker MCP 直接调用一个工具（不走 agent）。
+// 管理端 MCP Server 的 exec 透传使用：连接不存在时返回错误（调用方先用
+// AddMCPCluster 建立连接）。返回文本内容与 isError。
+func (s *Server) CallClusterTool(ctx context.Context, cluster, toolName string, args map[string]any) (string, bool, error) {
+	return s.mcpMgr.CallServerTool(ctx, "cluster:"+cluster, toolName, args)
+}
+
 // TestModel 对一个已启用模型发一次最小真实请求（MLOps 显式健康测试）。
 // 走当前路由（含计量包装），计量归属 scenario=health。
 func (s *Server) TestModel(ctx context.Context, model string) error {

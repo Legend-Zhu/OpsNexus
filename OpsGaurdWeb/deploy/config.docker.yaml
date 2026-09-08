@@ -69,3 +69,18 @@ ainexus:
 # 0 9 * * * 即北京时间 9 点，不随容器时区漂移。
 patrol:
   timezone: "Asia/Shanghai"
+
+# 管理端 MCP Server（外部 AI 助手经 /mcp 用自然语言操作平台）。
+# 接入示例/工具清单/FAQ 见 docs/管理端MCP-使用手册.md。
+# mcp:
+#   enabled: true
+#   max_investigations: 4        # 委托内嵌 AI 排查的并发上限
+#   exec_enabled: false          # exec 透传开关（默认关；开启后仍要求 scope=exec）
+#   cluster_url_allow_cidrs: []  # worker_url/worker_http_url 白名单网段（空=不限制）
+#   tokens:
+#     - name: zcode              # secret 用 openssl rand -hex 32 生成
+#       secret: "<32字节hex>"
+#       scope: write
+#     - name: viewer
+#       secret: "<32字节hex>"
+#       scope: read

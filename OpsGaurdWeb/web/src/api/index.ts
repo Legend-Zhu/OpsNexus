@@ -17,6 +17,9 @@ import type {
   InventoryConfig,
   InventoryView,
   Investigation,
+  MCPAuditItem,
+  MCPTokenView,
+  MCPUsageSummary,
   MLOpsBinding,
   MLOpsBudgetView,
   MLOpsCostsOverview,
@@ -328,4 +331,18 @@ export const mlopsApi = {
   saveBudget: (body: { month: string; limit_minor: number; warn_at: number }) =>
     post<MLOpsBudgetView>('/v1/mlops/budgets', body),
   deleteBudget: (month: string) => del<{ deleted: string }>(`/v1/mlops/budgets/${month}`),
+}
+
+// ---- 管理端 MCP Server（/mcp 自然语言运维入口；admin） ----
+export const mcpApi = {
+  info: () => get<{ enabled: boolean; tokens?: string[] }>('/v1/mcp/info'),
+  tokens: () => get<{ items: MCPTokenView[] }>('/v1/mcp/tokens'),
+  createToken: (body: { name: string; scope: string }) =>
+    post<{ token: MCPTokenView; secret: string; note?: string }>('/v1/mcp/tokens', body),
+  deleteToken: (name: string) => del<{ deleted: string }>(`/v1/mcp/tokens/${name}`),
+  setTokenEnabled: (name: string, enabled: boolean) =>
+    put<{ name: string; enabled: boolean }>(`/v1/mcp/tokens/${name}/enabled`, { enabled }),
+  audit: (params?: { actor?: string; tool?: string; limit?: number }) =>
+    get<{ items: MCPAuditItem[] }>('/v1/mcp/audit', { params }),
+  usage: (days = 7) => get<MCPUsageSummary>('/v1/mcp/usage', { params: { days } }),
 }

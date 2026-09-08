@@ -106,11 +106,35 @@ mlops:
   # currency: CNY                # 费用币种（当前仅支持 CNY）
 
 # 纳管的集群：name -> Worker 端点
-# 每个集群由部署在 swarm manager 上的 Worker 提供编排/监控/MCP 能力
+# 每个集群由部署在 swarm manager 上的 Worker 提供编排/监控/MCP 能力。
+# Worker 暴露两个端口：gRPC 管理（默认 9080，编排/监控/探活）+ HTTP
+# （默认 8080，/mcp 与 /healthz）——接入时两个端口都要从管理端可达。
 clusters:
   # dev-cluster:
   #   name: "dev-cluster"
-  #   worker_url: "http://<管理节点IP>:8080"
-  #   mcp_url: "http://<管理节点IP>:8080/mcp"
+  #   worker_url: "http://<管理节点IP>:9080"      # gRPC 管理端口
+  #   mcp_url: "http://<管理节点IP>:8080/mcp"     # Worker HTTP 端口上的 MCP 端点
   #   token: ""
   #   desc: "开发集群"
+
+# 管理端 MCP Server（外部 AI 助手经 /mcp 用自然语言操作平台：加项目/纳管
+# 集群/部署/zip 构建镜像/排查故障）。enabled=false（默认）不注册 /mcp 端点。
+# tokens 为命名凭据（secret 建议 `openssl rand -hex 32` 生成）：
+#   - name 即审计主体；scope=read 只读（查询/观测/排查），write 含全部写操作；
+#   - 破坏性操作（删项目/删集群/删服务/缩容到 0/删镜像）还需工具参数 confirm=true；
+#   - scope 三档：read（只读）< write（变更/部署/构建）< exec（容器/宿主机
+#     命令执行，最高危——只发给完全信任的消费者，且须同时打开 exec_enabled）；
+#   - 接入示例见 docs/管理端MCP-使用手册.md（含工具清单/典型流程/FAQ）；
+#     设计细节见 docs/管理端MCP-Server-设计方案.md。
+# mcp:
+#   enabled: true
+#   max_investigations: 4        # 委托内嵌 AI 排查的并发上限
+#   exec_enabled: false          # exec 透传开关（默认关；开启后仍要求 scope=exec）
+#   cluster_url_allow_cidrs: []  # worker_url/worker_http_url 白名单网段（空=不限制；如 ["10.0.0.0/8"]）
+#   tokens:
+#     - name: zcode
+#       secret: "<32字节hex>"
+#       scope: write
+#     - name: viewer
+#       secret: "<32字节hex>"
+#       scope: read

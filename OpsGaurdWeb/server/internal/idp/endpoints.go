@@ -22,20 +22,20 @@ func (s *Service) JWKS(c *gin.Context) {
 func (s *Service) Discovery(c *gin.Context) {
 	issuer := s.cfg.Issuer
 	doc := gin.H{
-		"issuer":                 issuer,
-		"authorization_endpoint": issuer + "/api/v1/idp/authorize",
-		"token_endpoint":         issuer + "/api/v1/idp/token",
-		"userinfo_endpoint":      issuer + "/api/v1/idp/userinfo",
-		"jwks_uri":               issuer + "/api/v1/idp/jwks",
-		"end_session_endpoint":   issuer + "/api/v1/idp/logout",
-		"introspection_endpoint": issuer + "/api/v1/idp/introspect",
-		"response_types_supported":             []string{"code"},
-		"grant_types_supported":                []string{"authorization_code", "refresh_token"},
-		"subject_types_supported":              []string{"public"},
+		"issuer":                                issuer,
+		"authorization_endpoint":                issuer + "/api/v1/idp/authorize",
+		"token_endpoint":                        issuer + "/api/v1/idp/token",
+		"userinfo_endpoint":                     issuer + "/api/v1/idp/userinfo",
+		"jwks_uri":                              issuer + "/api/v1/idp/jwks",
+		"end_session_endpoint":                  issuer + "/api/v1/idp/logout",
+		"introspection_endpoint":                issuer + "/api/v1/idp/introspect",
+		"response_types_supported":              []string{"code"},
+		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post", "none"},
-		"code_challenge_methods_supported":     []string{"S256"},
-		"scopes_supported":                     []string{"openid", "profile", "email"},
+		"code_challenge_methods_supported":      []string{"S256"},
+		"scopes_supported":                      []string{"openid", "profile", "email"},
 		"claims_supported": []string{
 			"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce",
 			"email", "name", "username", "role", "groups",
@@ -107,14 +107,14 @@ func (s *Service) Introspect(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"active":    true,
-		"scope":     claims.Scope,
-		"client_id": claims.ClientID,
-		"sub":       claims.Subject,
-		"exp":       claims.Expiry,
-		"iat":       claims.IssuedAt,
+		"active":     true,
+		"scope":      claims.Scope,
+		"client_id":  claims.ClientID,
+		"sub":        claims.Subject,
+		"exp":        claims.Expiry,
+		"iat":        claims.IssuedAt,
 		"token_type": "Bearer",
-		"username":  claims.Username,
+		"username":   claims.Username,
 	})
 }
 
@@ -189,6 +189,36 @@ func (s *Service) verifyAccessToken(raw string) (*accessClaims, error) {
 		return nil, fmt.Errorf("validate claims: %w", err)
 	}
 	return &ac, nil
+}
+
+// AccessTokenInfo 已验证 access token 的关键字段（进程内校验用）。
+type AccessTokenInfo struct {
+	Subject  string
+	Username string
+	Role     string
+	ClientID string
+	Scope    string
+}
+
+// ValidateAccessToken 校验 IdP 签发的 access token：验签 + iss/exp +
+// 吊销检查（jti 在库且未撤销），与 RFC 7662 Introspect 同口径。
+// 供同进程内模块（如管理端 MCP Server）把 IdP token 当作资源访问凭据。
+func (s *Service) ValidateAccessToken(raw string) (*AccessTokenInfo, error) {
+	ac, err := s.verifyAccessToken(raw)
+	if err != nil {
+		return nil, err
+	}
+	rec, err := s.st.GetAccessToken(ac.JTI)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil || rec.Revoked {
+		return nil, fmt.Errorf("token revoked or unknown")
+	}
+	return &AccessTokenInfo{
+		Subject: ac.Subject, Username: ac.Username, Role: ac.Role,
+		ClientID: ac.ClientID, Scope: ac.Scope,
+	}, nil
 }
 
 // healthCheck 是 IdP 内部自检（启动 / 测试用），确认签名密钥与配置就绪。

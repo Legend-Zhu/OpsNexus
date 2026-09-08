@@ -7,6 +7,8 @@ export interface ClusterSummary {
   name: string
   project_id?: string
   worker_url: string
+  /** Worker HTTP 端点（默认 :8080，/mcp 与 /healthz 同端口），与 gRPC 管理端口（默认 :9080）分离 */
+  worker_http_url?: string
   mcp_url?: string
   desc?: string
   status: 'online' | 'offline' | 'unknown'
@@ -27,8 +29,10 @@ export interface Cluster extends ClusterSummary {
 export interface AddClusterPayload {
   name: string
   project_id?: string
+  /** Worker gRPC 管理端点（默认 :9080） */
   worker_url: string
-  /** 缺省由后端推导为 {worker_url}/mcp（MCP 端点与 Manager Worker 同址）；仅独立部署网关时显式覆盖 */
+  /** Worker HTTP 端点（默认 :8080）；MCP 端点由后端推导为 {worker_http_url}/mcp，仅独立部署网关时经 mcp_url 显式覆盖 */
+  worker_http_url?: string
   mcp_url?: string
   token?: string
   desc?: string
@@ -749,4 +753,36 @@ export interface MLOpsBudgetView {
   spend_minor: number
   unpriced_calls: number
   usage_ratio: number
+}
+
+// 管理端 MCP Server（/mcp）相关
+export interface MCPTokenView {
+  name: string
+  scope: 'read' | 'write' | 'exec'
+  static: boolean // 来自 config.yaml 种子（不可删，可禁用）
+  enabled: boolean
+  created_at?: string
+  last_used?: string
+}
+
+export interface MCPAuditItem {
+  seq: number
+  ts: string
+  actor: string
+  tool: string
+  args?: string
+  ok: boolean
+  error?: string
+  cost_ms: number
+}
+
+export interface MCPUsageRow {
+  actor: string
+  tool: string
+  calls: number
+}
+
+export interface MCPUsageSummary {
+  days: number
+  rows: MCPUsageRow[]
 }

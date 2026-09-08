@@ -24,6 +24,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/idptunnel"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/invmonitor"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/mcpserver"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/mlops"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
@@ -144,7 +145,7 @@ func main() {
 			return nil, func() {}, err
 		}
 		return sub, func() { cli.Close() }, nil
-		}, ingestSvc, st, log)
+	}, ingestSvc, st, log)
 	if err := ingestMgr.Start(context.Background()); err != nil {
 		log.Error("ingest manager start failed", "err", err)
 	}
@@ -203,8 +204,10 @@ func main() {
 
 	// IdP（OpsGaurd 作为 OIDC 身份提供者）：其他系统可跳转 /api/v1/idp/authorize
 	// 到本系统认证。签名 RSA 密钥从 LevelDB 加载（首次启动自动生成）。
+	var idpSvc *idp.Service
 	if idpEnabled {
-		idpSvc, err := idp.NewService(idpConfigFromConfig(cfg.IdP), st)
+		var err error
+		idpSvc, err = idp.NewService(idpConfigFromConfig(cfg.IdP), st)
 		if err != nil {
 			log.Error("idp service init failed", "err", err)
 			os.Exit(1)
@@ -249,6 +252,38 @@ func main() {
 		defer idpTunnel.Stop()
 	}
 
+	// 管理端 MCP Server（外部 AI 助手经 /mcp 用自然语言操作平台；独立命名
+	// token 鉴权，平台认证整体关闭也不例外）。依赖 cluster/registry/ainexus
+	// 既有 service——工具层零业务逻辑。无可用 token 时 fail-fast（/mcp 等于
+	// 不可用，配置错误启动即暴露）。
+	if cfg.MCP.Enabled {
+		deps := mcpserver.Deps{
+			Store:      st,
+			Clusters:   clusterSvc,
+			Registry:   h.Registry(),
+			AiNexus:    ainexusRT,
+			Patrol:     patrolSvc,
+			AlertRules: ruleSvc,
+			Notify:     notifySvc,
+			Config:     cfg.MCP,
+			Log:        log,
+		}
+		// IdP 启用时，/mcp 在静态 token 未命中时回退接受 IdP 签发的
+		// access token（OAuth 2.1；scope 映射 mcp:read/write/exec）。
+		if idpSvc != nil {
+			deps.IdP = idpValidatorAdapter{idpSvc}
+			deps.IdPIssuer = cfg.IdP.Issuer
+		}
+		mcpH := mcpserver.New(deps)
+		if err := mcpH.Ready(); err != nil {
+			log.Error("mcp server init failed", "err", err)
+			os.Exit(1)
+		}
+		h.SetMCPServer(mcpH)
+		defer mcpH.Stop() // 最后一次用量 flush
+		log.Info("mcp server enabled", "endpoint", "/mcp", "tokens", len(mcpH.TokenNames()))
+	}
+
 	log.Info("server starting",
 		"addr", cfg.Server.Addr,
 		"store", cfg.Store.Path,
@@ -262,6 +297,18 @@ func main() {
 		log.Error("server exited", "err", err)
 		os.Exit(1)
 	}
+}
+
+// idpValidatorAdapter 把 idp.Service 适配为 mcpserver.IdPTokenValidator
+//（解耦 main ↔ 两包的直接类型依赖）。
+type idpValidatorAdapter struct{ svc *idp.Service }
+
+func (a idpValidatorAdapter) ValidateAccessToken(raw string) (subject, username, scope string, err error) {
+	info, err := a.svc.ValidateAccessToken(raw)
+	if err != nil {
+		return "", "", "", err
+	}
+	return info.Subject, info.Username, info.Scope, nil
 }
 
 // patrolLocation 解析巡检 cron 调度时区；空或非法一律回退 Asia/Shanghai

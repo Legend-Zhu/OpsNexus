@@ -48,6 +48,16 @@ func New(h *api.Handlers) *gin.Engine {
 		ainx.POST("/v1/messages", h.EmbedAnthropicHandler)
 	}
 
+	// 管理端 MCP Server（外部 AI 助手经 /mcp 用自然语言操作平台）：
+	// 独立命名 token 鉴权（不走平台会话认证），与 /v2 同为自治端点；
+	// build-upload 为构建包一次性票据直传端点（zip 不经 MCP 协议）；
+	// well-known 为 RFC 9728 OAuth 保护资源元数据（公开，供助手发现）。
+	if mc := h.MCPServer(); mc != nil {
+		r.Any("/mcp", mc.Middleware(), gin.WrapH(mc.HTTPHandler()))
+		r.POST("/api/v1/mcp/build-upload", mc.UploadBuildPackage)
+		r.GET("/.well-known/oauth-protected-resource", mc.Metadata)
+	}
+
 	// 认证中间件（P6）：Bearer token 校验；放行健康检查、webhook ingest、
 	// 登录与 AiNexus 原生端点（内嵌网关自身无鉴权，统一由管理端覆盖）。
 	var authMW gin.HandlerFunc
@@ -224,6 +234,20 @@ func New(h *api.Handlers) *gin.Engine {
 			idpAdmin.DELETE("/:id", h.DeleteClient)
 			idpAdmin.POST("/:id/rotate-secret", h.RotateClientSecret)
 		}
+
+		// 管理端 MCP Server 管理 API（admin only）：token 运行时管理、
+		// 审计/用量查询、接入信息。MCP 未启用时 mcpSvc 为 nil，各接口 503。
+		mcpAdmin := v1.Group("/mcp")
+		if adminMW := h.AdminMiddleware(); adminMW != nil {
+			mcpAdmin.Use(adminMW)
+		}
+		mcpAdmin.GET("/info", h.MCPInfo)
+		mcpAdmin.GET("/tokens", h.ListMCPTokens)
+		mcpAdmin.POST("/tokens", h.CreateMCPToken)
+		mcpAdmin.DELETE("/tokens/:name", h.DeleteMCPToken)
+		mcpAdmin.PUT("/tokens/:name/enabled", h.SetMCPTokenEnabled)
+		mcpAdmin.GET("/audit", h.ListMCPAudit)
+		mcpAdmin.GET("/usage", h.MCPUsage)
 
 		// AiNexus 异常排查（内嵌网关，进程内直调；config 为页面管理的网关配置）。
 		// config 读返回脱敏视图（api_key_set），普通认证可读；写/测试收敛 admin。

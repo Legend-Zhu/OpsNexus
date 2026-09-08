@@ -2,9 +2,11 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -228,23 +230,71 @@ func (m *Manager) Tools() []tool.Tool {
 	return allTools
 }
 
+// CallServerTool 对指定已连接 MCP server 直接调用一个工具（不走 agent）。
+// 管理端 MCP Server 的 exec 透传等平台级编排使用；serverName 形如
+// "cluster:prod"。返回拼接后的文本内容与 isError 标记（内容截断由调用方
+// 按自己的预算执行）。
+func (m *Manager) CallServerTool(ctx context.Context, serverName, toolName string, args map[string]any) (string, bool, error) {
+	m.mu.RLock()
+	sc, ok := m.servers[serverName]
+	m.mu.RUnlock()
+	if !ok || sc == nil {
+		return "", false, fmt.Errorf("mcp server %q not connected", serverName)
+	}
+	sc.mu.RLock()
+	cli := sc.client
+	sc.mu.RUnlock()
+	if cli == nil {
+		return "", false, fmt.Errorf("mcp server %q client not ready", serverName)
+	}
+	res, err := cli.CallTool(ctx, mcp.CallToolRequest{
+		Params: mcp.CallToolParams{Name: toolName, Arguments: args},
+	})
+	if err != nil {
+		return "", false, fmt.Errorf("call %s/%s: %w", serverName, toolName, err)
+	}
+	var sb strings.Builder
+	for _, c := range res.Content {
+		switch v := c.(type) {
+		case mcp.TextContent:
+			sb.WriteString(v.Text)
+		default:
+			b, _ := json.Marshal(v)
+			sb.Write(b)
+		}
+	}
+	return sb.String(), res.IsError, nil
+}
+
 // RegisterAllTools 将所有 MCP 工具注册到 ToolRegistry。
-// 重名冲突说明清洗后命名不唯一（会挤掉已有工具、agent 不可见该工具），
-// 记 ERROR 级日志留痕，不中断其他工具注册。
+// 语义幂等：同一 server 的重复全量注册（多 server 逐个接入时各自触发一次
+// 全量）按同源跳过——同名且 Description 同源（[MCP:<server>] 前缀一致）视为
+// 已注册的同一工具，静默跳过；同名不同源才是真冲突（清洗后命名挤占，该
+// 工具对 agent 不可见），记 ERROR 留痕并检查 server 命名。
 func (m *Manager) RegisterAllTools(registry *tool.Registry) error {
-	tools := m.Tools()
+	m.registerAll(registry, m.Tools())
+	return nil
+}
+
+func (m *Manager) registerAll(registry *tool.Registry, tools []tool.Tool) {
 	for _, t := range tools {
+		if existing, ok := registry.Get(t.Name()); ok {
+			if existing.Description() == t.Description() {
+				continue
+			}
+			m.logger.Printf("ERROR: MCP tool registration conflict on %q: %q (%v) conflicts with existing registration "+
+				"(tool not visible to agent; check server naming)", t.Name(), t.Description(), existing.Description())
+			continue
+		}
 		if err := registry.Register(t); err != nil {
 			if mt, ok := t.(*MCPTool); ok {
-				m.logger.Printf("ERROR: MCP tool registration conflict: server %q tool %q: %v "+
+				m.logger.Printf("ERROR: MCP tool registration failed: server %q tool %q: %v "+
 					"(tool not visible to agent; check server naming)", mt.serverName, t.Name(), err)
 			} else {
 				m.logger.Printf("ERROR: failed to register MCP tool %q: %v", t.Name(), err)
 			}
-			continue
 		}
 	}
-	return nil
 }
 
 // RemoveServer 断开并移除一个 MCP server，其工具一并从 registry 注销

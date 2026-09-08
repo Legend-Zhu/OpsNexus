@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -281,5 +282,41 @@ func TestAddServerSendsHeaders(t *testing.T) {
 	}
 	if !strings.Contains(tools[0].Description(), "[MCP:cluster:prod]") {
 		t.Fatalf("description 未保留集群标识: %q", tools[0].Description())
+	}
+}
+
+// RegisterAllTools 幂等语义：同一 server 工具的全量重注册静默跳过（多
+// server 逐个接入时各自触发一次全量）；同名不同源仍为冲突（跳过不注册）。
+func TestRegisterAllToolsIdempotent(t *testing.T) {
+	m := NewManager(log.New(io.Discard, "", 0))
+	reg := tool.NewRegistry()
+	mcpT := func(server, name string) *MCPTool {
+		return &MCPTool{serverName: server, toolName: name, toolDesc: "d"}
+	}
+	// 首次：local 两个工具注册成功
+	m.registerAll(reg, []tool.Tool{mcpT("cluster:local", "a"), mcpT("cluster:local", "b")})
+	if reg.ToolCount() != 2 {
+		t.Fatalf("after first register: %d tools", reg.ToolCount())
+	}
+	// 全量重注册（nxyj 接入触发）：local 已在同源存在 → 静默跳过，总数不变
+	m.registerAll(reg, []tool.Tool{
+		mcpT("cluster:local", "a"), mcpT("cluster:local", "b"),
+		mcpT("cluster:nxyj", "a"), mcpT("cluster:nxyj", "b"),
+	})
+	if got := reg.ToolCount(); got != 4 {
+		t.Fatalf("after idempotent re-register: %d tools, want 4", got)
+	}
+	if _, ok := reg.Get("mcp_cluster_nxyj_a"); !ok {
+		t.Fatal("nxyj tools should be registered")
+	}
+	// 同名不同源（真冲突）：纯 ASCII 名清洗后同名（cluster:local 与
+	// cluster_local 都折叠成 mcp_cluster_local_a），不得挤掉既有注册。
+	// 非 ASCII 名不受此影响——Name() 追加指纹后缀保证跨集群唯一。
+	m.registerAll(reg, []tool.Tool{mcpT("cluster_local", "a")})
+	if got, ok := reg.Get("mcp_cluster_local_a"); !ok || got.Description() != "[MCP:cluster:local] d" {
+		t.Fatalf("original tool should survive (ok=%v)", ok)
+	}
+	if reg.ToolCount() != 4 {
+		t.Fatalf("conflict must not change count: %d", reg.ToolCount())
 	}
 }

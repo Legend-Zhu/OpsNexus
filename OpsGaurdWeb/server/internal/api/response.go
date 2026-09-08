@@ -11,6 +11,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/cluster"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/idp"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/mcpserver"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/mlops"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/patrol"
@@ -46,9 +47,10 @@ type Handlers struct {
 	ruleSvc     *alertrule.Service
 	authSvc     *auth.Service
 	registrySvc *registry.Service
-	idpSvc     *idp.Service       // OpsGaurd 作为 OIDC IdP（nil = 未启用）
-	AINexusRT  *ainexusrt.Service // 内嵌 AiNexus 网关运行时（热重载配置；Server() 为空 = 未启用）
-	mlopsSvc   *mlops.Service     // MLOps 运营层（P1 提示词；nil = 未启用）
+	idpSvc      *idp.Service       // OpsGaurd 作为 OIDC IdP（nil = 未启用）
+	AINexusRT   *ainexusrt.Service // 内嵌 AiNexus 网关运行时（热重载配置；Server() 为空 = 未启用）
+	mlopsSvc    *mlops.Service     // MLOps 运营层（P1 提示词；nil = 未启用）
+	mcpSvc      *mcpserver.Handler // 管理端 MCP Server（nil = 未启用）
 	// AuthMiddleware 认证中间件（P6；nil = 未启用认证）。
 	AuthMiddleware gin.HandlerFunc
 }
@@ -106,6 +108,13 @@ func (h *Handlers) IdP() *idp.Service { return h.idpSvc }
 
 // SetMlopsService wires the MLOps operational layer (nil = 未启用).
 func (h *Handlers) SetMlopsService(s *mlops.Service) { h.mlopsSvc = s }
+
+// SetMCPServer wires the management-plane MCP server (nil = 未启用).
+func (h *Handlers) SetMCPServer(s *mcpserver.Handler) { h.mcpSvc = s }
+
+// MCPServer 返回管理端 MCP Server（router 挂载 /mcp 与构建包直传端点用；
+// nil = 未启用）。
+func (h *Handlers) MCPServer() *mcpserver.Handler { return h.mcpSvc }
 
 // MLOps 返回 MLOps 服务（router 挂载 /api/v1/mlops/* 用；nil = 未启用）。
 func (h *Handlers) MLOps() *mlops.Service { return h.mlopsSvc }

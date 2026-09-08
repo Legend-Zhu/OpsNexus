@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	ainexuscfg "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/config"
+	mcpservercfg "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/mcpserver"
 	registrycfg "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/registry"
 )
 
@@ -38,6 +39,9 @@ type Config struct {
 	Mlops *MlopsConfig `yaml:"mlops,omitempty" json:"mlops,omitempty"`
 	// Patrol 智能巡检调度配置（cron 时区等）。
 	Patrol PatrolConfig `yaml:"patrol" json:"patrol"`
+	// MCP 管理端 MCP Server（外部 AI 助手经 /mcp 用自然语言操作平台）。
+	// enabled=false（默认）时不注册 /mcp 端点。
+	MCP mcpservercfg.Config `yaml:"mcp,omitempty" json:"mcp"`
 }
 
 // PatrolConfig 智能巡检（P5）调度配置。

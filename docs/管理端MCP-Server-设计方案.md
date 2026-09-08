@@ -1,9 +1,47 @@
 # 管理端 MCP Server 设计方案（自然语言运维入口）
 
-> 版本：v0.1（草案）
-> 日期：2026-09-07
-> 状态：待评审
-> 关联：`Worker/internal/mcp/`（Worker MCP Server 先例，20 工具）、《AiNexus-Skill与MCP-设计方案.md》（**客户端**侧 MCP 管理，本方案的镜像篇）、《OpsGaurd-系统技术总览.md》§5.4（MCP 双向使用）
+> 版本：v0.5（终稿）
+> 日期：2026-09-07（v0.1 设计；同日 P1 + P2 + P3 全部实现落地）
+> 状态：**已完成**——60 工具 + 5 resources + RFC 9728 元数据 + IdP token 回退接入 + exec 三重防护 + CIDR 白名单 + 运营页；全链路冒烟测试守护
+> 关联：`docs/管理端MCP-使用手册.md`（**使用/运维手册**）、`Worker/internal/mcp/`（Worker MCP Server 先例，20 工具）、《AiNexus-Skill与MCP-设计方案.md》（**客户端**侧 MCP 管理，本方案的镜像篇）、《OpsGaurd-系统技术总览.md》§5.4（MCP 双向使用）
+
+### 附：P1 实现落点（与设计条目对照）
+
+| 设计条目 | 代码 |
+|---|---|
+| MCP Server 主体 / stateless 传输 / Instructions 运行手册 | `mcpserver/server.go`（`New` / `HTTPHandler` / `serverInstructions`） |
+| 命名 token + read/write scope + 端点中间件 | `mcpserver/authz.go`（SHA-256 摘要 + 常数时间比较；base URL 注入） |
+| 写工具审计 + 结果截断 | `mcpserver/audit.go`、`server.go truncStr`（128KB 头尾保留）、`store/mcpaudit.go`（schema v4） |
+| 上传票据 + curl 直传端点 | `mcpserver/upload.go`（一次性/TTL 1h/大小必等） |
+| 委托排查（双 agent 协同） | `mcpserver/tools_investigation.go`（信号量/后台执行/状态机 running|done|error）；网关侧 `ainexus/server.RunInvestigation`（事件流转写证据轨迹） |
+| 六组工具 | `tools_project.go`(5) / `tools_cluster.go`(6) / `tools_service.go`(10) / `tools_build.go`(6) / `tools_alert.go`(4) / `tools_diag.go`(4) |
+| 路由挂载（`/mcp`、`/api/v1/mcp/build-upload`，均在平台认证组之外） | `router/router.go` + `api/response.go SetMCPServer` |
+| 装配与 fail-fast（无可用 token 启动即退出） | `cmd/server/main.go` |
+| 配置（`mcp:` 段） | `config/config.go` + `mcpserver/config.go`；样例见 `configs/config.yaml` 尾部 |
+| 测试 | `mcpserver/mcpserver_test.go`（鉴权/票据/截断/状态机）+ `smoke_test.go`（go-sdk 客户端真实走 initialize→tools/list，41 工具清单断言） |
+
+### 附：P2 实现落点（与设计条目对照）
+
+| 设计条目 | 代码 |
+|---|---|
+| token 运行时表（LevelDB）+ 静态种子镜像/禁用/热生效 | `mcpserver/tokens.go`（syncTokens 原子换表）、`store/mcptoken.go`、`authz.go`（static+runtime 双层表） |
+| 管理 API（admin）：tokens CRUD/启停、审计查询、用量、接入信息 | `api/mcp.go`（`/api/v1/mcp/*`，router 挂 AdminMiddleware） |
+| 调用统计：/mcp 中间件计数（tools/call 报文解析，全工具零埋点）+ 30s flush 日聚合 | `mcpserver/usage.go` |
+| probe_flow / node_processes（诊断 6 工具，总 41） | `tools_diag.go` |
+| 前端「系统设置 → MCP 接入」tab：端点/接入模板复制、token 管理（secret 一次性展示）、用量表、审计表 | `web/src/views/system/McpAccess.vue` + `api/index.ts mcpApi` |
+| secret 生命周期 | 创建时随机 64 位 hex 仅返回一次；落库 SHA-256；禁用热生效；静态种子可禁不可删 |
+
+### 附：P3 实现落点（与设计条目对照）
+
+| 设计条目 | 代码 |
+|---|---|
+| exec 透传（开关 + exec scope + 经 Worker MCP 通道 + 审计） | `tools_exec.go`（execGuard/auditedExec/callWorkerTool）、`authz.go` ScopeExec、ainexus `mcp/manager.go CallServerTool` + `server/server.go CallClusterTool` |
+| 巡检域 8 工具（含 YAML 骨架内嵌工具描述，助手可代写巡检流程） | `tools_patrol.go` |
+| 告警规则域 5 工具（save 默认 Apply 下发；rule 体复用 store.AlertRule 同构 schema） | `tools_alertrule.go` |
+| 通知域 4 工具（channel 更新时空 config 沿用旧值防凭据抹丢） | `tools_notify.go` + `notify.Service.GetChannel` |
+| worker_url CIDR 白名单（add/update 校验；非法网段配置报错不放行） | `allowlist.go checkClusterURLAllowed` |
+| MCP resources（只读视图：集群/活跃告警/巡检/镜像 + 集群服务模板） | `tools_resources.go`（go-sdk AddResource/AddResourceTemplate，与 Worker resources 同构） |
+| OAuth 2.1 / RFC 9728 | `oauth.go`（Metadata 元数据端点 + authenticateAny 回退链 + IdPTokenValidator 接口）；`idp/endpoints.go ValidateAccessToken`（导出校验：验签+iss/exp+吊销）；`cmd/server/main.go` idpValidatorAdapter 装配；`router.go` 挂 `/.well-known/oauth-protected-resource`（公开） |
 
 ---
 
@@ -190,7 +228,7 @@ mcp:
 
 ---
 
-## 五、工具清单（P1 全集 38 个）
+## 五、工具清单（P1 全集 39 个）
 
 命名规则：`<域>_<动作>`，与 Worker 的平铺名错开（助手同时挂两个 server 时不混淆）。除标注外全部需要 `read` scope；**粗体**为 `write` scope；` confirm` 列标注 confirm=true 防护。
 
@@ -210,8 +248,8 @@ mcp:
 |---|---|---|
 | `cluster_list` | `project?` | 名称/状态(online/offline)/项目/描述/LastSeen；提示下一步常用 cluster 名 |
 | `cluster_get` | `name` | 详情 + 健康探测结果 + 纳管清单(inventory)摘要 |
-| **`cluster_add`** | `name, worker_url, token?, project?, desc?` | **纳管**：复用 `cluster.Service.Add`——先 gRPC `Self` 探活（5s 超时，必须 swarm manager）成功才落库，失败把探活错误原文返回给助手 |
-| **`cluster_update`** | `name, worker_url?, token?, project?, desc?` | token 传空沿用旧值（脱敏惯例） |
+| **`cluster_add`** | `name, worker_url, worker_http_url?, token?, project?, desc?` | **纳管**：复用 `cluster.Service.Add`——先 gRPC `Self` 探活（5s 超时，必须 swarm manager），给了 `worker_http_url` 再探 HTTP `/healthz`（MCP 同端口，默认 8080）；全部通过才落库，失败把探活错误原文返回给助手。MCP 地址推导优先级：显式 `mcp_url` > `{worker_http_url}/mcp` > 旧兜底 `{worker_url}/mcp` |
+| **`cluster_update`** | `name, worker_url?, worker_http_url?, token?, project?, desc?` | token 传空沿用旧值（脱敏惯例）；HTTP 端点变化时自动推导的 `mcp_url` 跟随更新（显式覆盖过的保持不动） |
 | **`cluster_remove`** `confirm` | `name` | 级联语义同 REST：停事件订阅、清告警规则、断集群 MCP；confirm 错误文案提示"将停止该集群全部监控与告警" |
 | `cluster_events` | `name, service?, type?, limit?`(≤100, 默认 20) | 读 server 侧 ingest 落库的聚合事件（含恢复事件），非 Worker 原始队列 |
 
@@ -234,12 +272,13 @@ mcp:
 
 部署闭环引导：`service_deploy` 返回体固定附一句 hint——"operation pending; poll service_operation until status=done|failed"。构建镜像后部署的联动见 §6.3。
 
-### 5.4 镜像与构建（image_* / build_*，5 个）
+### 5.4 镜像与构建（image_* / build_*，6 个）
 
 | 工具 | 参数 | 说明 |
 |---|---|---|
 | `image_list` | `name?` | 仓库内 repo/tag 清单 |
 | **`image_delete`** `confirm` | `name, tag` | |
+| **`build_upload_begin`** | `filename, size_bytes` | 签发一次性上传票据 + 生成 curl 直传命令（见 §6.2） |
 | **`build_submit`** | `upload_id, name, tag, dockerfile?`（zip 须先经 6.2 票据直传） | zip → server 本机 docker build → push 内嵌仓库；返回 build id |
 | `build_get` | `id, logs_tail?`(默认 40 行) | 状态机 PENDING→EXTRACTING→BUILDING→PUSHING→CLEANING→SUCCESS/FAILED + 进度 + 日志尾部（构建失败时助手靠日志向用户解释原因） |
 | `build_list` | `limit?` | 最近构建 |
@@ -271,11 +310,11 @@ mcp:
 | `probe_port` | `cluster, host, port, node?` | 从指定节点（默认 manager leader）发起 TCP 拨测，返回各节点连通矩阵 |
 | `probe_http` | `cluster, url, node?, expect_status?` | HTTP 拨测（复用 workerproxy.CheckHTTP，同节点解析） |
 
-> `probe_flow`（多步事务拨测）与 `check_flow` 语义同源，P2 补充；宿主机进程清单 `node_processes` P2。
+> `probe_flow`（多步事务拨测）与宿主机进程清单 `node_processes` **已随 P2 落地**（工具总数 41）。
 
 ### 5.8 工具分组小结
 
-项目 5 / 集群 6 / 服务 10 / 镜像构建 5 / 告警 4 / 排查会话 4 / 诊断 4，共 **38 个**；其中 write scope 17 个、带 confirm 防护 5 个。
+项目 5 / 集群 6 / 服务 10 / 镜像构建 6 / 告警 4 / 排查会话 4 / 诊断 6 / 巡检 8 / 告警规则 5 / 通知 4 / exec 透传 2，共 **60 个**；write scope 25 个、exec 专属 2 个、带 confirm 防护 7 个（patrol_delete / alertrule_delete 新增）。
 
 ---
 
@@ -354,9 +393,13 @@ alert_list ──▶ alert_get（事件时间线）
 - **并发护栏**：委托排查占网关推理资源，信号量限并发（默认 4，`mcp.max_investigations` 可配），超限返回"排队中请稍后"而非静默堆积。
 - **分工边界**：AiNexus 只做集群侧取证与结论，不改代码不发版；处置动作（restart/scale/update）仍由本机 agent 经管理端工具显式执行——职责清晰、全程可审计。
 
-### 7.4 exec 为什么 P1 不做
+### 7.4 exec 透传（**已随 P3 落地**，三重防护）
 
-Worker 的 `exec_in_container` / `exec_host_command` 是最高危能力（可执行任意命令）。管理端一旦透传，等于给外部助手一张「全集群任意节点命令执行」的票，而 P1 的审计与限流体系还未经受运行检验。P2 引入时的门槛：独立 `exec` scope 显式授权 + 透传 Worker 侧 commandPolicy 黑白名单 + 审计记录完整命令 + 单独的开关配置（默认关）。
+Worker 的 `exec_in_container` / `exec_host_command` 是最高危能力。管理端透传方案（`tools_exec.go` 的 `service_exec` / `node_exec`）：
+
+1. **配置开关**：`mcp.exec_enabled`（默认 false——关着时连 exec token 也被拒，错误信息指向配置项）；
+2. **独立 exec scope**：token scope 三档化 `read < write < exec`，exec 工具要求 scope=exec（write/read 拒绝并给出解释性错误）；
+3. **链路与约束不变**：管理端 →（进程内 MCP 客户端，复用网关的集群连接池 `Manager.CallServerTool`）→ 目标集群 Worker /mcp → 节点执行，**Worker 侧 commandPolicy 黑白名单与超时仍然生效**；命令原文入审计（`service_exec`/`node_exec` 审计摘要含命令）；`node_exec` 强制显式传 node（杜绝误 fan-out 全部节点）；结果 128KB 截断。
 
 ---
 
@@ -368,7 +411,7 @@ Worker 的 `exec_in_container` / `exec_host_command` 是最高危能力（可执
 | 授权 | read/write scope 工具级声明 + 中间件统一执行；错误文本可解释 |
 | 破坏性操作 | `confirm=true` 双保险（cluster_remove / project_delete / service_remove / service_scale→0 / image_delete），confirm 缺失时错误文案**必须向助手说清影响面**（如"该集群下有 N 个服务"），由助手转述用户确认 |
 | 审计 | 写工具全部落 `mcp_audit`（LevelDB，结构见 §九）+ slog；读工具仅 slog（对齐 Worker"只读探测不审计"的口径） |
-| SSRF 面 | `cluster_add.worker_url` 任意内网 URL 的 gRPC 探测可被用作内网端口扫描——缓解：write scope 门槛 + 审计记录 + （P3 可选）worker_url CIDR 白名单；残余风险记录在案 |
+| SSRF 面 | `cluster_add.worker_url`/`worker_http_url` 任意内网 URL 的探测（gRPC Self + HTTP /healthz）可被用作内网端口扫描——缓解：write scope 门槛 + 审计记录 + （P3 可选）worker_url/worker_http_url CIDR 白名单（两个端点都校验）；残余风险记录在案 |
 | 体积防线 | 工具结果 128KB 头尾保留截断（复用 ainexus mcp_tool 截断策略）；logs tail≤1000、events limit≤100、build 日志尾部≤200 行；investigation question ≤8KB；构建包不经 MCP 协议传输（票据直传，见 §六） |
 | 敏感值 | cluster token/secret 一律不回显（`has_token` 布尔）；`service_get` 的 config 原样返回（运维语义需要），但 config 中 env 密钥字段由 Worker 配置模型负责，不额外打码（与页面行为一致）；audit 记录入参摘要时对 `config/question` 大字段只记长度 |
 | 传输 | 生产建议前置 TLS（现有部署形态不变，`/mcp` 与 REST 同域同证书） |
@@ -398,15 +441,15 @@ type MCPAudit struct {
 
 ---
 
-## 十、前端设计（P2）
+## 十、前端设计（**已随 P2 落地**）
 
 系统设置新增 **「MCP 接入」** tab（admin 可见，与「AI 排查网关」「身份提供者」并列）：
 
 - **总开关与端点信息**：`https://<host>/mcp` 一键复制；内置 ZCode / Claude Desktop / Cursor 三种客户端的接入配置 JSON 模板（含 Bearer header 占位），复制即用。
-- **Token 管理**：列表（名称/scope/启用/最近使用/创建时间）、新建（生成 secret 仅展示一次）、吊销。运行时表落 LevelDB（4.2），热生效。
-- **调用情况**：近 7 天调用数/错误率按 token 与工具的简单柱状图 + 最近失败 20 条（审计数据源）。
+- **Token 管理**：列表（名称/scope/来源(config|页面)/启用/最近使用/创建时间）、新建（生成 secret 仅展示一次）、启停（热生效）、删除（静态种子提示改 config）。运行时表落 LevelDB（4.2）。
+- **调用情况**：近 7 天 token×tool 调用次数表 + 最近 30 条写操作审计（审计数据源）。
 
-P1 无前端（config.yaml 静态 token），端点信息与接入模板先写进平台操作手册。
+实现：`web/src/views/system/McpAccess.vue`。
 
 ---
 
@@ -445,9 +488,9 @@ P1 无前端（config.yaml 静态 token），端点信息与接入模板先写�
 
 | 阶段 | 范围 | 主要改动点 |
 |---|---|---|
-| **P1 核心 38 工具** | `/mcp` 端点 + 静态 token 鉴权/scope + 七组 38 工具（项目 5、集群 6、服务 10、镜像构建 5、告警 4、排查会话 4 含双 agent 委托排查、诊断 4）+ confirm/审计/截断 + 构建票据直传（唯一通道） | `internal/mcpserver/`（新包）、`router.go`（挂载+public 豁免+票据直传端点）、`config`（mcp 段）、go.mod 增 go-sdk、`ainexusrt`/`api`（SSE 消费落库编排） |
-| **P2 运营与增强** | token 管理 API + 前端「MCP 接入」tab（LevelDB 运行时表）+ 调用统计 + probe_flow / node_processes + exec 透传（独立 exec scope + commandPolicy 透传，默认关） | `mcpserver/authz`（运行时表）、`api/mcp.go`、前端 settings、`workerproxy`（如需） |
-| **P3 深化** | OAuth 2.1（内嵌 IdP + RFC 9728 资源元数据，对齐 Worker 演进）+ patrol/alertrule/notify 域工具 + MCP resources（集群/告警只读视图）+ worker_url CIDR 白名单 | `idp`、`mcpserver`、前端 |
+| **P1 核心 39 工具** | `/mcp` 端点 + 静态 token 鉴权/scope + 七组 39 工具（项目 5、集群 6、服务 10、镜像构建 6、告警 4、排查会话 4 含双 agent 委托排查、诊断 4）+ confirm/审计/截断 + 构建票据直传（唯一通道） | `internal/mcpserver/`（新包）、`router.go`（挂载+public 豁免+票据直传端点）、`config`（mcp 段）、go.mod 增 go-sdk、`ainexusrt`/`api`（SSE 消费落库编排） |
+| **P2 运营与增强** | **已落地**：token 管理 API + 前端「MCP 接入」tab（LevelDB 运行时表，静态种子镜像/禁用/热生效）+ 用量统计（/mcp 中间件计数，30s 落盘日聚合）+ 审计查询 + probe_flow / node_processes。exec 透传顺延 P3（需 workerproxy/proto 扩展，且默认关） | `mcpserver/tokens.go`、`usage.go`、`store/mcptoken.go`、`api/mcp.go`、前端 `McpAccess.vue` |
+| **P3 深化** | **已全部落地**：patrol 域 8 工具（list/get/create/update/delete/run/runs/report，自然语言建巡检）+ alertrule 域 5 工具（save 默认带 apply 下发）+ notify 域 4 工具（channels/channel_save/policies/records）+ exec 透传 2 工具（`mcp.exec_enabled` 默认关 + scope=exec 三档化 + Worker commandPolicy 仍生效 + 全量审计）+ worker_url CIDR 白名单（`mcp.cluster_url_allow_cidrs`）+ **MCP resources**（opsguard://clusters、alerts/active、patrols、images + clusters/{name}/services 模板）+ **OAuth 2.1**（`/.well-known/oauth-protected-resource` RFC 9728 元数据公开端点；静态 token 未命中时回退校验内嵌 IdP access token——验签+iss/exp+吊销与 Introspect 同口径，scope 按 mcp:read/write/exec 映射，默认 read 最小授权） | `tools_patrol.go`、`tools_alertrule.go`、`tools_notify.go`、`tools_exec.go`、`tools_resources.go`、`oauth.go`、`allowlist.go`、ainexus `Manager.CallServerTool`/`Server.CallClusterTool`、`idp.Service.ValidateAccessToken` |
 
 依赖关系：P2 依赖 P1；P3 的 OAuth 依赖 P2 的 token 体系收敛。
 
@@ -476,10 +519,10 @@ Claude Desktop / Cursor 同构（`mcpServers.opsguard` + url/headers），模板
 ### 14.2 关键时序：一句自然语言完成「纳管→构建→部署」
 
 ```
-用户: "把 10.0.1.5:9080 纳管为 prod 集群，用 gw.zip 构建镜像 gw:v1，部署 2 副本对外 8080"
+用户: "把 10.0.1.5 纳管为 prod 集群（gRPC 9080 / HTTP 8080），用 gw.zip 构建镜像 gw:v1，部署 2 副本对外 8080"
   │
-  ├─ cluster_add{name:prod, worker_url:10.0.1.5:9080, token:…}
-  │     └─ service 探活 gRPC Self ✅ → 落库（审计: cluster_add by zcode）
+  ├─ cluster_add{name:prod, worker_url:10.0.1.5:9080, worker_http_url:http://10.0.1.5:8080, token:…}
+  │     └─ service 探活 gRPC Self ✅ + HTTP /healthz ✅ → 落库（审计: cluster_add by zcode）
   ├─ build_upload_begin{filename:gw.zip, size} → ticket
   │     └─ curl 票据直传（6.2，唯一通道）→ upload ok
   ├─ build_submit{upload_id, name:gw, tag:v1}
