@@ -256,13 +256,17 @@ server 始终是 gRPC **客户端**，Worker 是**服务端**（gRPC `:9080`）�
 
 - **生产形态是 Docker Swarm**（管理端自身 `docker run` 单容器 + 各被管集群 swarm global Worker）。
 - **离线部署**：docker 静态二进制包（systemd + daemon.json）→ swarm init/join → 镜像离线 load 或经内嵌仓库中继拉取。
-- **端口矩阵**（默认值；各集群实际端口以 runbook 为准，被管集群常用 `mode: host` 的 6060/6061）：
+- **端口矩阵**（默认值，均可在部署时自定义；各集群实际端口以 runbook 为准，被管集群常用 `mode: host` 的 6060/6061）：
 
 | 进程 | 端口 | 用途 |
 | --- | --- | --- |
 | server | 8090（默认）/ 8080（生产容器） | 页面 + 全部 API + 内嵌仓库/IdP/AI 网关 |
 | Worker HTTP | 8080（默认） | `/mcp`、`/healthz`、`/idp-proxy/*`、`/v2/*` 中继、节点本地 API |
 | Worker gRPC | 9080（默认） | ManagementService（server 连入） |
+
+> 接入集群时，管理端需**同时可达**被管集群 manager 的 Worker gRPC 与 HTTP 两个端口
+> （gRPC 探活 + HTTP `/healthz` 校验），接入表单分别填写两个端点，MCP 地址自动取
+> `{HTTP 地址}/mcp`——详见 `docs/Worker部署手册.md` §5。
 
 - **版本现状**：server 1.2.12、Worker 1.2.7。
 

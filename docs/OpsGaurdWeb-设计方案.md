@@ -340,8 +340,8 @@ key 结构: <bucket>/<pk>  → JSON 值
 
 meta/version                      -> 数据版本号（迁移用，整数递增）
 
-cluster/<name>                    -> Cluster{name, project_id, worker_url, mcp_url, token,
-                                       desc, status(online/offline), last_seen, inventory}
+cluster/<name>                    -> Cluster{name, project_id, worker_url(gRPC), worker_http_url(HTTP),
+                                       mcp_url, token, desc, status(online/offline), last_seen, inventory}
 cluster/idx/status/<status>       -> ""  （按状态枚举，可选）
 
 event/<seq>                       -> IngestEvent{id, ts, cluster_id, service, type,

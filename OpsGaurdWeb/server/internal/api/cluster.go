@@ -15,15 +15,18 @@ import (
 
 // --- 集群管理 ---
 
-// addClusterRequest 接入集群的请求体。
+// addClusterRequest 接入/编辑集群的请求体。
 type addClusterRequest struct {
-	Name      string                 `json:"name" binding:"required"`
-	ProjectID string                 `json:"project_id"`
-	WorkerURL string                 `json:"worker_url" binding:"required"`
-	MCPURL    string                 `json:"mcp_url"`
-	Token     string                 `json:"token"`
-	Desc      string                 `json:"desc"`
-	Inventory *store.InventoryConfig `json:"inventory,omitempty"`
+	Name string `json:"name" binding:"required"`
+	// WorkerURL Worker gRPC 管理端点（默认 :9080）。
+	WorkerURL string `json:"worker_url" binding:"required"`
+	// WorkerHTTPURL Worker HTTP 端点（默认 :8080，/mcp 与 /healthz 所在端口）。
+	WorkerHTTPURL string                 `json:"worker_http_url"`
+	ProjectID     string                 `json:"project_id"`
+	MCPURL        string                 `json:"mcp_url"`
+	Token         string                 `json:"token"`
+	Desc          string                 `json:"desc"`
+	Inventory     *store.InventoryConfig `json:"inventory,omitempty"`
 }
 
 // ListClusters godoc: GET /api/v1/clusters
@@ -78,13 +81,14 @@ func (h *Handlers) AddCluster(c *gin.Context) {
 		return
 	}
 	item, err := h.clusters.Add(c.Request.Context(), &store.Cluster{
-		Name:      req.Name,
-		ProjectID: req.ProjectID,
-		WorkerURL: req.WorkerURL,
-		MCPURL:    req.MCPURL,
-		Token:     req.Token,
-		Desc:      req.Desc,
-		Inventory: req.Inventory,
+		Name:          req.Name,
+		ProjectID:     req.ProjectID,
+		WorkerURL:     req.WorkerURL,
+		WorkerHTTPURL: req.WorkerHTTPURL,
+		MCPURL:        req.MCPURL,
+		Token:         req.Token,
+		Desc:          req.Desc,
+		Inventory:     req.Inventory,
 	})
 	if err != nil {
 		var pf cluster.ErrProbeFailed
@@ -111,13 +115,14 @@ func (h *Handlers) UpdateCluster(c *gin.Context) {
 		return
 	}
 	item, err := h.clusters.Update(c.Request.Context(), &store.Cluster{
-		Name:      c.Param("name"),
-		ProjectID: req.ProjectID,
-		WorkerURL: req.WorkerURL,
-		MCPURL:    req.MCPURL,
-		Token:     req.Token,
-		Desc:      req.Desc,
-		Inventory: req.Inventory,
+		Name:          c.Param("name"),
+		ProjectID:     req.ProjectID,
+		WorkerURL:     req.WorkerURL,
+		WorkerHTTPURL: req.WorkerHTTPURL,
+		MCPURL:        req.MCPURL,
+		Token:         req.Token,
+		Desc:          req.Desc,
+		Inventory:     req.Inventory,
 	})
 	if err != nil {
 		var nf cluster.ErrNotFound

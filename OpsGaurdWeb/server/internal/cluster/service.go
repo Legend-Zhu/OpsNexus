@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -40,6 +41,9 @@ type Service struct {
 	store *store.Store
 	// probeTimeout 单次健康探测超时。
 	probeTimeout time.Duration
+	// httpClient 探测 Worker HTTP 端点（/healthz）用；真实超时上限由调用方
+	// 传入的 ctx（probeTimeout）控制，Timeout 只是兜底。
+	httpClient *http.Client
 
 	// onAdd / onRemove 集群增删回调（如事件订阅管理器跟随启停）。回调在
 	// Add/Remove 成功落库后同步调用，失败不触发。
@@ -49,7 +53,7 @@ type Service struct {
 
 // New 创建集群服务。
 func New(st *store.Store) *Service {
-	return &Service{store: st, probeTimeout: 5 * time.Second}
+	return &Service{store: st, probeTimeout: 5 * time.Second, httpClient: &http.Client{Timeout: 10 * time.Second}}
 }
 
 // OnClusterAdd 注册集群新增回调（可多个，按注册顺序调用）。
@@ -167,23 +171,39 @@ func (s *Service) Add(ctx context.Context, in *store.Cluster) (*store.Cluster, e
 		return nil, ErrProbeFailed{Name: name, Err: err}
 	}
 
-	// MCP 地址缺省取同一 manager 的 /mcp（Worker 仅 manager 挂载该端点）；
-	// 显式传入 mcp_url 仍可覆盖（独立部署网关/入口等场景）。
+	// Worker HTTP 端点（/mcp 与 /healthz 所在端口，默认 8080）与 gRPC 管理
+	// 端口（默认 9080）是两个独立端口：接入时一并探测，保证 AI 排查/巡检
+	// 依赖的 MCP 通路在接入时即验证可用，而不是等到第一次排查才发现 9080
+	// 上没有 /mcp。显式 mcp_url（独立网关/入口）时跳过 HTTP 探测。
+	httpURL := strings.TrimRight(strings.TrimSpace(in.WorkerHTTPURL), "/")
+	if httpURL != "" {
+		if err := s.probeHTTP(probeCtx, httpURL); err != nil {
+			return nil, ErrProbeFailed{Name: name, Err: err}
+		}
+	}
+
+	// MCP 地址优先级：显式 mcp_url > {worker_http_url}/mcp > 旧兜底
+	// {worker_url}/mcp（兼容未提供 HTTP 端点的旧客户端）。
 	mcpURL := in.MCPURL
 	if mcpURL == "" {
-		mcpURL = strings.TrimRight(in.WorkerURL, "/") + "/mcp"
+		if httpURL != "" {
+			mcpURL = mcpURLFromHTTP(httpURL)
+		} else {
+			mcpURL = strings.TrimRight(in.WorkerURL, "/") + "/mcp"
+		}
 	}
 
 	c := &store.Cluster{
-		Name:      name,
-		ProjectID: in.ProjectID,
-		WorkerURL: in.WorkerURL,
-		MCPURL:    mcpURL,
-		Token:     in.Token,
-		Desc:      in.Desc,
-		Inventory: in.Inventory,
-		Status:    store.ClusterOnline,
-		LastSeen:  time.Now().UTC(),
+		Name:          name,
+		ProjectID:     in.ProjectID,
+		WorkerURL:     in.WorkerURL,
+		WorkerHTTPURL: httpURL,
+		MCPURL:        mcpURL,
+		Token:         in.Token,
+		Desc:          in.Desc,
+		Inventory:     in.Inventory,
+		Status:        store.ClusterOnline,
+		LastSeen:      time.Now().UTC(),
 	}
 	c.Err = ""
 	_ = info // 探测信息用于日志/审计（P1 暂不持久化节点元数据）
@@ -210,6 +230,15 @@ func (s *Service) Update(ctx context.Context, in *store.Cluster) (*store.Cluster
 	existing.ProjectID = in.ProjectID
 	if in.WorkerURL != "" {
 		existing.WorkerURL = in.WorkerURL
+	}
+	if in.WorkerHTTPURL != "" {
+		oldHTTP := existing.WorkerHTTPURL
+		existing.WorkerHTTPURL = strings.TrimRight(strings.TrimSpace(in.WorkerHTTPURL), "/")
+		// mcp_url 为空（或仍是旧 HTTP 端点的自动推导值）时跟随 HTTP 端点
+		// 变化；显式覆盖过的 mcp_url 保持不动。
+		if in.MCPURL == "" && (existing.MCPURL == "" || existing.MCPURL == mcpURLFromHTTP(oldHTTP)) {
+			existing.MCPURL = mcpURLFromHTTP(existing.WorkerHTTPURL)
+		}
 	}
 	if in.MCPURL != "" {
 		existing.MCPURL = in.MCPURL
@@ -479,6 +508,30 @@ func (s *Service) probeWorker(ctx context.Context, baseURL, token string) (worke
 			baseURL, info.Role, info.SwarmManager)
 	}
 	return info, nil
+}
+
+// probeHTTP 探测 Worker HTTP 端点的 /healthz（/mcp 同端口）：与 gRPC 端口
+// 分离，接入时验证避免 MCP 通路（AI 排查/巡检采证）接入后才暴露不可达。
+func (s *Service) probeHTTP(ctx context.Context, baseURL string) error {
+	u := strings.TrimRight(baseURL, "/") + "/healthz"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return fmt.Errorf("http endpoint %s: %w", baseURL, err)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("http endpoint %s unreachable: %w", baseURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("http endpoint %s /healthz returned status %d", baseURL, resp.StatusCode)
+	}
+	return nil
+}
+
+// mcpURLFromHTTP 由 Worker HTTP 端点推导 MCP 端点（{http}/mcp）。
+func mcpURLFromHTTP(httpURL string) string {
+	return strings.TrimRight(httpURL, "/") + "/mcp"
 }
 
 // randomHex 生成 n 字节随机 hex（ID 用）。

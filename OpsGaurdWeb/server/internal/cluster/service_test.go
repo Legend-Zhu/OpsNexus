@@ -3,6 +3,8 @@ package cluster
 import (
 	"context"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -304,3 +306,116 @@ func TestClusterLifecycleHooks(t *testing.T) {
 	}
 }
 
+// --- Worker HTTP 端点（worker_http_url）与 MCP 推导 ---
+
+// startHTTPWorker 启动一个 /healthz 返回 200 的 mock Worker HTTP 端点
+// （与 gRPC 端口分离，模拟真实 Worker 的 :8080）。
+func startHTTPWorker(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// TestAddWithHTTPEndpoint 显式提供 HTTP 端点：接入时探测 /healthz，MCP 地址
+// 从 HTTP 端点推导（而非 gRPC 地址拼接）。
+func TestAddWithHTTPEndpoint(t *testing.T) {
+	svc, grpcURL := newTestService(t, false)
+	httpURL := startHTTPWorker(t)
+
+	added, err := svc.Add(context.Background(), &store.Cluster{
+		Name: "dev", WorkerURL: grpcURL, WorkerHTTPURL: httpURL,
+	})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if added.WorkerHTTPURL != httpURL {
+		t.Fatalf("worker_http_url = %q, want %q", added.WorkerHTTPURL, httpURL)
+	}
+	if want := strings.TrimRight(httpURL, "/") + "/mcp"; added.MCPURL != want {
+		t.Fatalf("mcp_url = %q, want %q (derived from http endpoint)", added.MCPURL, want)
+	}
+}
+
+// TestAddHTTPUnreachable HTTP 端点不可达：接入被拒（避免 MCP 通路接入后才暴露）。
+func TestAddHTTPUnreachable(t *testing.T) {
+	svc, grpcURL := newTestService(t, false)
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	deadHTTP := "http://" + lis.Addr().String()
+	_ = lis.Close()
+
+	_, err = svc.Add(context.Background(), &store.Cluster{
+		Name: "dev", WorkerURL: grpcURL, WorkerHTTPURL: deadHTTP,
+	})
+	if err == nil {
+		t.Fatal("expected probe error for unreachable http endpoint")
+	}
+	if _, ok := err.(ErrProbeFailed); !ok {
+		t.Fatalf("expected ErrProbeFailed, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "http endpoint") {
+		t.Fatalf("unexpected error text: %v", err)
+	}
+	// 接入失败的集群不应落库。
+	if c, _ := svc.GetStatic("dev"); c != nil {
+		t.Fatalf("failed add should not persist, got %+v", c)
+	}
+}
+
+// TestAddHealthzNon200 /healthz 非 200（端口被其他服务占用等）：接入被拒。
+func TestAddHealthzNon200(t *testing.T) {
+	svc, grpcURL := newTestService(t, false)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := svc.Add(context.Background(), &store.Cluster{
+		Name: "dev", WorkerURL: grpcURL, WorkerHTTPURL: srv.URL,
+	})
+	if err == nil || !strings.Contains(err.Error(), "status 404") {
+		t.Fatalf("expected /healthz 404 probe error, got %v", err)
+	}
+}
+
+// TestUpdateFollowsHTTP 编辑 HTTP 端点时自动推导的 mcp_url 跟随变化；显式
+// 覆盖过的 mcp_url 不被跟随。
+func TestUpdateFollowsHTTP(t *testing.T) {
+	svc, grpcURL := newTestService(t, false)
+	http1 := startHTTPWorker(t)
+	http2 := startHTTPWorker(t)
+
+	if _, err := svc.Add(context.Background(), &store.Cluster{
+		Name: "dev", WorkerURL: grpcURL, WorkerHTTPURL: http1,
+	}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	// 改 HTTP 端点（不传 mcp_url）→ mcp_url 跟随推导。
+	upd, err := svc.Update(context.Background(), &store.Cluster{Name: "dev", WorkerHTTPURL: http2})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if want := strings.TrimRight(http2, "/") + "/mcp"; upd.MCPURL != want {
+		t.Fatalf("mcp_url should follow http endpoint, got %q want %q", upd.MCPURL, want)
+	}
+
+	// 显式覆盖 mcp_url 后再改 HTTP 端点 → mcp_url 保持不动。
+	if _, err := svc.Update(context.Background(), &store.Cluster{
+		Name: "dev", WorkerHTTPURL: http1, MCPURL: "http://gateway.example.com/mcp",
+	}); err != nil {
+		t.Fatalf("update with explicit mcp: %v", err)
+	}
+	upd, err = svc.Update(context.Background(), &store.Cluster{Name: "dev", WorkerHTTPURL: http2})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if upd.MCPURL != "http://gateway.example.com/mcp" {
+		t.Fatalf("explicit mcp_url should be kept, got %q", upd.MCPURL)
+	}
+}

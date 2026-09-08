@@ -13,6 +13,7 @@
           {{ cluster.status === 'online' ? '在线' : '离线' }}
         </el-tag>
         <span class="og-dim mono">{{ cluster?.worker_url }}</span>
+        <span v-if="cluster?.worker_http_url" class="og-dim mono head-http">{{ cluster.worker_http_url }}</span>
       </div>
       <div class="head-actions">
         <el-tooltip :disabled="cluster?.status !== 'offline'" :content="cluster?.err ?? '集群离线，无法部署'" placement="bottom">
@@ -1405,6 +1406,13 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+.head-http {
+  font-size: 12px;
+}
+.head-http::before {
+  content: '·';
+  margin-right: 10px;
 }
 .head-actions {
   display: flex;

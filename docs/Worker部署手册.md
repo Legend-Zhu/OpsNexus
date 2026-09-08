@@ -72,11 +72,14 @@ Worker 是部署在**每台被纳管服务器**上的节点代理（Go 编写，
 > 生产环境若与同机其他服务端口冲突需错开，参考既有部署：
 > 单机环境用 **8090(HTTP)/9090(gRPC)**（避让管理端页面 8080），灾害集群用
 > **6060/6061**。端口以 stack 的 `-addr`/`-grpc-addr` 启动参数为准。
+> 两个端口**均可自定义**，接入集群时按实际端口分别填写（§5.2）。
 
 **防火墙/网络策略**：
 
-- 放行：管理端 server → 每个**被管集群 swarm manager 节点**的 gRPC 端口（如 6061）。
-  跨网段隔离时需路由/NAT 映射（灾害集群即 171.x → 232:6061 的单向放行）。
+- 放行：管理端 server → 每个**被管集群 swarm manager 节点**的 **gRPC 端口与
+  HTTP 端口**（如 6061 + 6060）。gRPC 走编排/监控/探活；HTTP 用于接入时
+  `/healthz` 校验与 AI 排查/巡检的 `/mcp`。跨网段隔离时需路由/NAT 映射
+  （灾害集群即 171.x → 232:6060+6061 的单向放行）。
 - 同集群节点间：worker 跨节点代理（stats 聚合/exec 路由/日志流）走节点间
   HTTP 端口互通。
 - **Worker → 管理端方向不需要任何入站放行**。
@@ -391,16 +394,19 @@ Worker 部署完成后，管理员在**管理端页面**把该集群登记进来
 
 ### 5.1 添加前预检：管理端 → Worker 连通性
 
-在**管理端 server 所在主机**上，先验证能到达 worker 的 gRPC 端口（页面探测
-走的就是这条路，提前发现网络问题）：
+在**管理端 server 所在主机**上，先验证能到达 worker 的 **gRPC 端口和 HTTP
+端口**（页面探测走的就是这两条路，提前发现网络问题；端口以实际部署为准，
+下例为 6061/6060）：
 
 ```sh
-nc -zv <manager-ip> 6061
+nc -zv <manager-ip> 6061   # gRPC（编排/监控/探活）
+nc -zv <manager-ip> 6060   # HTTP（/healthz 校验 + /mcp）
 # 无 nc 时用 bash 内建：
 timeout 3 bash -c '</dev/tcp/<manager-ip>/6061' && echo OK
+timeout 3 bash -c '</dev/tcp/<manager-ip>/6060' && echo OK
 ```
 
-不通则先解决防火墙/路由/NAT（§2.2），否则页面上必然探测失败。
+任一不通则先解决防火墙/路由/NAT（§2.2），否则页面上必然探测失败。
 
 ### 5.2 页面操作
 
@@ -410,24 +416,26 @@ timeout 3 bash -c '</dev/tcp/<manager-ip>/6061' && echo OK
 |---|---|---|
 | 集群名称 | ✅ | 自定义，如 `disaster-cluster`（创建后不可改名） |
 | 所属项目 | — | 下拉选择已有项目，便于按项目分组筛选 |
-| **Manager 地址** | ✅ | `http://<swarm-manager-IP>:<gRPC端口>`，如 `http://10.60.171.232:6061`。**填 gRPC 端口**（后端剥掉 scheme 后 dial gRPC），填成 HTTP 端口会探测失败 |
+| **gRPC 地址** | ✅ | Worker 的 gRPC 管理端点：`http://<swarm-manager-IP>:<gRPC端口>`，如 `http://10.60.171.232:6061`。**填 gRPC 端口**（默认 9080，可自定义；后端剥掉 scheme 后 dial gRPC），填成 HTTP 端口会探测失败 |
+| **HTTP 地址** | ✅ | Worker 的 HTTP 端点：`http://<swarm-manager-IP>:<HTTP端口>`，如 `http://10.60.171.232:6060`。**填 HTTP 端口**（默认 8080，与 gRPC 端口是两个独立端口，均可自定义）——MCP 端点自动取 `{HTTP 地址}/mcp`，接入时会探测该端口的 `/healthz`。填 gRPC 地址会提示 `/healthz` 不可达 |
 | **Token** | 生产必填* | 与 §4.3 配置到 worker `auth.tokens` 的同一个 secret。表单标注"可选"，但 worker 开了鉴权而此处不填，探测/连接会被拒绝；若两边都不开鉴权，页面会出现"⚠ 未配置 token——任何能访问 gRPC 端口的人均可操作集群"的裸奔警告 |
 | 描述 | — | 环境用途备注 |
 
 两点说明：
 
-- Web 表单没有 MCP 地址字段。如需给 LLM Agent 配 MCP 端点
-  （`http://<manager-ip>:<HTTP端口>/mcp`），改用 API 注册（`POST /api/v1/clusters`，
-  请求体含 `name/project_id/worker_url/mcp_url/token/desc/inventory`）或在管理端
-  配置文件预置集群（`clusters.<name>.worker_url / token / mcp_url / desc`，
-  示例见 `OpsGaurdWeb/deploy/config.docker.yaml`），效果与页面注册相同。
+- **两个端口缺一不可**：Worker 的 gRPC 端口（编排/监控/探活）与 HTTP 端口
+  （`/mcp` + `/healthz`）是两个独立监听端口，接入时管理端会**分别探测**，任一
+  不可达都拒绝接入。MCP 地址无需手填，自动取 `{HTTP 地址}/mcp`；仅独立部署
+  MCP 网关等特殊场景才需要经 API 注册时显式传 `mcp_url` 覆盖
+  （`POST /api/v1/clusters`，请求体含 `name/project_id/worker_url/worker_http_url/mcp_url/token/desc/inventory`）。
 - 纳管清单（inventory，声明 `docker run` 独立容器 / 宿主机服务等外部纳管对象）
   为可选的后置配置，见 `docs/集群纳管清单方案.md`，不影响首次接入。
 
 ### 5.3 提交后
 
-提交时管理端会**先探测**（5 秒超时）：连接 worker 的 gRPC 端口并确认对端是
-swarm manager 角色，失败返回 502（`ErrProbeFailed`），按 §6.3 排查。成功后：
+提交时管理端会**先探测**（5 秒超时，两个探测共用）：① 连接 worker 的 gRPC
+端口并确认对端是 swarm manager 角色；② 请求 HTTP 地址的 `/healthz`（MCP 同
+端口）。任一失败返回 502（`ErrProbeFailed`），按 §6.3 排查。成功后：
 
 - 集群列表**状态**列为在线，**最近探测**时间开始刷新（管理端周期探活）；
 - 进入集群详情页，可见各节点列表及实时 CPU/内存指标（`WatchNodeStats` 流）。

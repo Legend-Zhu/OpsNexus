@@ -48,7 +48,12 @@
           </el-tooltip>
         </template>
       </el-table-column>
-      <el-table-column label="Manager 端点" prop="worker_url" :width="colW.endpoint" show-overflow-tooltip />
+      <el-table-column label="Manager 端点" :width="colW.endpoint" show-overflow-tooltip>
+        <template #default="{ row }">
+          <div class="mono">{{ row.worker_url }}</div>
+          <div v-if="row.worker_http_url" class="mono og-dim endp-http">{{ row.worker_http_url }}</div>
+        </template>
+      </el-table-column>
       <el-table-column label="最近探测" :width="colW.lastSeen">
         <template #default="{ row }">{{ formatTime(row.last_seen) }}</template>
       </el-table-column>
@@ -74,9 +79,13 @@
             <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Manager 地址" prop="worker_url">
+        <el-form-item label="gRPC 地址" prop="worker_url">
           <el-input v-model="form.worker_url" placeholder="http://&lt;管理节点IP&gt;:9080" />
-          <div class="form-tip">Worker 的 gRPC 管理端口（默认 9080）；MCP 端点自动取 HTTP 端口 /mcp</div>
+          <div class="form-tip">Worker 的 gRPC 管理端口（默认 9080，可按部署自定义）：服务编排、监控与健康探测走此端口</div>
+        </el-form-item>
+        <el-form-item label="HTTP 地址" prop="worker_http_url">
+          <el-input v-model="form.worker_http_url" placeholder="http://&lt;管理节点IP&gt;:8080" />
+          <div class="form-tip">Worker 的 HTTP 端口（默认 8080，可自定义，与 gRPC 是两个独立端口）：MCP 端点自动取 {HTTP 地址}/mcp，接入时校验 /healthz</div>
         </el-form-item>
         <el-form-item label="Token">
           <el-input v-model="form.token" type="password" show-password :placeholder="editing && !editingHasToken ? '尚未配置（Worker 未开启鉴权）' : editing ? '已配置，留空不修改' : 'Worker Bearer token（可选）'" />
@@ -202,7 +211,12 @@ const colW = computed(() => {
   const lastSeen = col('最近探测', longest((c) => textWidth(formatTime(c.last_seen), 14)), 150, 220)
   const actions = Math.max(150, Math.ceil(3 * textWidth('详情', 14) + 2 * 12 + 3 * 10 + CELL_PAD))
   const nameNeed = col('名称', longest((c) => textWidth(c.name, 14, 600) + (c.desc ? 8 + textWidth(c.desc, 12) : 0)), 120, 520)
-  const endpointNeed = col('Manager 端点', longest((c) => textWidth(c.worker_url ?? '', 14)), 160, 420)
+  const endpointNeed = col(
+    'Manager 端点',
+    longest((c) => Math.max(textWidth(c.worker_url ?? '', 14), textWidth(c.worker_http_url ?? '', 12))),
+    160,
+    420,
+  )
 
   // 容器减去固定内容列后，剩余宽度按两列的内容占比分摊（不足时按比例压缩）
   const avail = Math.max(320, (tableWidth.value || 1040) - project - status - lastSeen - actions)
@@ -235,7 +249,14 @@ const dialogVisible = ref(false)
 const editing = ref(false)
 const editingHasToken = ref(false)
 const formRef = ref<FormInstance>()
-const form = reactive<AddClusterPayload>({ name: '', project_id: '', worker_url: '', token: '', desc: '' })
+const form = reactive<AddClusterPayload>({
+  name: '',
+  project_id: '',
+  worker_url: '',
+  worker_http_url: '',
+  token: '',
+  desc: '',
+})
 
 const rules: FormRules = {
   name: [
@@ -246,8 +267,34 @@ const rules: FormRules = {
       trigger: 'blur',
     },
   ],
-  worker_url: [{ required: true, message: '请输入 Worker 地址', trigger: 'blur' }],
+  worker_url: [{ required: true, message: '请输入 Worker gRPC 地址', trigger: 'blur' }],
+  worker_http_url: [{ required: true, message: '请输入 Worker HTTP 地址', trigger: 'blur' }],
 }
+
+/** 从 gRPC 地址推导 HTTP 地址默认值：同主机 + 8080 端口（Worker 默认端口约定） */
+function deriveHTTP(url: string) {
+  try {
+    const u = new URL(url.trim())
+    if (!u.hostname) return ''
+    return `${u.protocol}//${u.hostname}:8080`
+  } catch {
+    return ''
+  }
+}
+
+// 填 gRPC 地址时自动补全 HTTP 地址（仅覆盖空值或仍是自动推导值，不抢用户手输）
+const lastAutoHttp = ref('')
+watch(
+  () => form.worker_url,
+  (v) => {
+    const d = deriveHTTP(v)
+    if (!d) return
+    if (!form.worker_http_url || form.worker_http_url === lastAutoHttp.value) {
+      form.worker_http_url = d
+      lastAutoHttp.value = d
+    }
+  },
+)
 
 function statusText(s: string) {
   return s === 'online' ? '在线' : s === 'offline' ? '离线' : '未知'
@@ -284,17 +331,22 @@ async function fetchProjects() {
 
 function openDialog() {
   editing.value = false
-  Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '' })
+  lastAutoHttp.value = ''
+  Object.assign(form, { name: '', project_id: '', worker_url: '', worker_http_url: '', token: '', desc: '' })
   dialogVisible.value = true
 }
 
 function openEdit(row: ClusterSummary) {
   editing.value = true
   editingHasToken.value = !!row.has_token
+  // 旧记录无 worker_http_url：按默认端口约定（同主机 :8080）预填，可改
+  const httpURL = row.worker_http_url ?? deriveHTTP(row.worker_url)
+  lastAutoHttp.value = httpURL
   Object.assign(form, {
     name: row.name,
     project_id: row.project_id ?? '',
     worker_url: row.worker_url,
+    worker_http_url: httpURL,
     token: '',
     desc: row.desc ?? '',
   })
@@ -313,7 +365,8 @@ async function submitCluster() {
       ElMessage.success('集群接入成功')
     }
     dialogVisible.value = false
-    Object.assign(form, { name: '', project_id: '', worker_url: '', token: '', desc: '' })
+    lastAutoHttp.value = ''
+    Object.assign(form, { name: '', project_id: '', worker_url: '', worker_http_url: '', token: '', desc: '' })
     await fetchClusters()
   } catch {
     // 错误提示已由 http.ts 统一处理（探测失败 502 等）
@@ -381,6 +434,10 @@ onMounted(async () => {
 }
 .muted {
   color: var(--og-text-dim);
+}
+.endp-http {
+  font-size: 12px;
+  line-height: 1.5;
 }
 .form-tip {
   color: var(--og-text-dim);

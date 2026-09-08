@@ -38,7 +38,7 @@
 
 **任务**：把一个新业务从构建产物变成集群里带监控运行的服务。完整走完 镜像 → 项目 → 集群 → 部署 四步。
 
-**前置**：管理端已部署可登录；目标集群已装 Docker 并完成 `docker swarm init`/`join`；管理端到集群 manager 的 Worker gRPC 端口（默认 9080）网络可达；各机时钟同步。
+**前置**：管理端已部署可登录；目标集群已装 Docker 并完成 `docker swarm init`/`join`；管理端到集群 manager 的 Worker **gRPC 端口（默认 9080）与 HTTP 端口（默认 8080，`/mcp`+`/healthz`）**都网络可达（端口可自定义，接入时按实际端口填写）；各机时钟同步。
 
 ### 1.1 上传镜像
 
@@ -70,7 +70,7 @@
 1. 各节点放置 `/etc/opsguard/agent-config.yaml`（模板 `Worker/deploy/agent-config.yaml.example`，**全节点逐字节一致**；生产必配 `auth.enabled: true` + `auth.tokens: <名字>: "<secret>"`），并 `mkdir -p /var/lib/opsguard`。
 2. 各节点 `docker load` Worker 镜像 tar。
 3. manager 节点 `docker stack deploy -c stack.yml opsguard`（swarm global 模式，每节点一个 Worker）。
-4. 验证：`curl http://<manager-IP>:<HTTP端口>/healthz` 返回 ok；`docker service logs opsguard_worker` 中 manager 节点出现 `worker role=manager`；防火墙放通管理端 → manager 的 **gRPC 端口**（默认 9080，生产常自定义如 6061）。
+4. 验证：`curl http://<manager-IP>:<HTTP端口>/healthz` 返回 ok；`docker service logs opsguard_worker` 中 manager 节点出现 `worker role=manager`；防火墙放通管理端 → manager 的 **gRPC 端口（默认 9080）与 HTTP 端口（默认 8080）**（生产常自定义，如 6061/6060，接入时两个端口都会探测）。
 
 **② 集群节点接入镜像仓库**（每个集群节点一次，为部署拉镜像铺路）：
 
