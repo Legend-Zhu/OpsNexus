@@ -92,25 +92,33 @@
 
       <div ref="chartEl" class="chart">
         <template v-if="hasTrend">
-          <svg :viewBox="`0 0 ${CHART_W} ${CHART_H}`" class="chart-svg" aria-hidden="true">
-            <text class="peak" :x="PAD_X" :y="11">峰值 {{ fmtCompact(trendMax) }}{{ metricUnit }}</text>
-            <line
-              :x1="PAD_X" :x2="CHART_W - PAD_X"
-              :y1="PAD_T + plotH" :y2="PAD_T + plotH"
-              class="baseline"
-            />
-            <g v-for="b in trendBars" :key="b.day">
+          <div class="chart-plot">
+            <svg :viewBox="`0 0 ${CHART_W} ${CHART_H}`" preserveAspectRatio="none" class="chart-svg" aria-hidden="true">
+              <line
+                :x1="PAD_X" :x2="CHART_W - PAD_X"
+                :y1="PAD_T + plotH" :y2="PAD_T + plotH"
+                class="baseline"
+              />
               <rect
+                v-for="b in trendBars"
+                :key="b.day"
                 class="bar"
                 :x="b.x" :y="b.y" :width="b.w" :height="b.h" rx="2"
                 @mousemove="onBarMove($event, b.row)"
                 @mouseleave="tip = null"
               />
-              <text v-if="b.showTick" class="tick" :x="b.x + b.w / 2" :y="CHART_H - 6" text-anchor="middle">
-                {{ b.day.slice(5) }}
-              </text>
-            </g>
-          </svg>
+            </svg>
+            <span class="chart-peak">峰值 {{ fmtCompact(trendMax) }}{{ metricUnit }}</span>
+          </div>
+          <div class="chart-ticks">
+            <span
+              v-for="(b, i) in trendBars"
+              v-show="b.showTick"
+              :key="b.day"
+              class="tick"
+              :style="tickStyle(i)"
+            >{{ b.day.slice(5) }}</span>
+          </div>
           <div
             v-if="tip"
             class="chart-tip"
@@ -372,11 +380,12 @@ function metricValue(t: MLOpsCostTotals): number {
 }
 const metricUnit = computed(() => (metric.value === 'calls' ? ' 次' : metric.value === 'tokens' ? ' tokens' : ''))
 
-// 手写 SVG 柱状图（无图表库依赖）：viewBox 逻辑坐标 + 宽度 100% 自适应
+// 手写 SVG 柱状图（无图表库依赖）：viewBox 逻辑坐标，CSS 定高 +
+// preserveAspectRatio="none" 拉伸填充（SVG 内只放形状，文字刻度在 HTML 层防拉伸）
 const CHART_W = 760
-const CHART_H = 190
-const PAD_T = 16
-const PAD_B = 24
+const CHART_H = 150
+const PAD_T = 6
+const PAD_B = 2
 const PAD_X = 2
 const GAP = 4
 const plotH = CHART_H - PAD_T - PAD_B
@@ -401,6 +410,16 @@ const trendBars = computed(() => {
   })
 })
 const hasTrend = computed(() => trendBars.value.some((b) => b.h > 0))
+
+// 刻度标签定位（HTML 层）：首尾贴边避免裁切，其余居中于柱
+function tickStyle(i: number): Record<string, string> {
+  const bars = trendBars.value
+  const b = bars[i]
+  if (!b) return {}
+  if (i === 0) return { left: '0%', transform: 'none' }
+  if (i === bars.length - 1) return { left: '100%', transform: 'translateX(-100%)' }
+  return { left: `${((b.x + b.w / 2) / CHART_W) * 100}%` }
+}
 
 const chartEl = ref<HTMLDivElement | null>(null)
 const tip = ref<{ x: number; y: number; row: MLOpsCostTrendRow } | null>(null)
@@ -715,7 +734,7 @@ onBeforeUnmount(() => window.clearInterval(clockTimer))
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
-  padding: 10px 0 14px;
+  padding: 8px 0 12px;
 }
 .ustat {
   display: flex;
@@ -727,7 +746,7 @@ onBeforeUnmount(() => window.clearInterval(clockTimer))
   color: var(--og-text-dim);
 }
 .ustat-value {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 650;
   letter-spacing: -0.02em;
   color: var(--el-text-color-primary);
@@ -738,16 +757,27 @@ onBeforeUnmount(() => window.clearInterval(clockTimer))
   color: var(--og-text-dim);
 }
 
-/* 趋势图 */
+/* 趋势图：定高拉伸，宽度随卡片、高度不随宽度膨胀 */
 .chart {
   position: relative;
   border-top: 1px solid var(--el-border-color-extra-light);
-  padding-top: 8px;
+  padding-top: 10px;
+}
+.chart-plot {
+  position: relative;
+  height: 160px;
 }
 .chart-svg {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
+}
+.chart-peak {
+  position: absolute;
+  top: 0;
+  left: 2px;
+  font-size: 11px;
+  color: var(--og-text-dim);
 }
 .baseline {
   stroke: var(--el-border-color-lighter);
@@ -761,13 +791,17 @@ onBeforeUnmount(() => window.clearInterval(clockTimer))
 .bar:hover {
   fill: var(--og-accent-strong);
 }
-.peak {
-  fill: var(--og-text-dim);
-  font-size: 11px;
+.chart-ticks {
+  position: relative;
+  height: 16px;
+  margin-top: 3px;
 }
 .tick {
-  fill: var(--og-text-dim);
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
   font-size: 10px;
+  color: var(--og-text-dim);
   font-family: var(--og-mono);
 }
 .chart-empty {
