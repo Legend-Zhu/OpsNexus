@@ -97,6 +97,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/system/Index.vue'),
         meta: { title: '系统设置' },
       },
+      {
+        path: 'docs',
+        name: 'docs',
+        component: () => import('@/views/docs/Index.vue'),
+        meta: { title: '文档' },
+      },
       // 工作负载 / 监控已收编进集群详情（/clusters/:name）
       { path: 'workloads', redirect: '/clusters' },
       { path: 'monitor', redirect: '/clusters' },

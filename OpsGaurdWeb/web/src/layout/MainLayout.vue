@@ -57,7 +57,10 @@
       <el-header class="header">
         <span class="title">{{ $route.meta.title ?? 'OpsGaurd' }}</span>
         <el-space :size="16">
-          <el-tag size="small" effect="plain" class="env-tag">管理面</el-tag>
+          <router-link to="/docs" class="docs-link" title="使用文档">
+            <el-icon><Document /></el-icon>
+            <span>使用文档</span>
+          </router-link>
           <el-dropdown trigger="click" @command="onTheme">
             <span class="theme-btn" title="切换主题">
               <el-icon><Brush /></el-icon>
@@ -110,7 +113,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Bell, Box, Calendar, FolderOpened, MagicStick, Notebook, Odometer, Platform, Promotion, Setting,
+  Bell, Box, Calendar, Document, FolderOpened, MagicStick, Notebook, Odometer, Platform, Promotion, Setting,
 } from '@element-plus/icons-vue'
 import { authApi } from '@/api'
 import { clearToken } from '@/api/http'
@@ -220,8 +223,20 @@ onMounted(loadMe)
   font-size: 15px;
   font-weight: 600;
 }
-.env-tag {
+.docs-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
   color: var(--og-text-dim);
+  text-decoration: none;
+  padding: 4px 10px;
+  border-radius: 8px;
+  transition: background 0.15s, color 0.15s;
+}
+.docs-link:hover {
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
 }
 .theme-btn {
   display: grid;
