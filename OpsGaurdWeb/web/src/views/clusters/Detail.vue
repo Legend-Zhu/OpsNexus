@@ -257,6 +257,22 @@
 
       <!-- 告警规则：本集群全部监控配置的统一管理（swarm 服务 + 纳管对象） -->
       <el-tab-pane :label="`告警规则 (${rules.length})`" name="rules">
+        <!-- 宿主机资源阈值（集群级）：server 周期采样各节点 host CPU/内存，超阈值走告警管线推渠道 -->
+        <div class="nodemon-card">
+          <el-switch v-model="nodeMon.enabled" />
+          <span class="nodemon-title">宿主机资源阈值</span>
+          <span class="og-dim">对本集群全部节点生效；占用 ≥ 阈值时产生告警并按通知策略推送，回落自动恢复</span>
+          <span class="flex-fill"></span>
+          <template v-if="nodeMon.enabled">
+            <span class="nodemon-label">CPU ≥</span>
+            <el-input-number v-model="nodeMon.cpuThreshold" :min="0" :max="100" size="small" />
+            <span class="nodemon-label">%</span>
+            <span class="nodemon-label">内存 ≥</span>
+            <el-input-number v-model="nodeMon.memThreshold" :min="0" :max="100" size="small" />
+            <span class="nodemon-label">%</span>
+          </template>
+          <el-button size="small" type="primary" :loading="savingNodeMon" @click="saveNodeMon">保存</el-button>
+        </div>
         <div class="tab-toolbar">
           <span class="og-dim">swarm 服务「下发」推送 Worker 生效；纳管对象「下发」写入纳管清单，由 server 探测执行</span>
           <div>
@@ -544,7 +560,7 @@ import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import InventoryEditor from '@/components/InventoryEditor.vue'
 import { alertRuleApi, clusterApi, eventApi, inventoryApi, nodeApi, workloadApi } from '@/api'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
-import type { AlertRule, ClusterNode, ClusterSummary, ContainerInfo, EventItem, InventoryConfig, InventoryView, LogLine, Monitoring, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
+import type { AlertRule, AddClusterPayload, ClusterNode, ClusterSummary, ContainerInfo, EventItem, InventoryConfig, InventoryView, LogLine, Monitoring, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
 
 const route = useRoute()
 const clusterName = computed(() => route.params.name as string)
@@ -962,8 +978,51 @@ function submitInvConfig() {
 async function fetchCluster() {
   try {
     cluster.value = await clusterApi.get(clusterName.value)
+    syncNodeMonFromCluster()
   } catch {
     cluster.value = null
+  }
+}
+
+// ---- 宿主机资源阈值（集群级 NodeMonitoring） ----
+const nodeMon = reactive({ enabled: false, cpuThreshold: 0, memThreshold: 0 })
+const savingNodeMon = ref(false)
+
+function syncNodeMonFromCluster() {
+  const nm = cluster.value?.nodeMonitoring
+  nodeMon.enabled = !!nm?.enabled
+  nodeMon.cpuThreshold = nm?.cpuThreshold ?? 0
+  nodeMon.memThreshold = nm?.memThreshold ?? 0
+}
+
+async function saveNodeMon() {
+  if (nodeMon.enabled && nodeMon.cpuThreshold <= 0 && nodeMon.memThreshold <= 0) {
+    ElMessage.warning('请至少配置 CPU 或内存阈值，或关闭宿主机资源阈值')
+    return
+  }
+  const c = cluster.value
+  if (!c) return
+  savingNodeMon.value = true
+  try {
+    // update 语义：token 缺省保留现有值；nodeMonitoring 传对象即整体替换
+    const payload: AddClusterPayload = {
+      name: c.name,
+      project_id: c.project_id ?? '',
+      worker_url: c.worker_url,
+      worker_http_url: c.worker_http_url ?? '',
+      mcp_url: c.mcp_url ?? '',
+      desc: c.desc ?? '',
+      nodeMonitoring: nodeMon.enabled
+        ? { enabled: true, cpuThreshold: nodeMon.cpuThreshold, memThreshold: nodeMon.memThreshold }
+        : { enabled: false },
+    }
+    cluster.value = await clusterApi.update(clusterName.value, payload)
+    syncNodeMonFromCluster()
+    ElMessage.success('宿主机阈值已保存，下一个采样周期（约 30 秒）生效')
+  } catch {
+    // 错误已由 http.ts 提示
+  } finally {
+    savingNodeMon.value = false
   }
 }
 
@@ -1433,6 +1492,35 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+}
+
+/* 宿主机资源阈值（告警规则 tab 顶部卡片） */
+.nodemon-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+  background: var(--el-fill-color-lighter);
+}
+
+.nodemon-card .nodemon-title {
+  font-weight: 600;
+}
+
+.nodemon-card .nodemon-label {
+  color: var(--el-text-color-regular);
+}
+
+.nodemon-card .flex-fill {
+  flex: 1;
+}
+
+.nodemon-card .el-input-number {
+  width: 100px;
 }
 
 /* 节点卡片 */

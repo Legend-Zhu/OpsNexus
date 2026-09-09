@@ -18,6 +18,17 @@ export interface ClusterSummary {
   err?: string
   /** 纳管清单（外部对象声明） */
   inventory?: InventoryConfig
+  /** 宿主机资源阈值（集群级，server 侧周期采样各节点 host 指标评估） */
+  nodeMonitoring?: NodeMonitoring
+}
+
+/** 宿主机资源阈值（集群级 NodeMonitoring）：超阈值经 ingest 管线产生告警并按通知策略推渠道 */
+export interface NodeMonitoring {
+  enabled: boolean
+  /** 宿主机 CPU 占用率阈值百分比（1-100；0/缺省 = 不检查） */
+  cpuThreshold?: number
+  /** 宿主机内存占用率阈值百分比（1-100；0/缺省 = 不检查） */
+  memThreshold?: number
 }
 
 /** 集群详情 */
@@ -38,6 +49,8 @@ export interface AddClusterPayload {
   desc?: string
   /** 纳管清单（接入时可选配置） */
   inventory?: InventoryConfig
+  /** 宿主机资源阈值（集群级，可选配置） */
+  nodeMonitoring?: NodeMonitoring
 }
 
 /** 项目（管理层级第一层：项目 → 集群） */

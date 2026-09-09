@@ -24,6 +24,7 @@ import (
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/idptunnel"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ingest"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/invmonitor"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/nodemon"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/mcpserver"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/mlops"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/notify"
@@ -171,6 +172,13 @@ func main() {
 	invmonSvc := invmonitor.New(st, clusterSvc, ingestSvc, log)
 	invmonSvc.Start()
 	defer invmonSvc.Stop()
+
+	// 宿主机资源阈值监控（集群级 NodeMonitoring）：周期经 WatchNodeStats 流
+	// 采样各节点宿主机 CPU/内存，超阈值翻转事件走 ingestSvc 同一管线聚合成
+	// 告警并按通知策略推渠道。配置存集群注册表，不下发 Worker。
+	nodemonSvc := nodemon.New(st, clusterSvc, ingestSvc, log)
+	nodemonSvc.Start()
+	defer nodemonSvc.Stop()
 
 	// 认证服务（P6：本地用户 + SSO/OIDC 抽象）
 	authSvc := auth.New(st, cfg.Auth.TokenSecret, parseDuration(cfg.Auth.TokenTTL, 24*time.Hour), oidcFromConfig(cfg.Auth.SSO))

@@ -163,6 +163,12 @@ func (s *Service) Add(ctx context.Context, in *store.Cluster) (*store.Cluster, e
 			return nil, fmt.Errorf("inventory: %w", err)
 		}
 	}
+	// 宿主机阈值校验（至少一个阈值 + 范围 0-100）。
+	if in.NodeMonitoring != nil {
+		if err := in.NodeMonitoring.Validate(); err != nil {
+			return nil, err
+		}
+	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, s.probeTimeout)
 	defer cancel()
@@ -199,11 +205,12 @@ func (s *Service) Add(ctx context.Context, in *store.Cluster) (*store.Cluster, e
 		WorkerURL:     in.WorkerURL,
 		WorkerHTTPURL: httpURL,
 		MCPURL:        mcpURL,
-		Token:         in.Token,
-		Desc:          in.Desc,
-		Inventory:     in.Inventory,
-		Status:        store.ClusterOnline,
-		LastSeen:      time.Now().UTC(),
+		Token:          in.Token,
+		Desc:           in.Desc,
+		Inventory:      in.Inventory,
+		NodeMonitoring: in.NodeMonitoring,
+		Status:         store.ClusterOnline,
+		LastSeen:       time.Now().UTC(),
 	}
 	c.Err = ""
 	_ = info // 探测信息用于日志/审计（P1 暂不持久化节点元数据）
@@ -255,6 +262,14 @@ func (s *Service) Update(ctx context.Context, in *store.Cluster) (*store.Cluster
 			return nil, fmt.Errorf("inventory: %w", err)
 		}
 		existing.Inventory = in.Inventory
+	}
+	// NodeMonitoring: 仅在请求体显式包含时更新（nil = 不动现有配置；
+	// 关闭/清除传 &NodeMonitoring{Enabled: false, ...} 或全零阈值对象）。
+	if in.NodeMonitoring != nil {
+		if err := in.NodeMonitoring.Validate(); err != nil {
+			return nil, err
+		}
+		existing.NodeMonitoring = in.NodeMonitoring
 	}
 	if err := s.store.PutCluster(existing); err != nil {
 		return nil, err

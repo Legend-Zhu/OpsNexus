@@ -27,6 +27,8 @@ type addClusterRequest struct {
 	Token         string                 `json:"token"`
 	Desc          string                 `json:"desc"`
 	Inventory     *store.InventoryConfig `json:"inventory,omitempty"`
+	// NodeMonitoring 宿主机资源阈值（集群级）；nil = 不修改现有配置。
+	NodeMonitoring *store.NodeMonitoring `json:"nodeMonitoring,omitempty"`
 }
 
 // ListClusters godoc: GET /api/v1/clusters
@@ -86,9 +88,10 @@ func (h *Handlers) AddCluster(c *gin.Context) {
 		WorkerURL:     req.WorkerURL,
 		WorkerHTTPURL: req.WorkerHTTPURL,
 		MCPURL:        req.MCPURL,
-		Token:         req.Token,
-		Desc:          req.Desc,
-		Inventory:     req.Inventory,
+		Token:          req.Token,
+		Desc:           req.Desc,
+		Inventory:      req.Inventory,
+		NodeMonitoring: req.NodeMonitoring,
 	})
 	if err != nil {
 		var pf cluster.ErrProbeFailed
@@ -115,14 +118,15 @@ func (h *Handlers) UpdateCluster(c *gin.Context) {
 		return
 	}
 	item, err := h.clusters.Update(c.Request.Context(), &store.Cluster{
-		Name:          c.Param("name"),
-		ProjectID:     req.ProjectID,
-		WorkerURL:     req.WorkerURL,
-		WorkerHTTPURL: req.WorkerHTTPURL,
-		MCPURL:        req.MCPURL,
-		Token:         req.Token,
-		Desc:          req.Desc,
-		Inventory:     req.Inventory,
+		Name:           c.Param("name"),
+		ProjectID:      req.ProjectID,
+		WorkerURL:      req.WorkerURL,
+		WorkerHTTPURL:  req.WorkerHTTPURL,
+		MCPURL:         req.MCPURL,
+		Token:          req.Token,
+		Desc:           req.Desc,
+		Inventory:      req.Inventory,
+		NodeMonitoring: req.NodeMonitoring,
 	})
 	if err != nil {
 		var nf cluster.ErrNotFound

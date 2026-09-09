@@ -40,8 +40,40 @@ type Cluster struct {
 	// Inventory 纳管清单：声明集群里要纳管的外部对象（非 OpsGaurd 部署的
 	// swarm service）。nil = 空清单（旧记录不受影响）。
 	Inventory *InventoryConfig `json:"inventory,omitempty"`
+	// NodeMonitoring 宿主机资源阈值（集群级，对本集群全部 swarm 节点生效）。
+	// 由 server 侧 nodemon 循环周期采样各节点 host CPU/内存评估翻转，事件走
+	// ingest 管线聚合成告警；与 AlertRule 不同，配置不下发 Worker。
+	// nil = 未配置（旧记录不受影响）。
+	NodeMonitoring *NodeMonitoring `json:"nodeMonitoring,omitempty"`
 	// Err 最近一次健康探测错误（不持久化，运行时填充）
 	Err string `json:"-"`
+}
+
+// NodeMonitoring 宿主机资源阈值配置（集群级）。
+// 语义与 ResourceThreshold 对齐（百分比阈值、>= 触发），但作用对象是
+// swarm 节点的宿主机整体（/proc 采样），不是某个服务的容器聚合。
+type NodeMonitoring struct {
+	Enabled bool `json:"enabled"`
+	// CPUThreshold 宿主机 CPU 占用率阈值（百分比 1-100；0 = 不检查 CPU）。
+	CPUThreshold int `json:"cpuThreshold,omitempty"`
+	// MemThreshold 宿主机内存占用率阈值（百分比 1-100；0 = 不检查内存）。
+	MemThreshold int `json:"memThreshold,omitempty"`
+}
+
+// Validate 校验阈值范围。Enabled=false 时允许全零阈值（整体停用的合法载荷）。
+func (m *NodeMonitoring) Validate() error {
+	if m == nil {
+		return nil
+	}
+	for name, v := range map[string]int{"cpuThreshold": m.CPUThreshold, "memThreshold": m.MemThreshold} {
+		if v < 0 || v > 100 {
+			return fmt.Errorf("nodeMonitoring: %s must be 1-100 (0 = off), got %d", name, v)
+		}
+	}
+	if m.Enabled && m.CPUThreshold == 0 && m.MemThreshold == 0 {
+		return fmt.Errorf("nodeMonitoring: cpuThreshold/memThreshold 至少配置一个（0 = 不检查）")
+	}
+	return nil
 }
 
 // Public 返回去除敏感字段（Token）的对外视图，保留 HasToken 布尔标记与
