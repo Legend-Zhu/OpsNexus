@@ -61,6 +61,13 @@ func RecoverTypeOf(e *store.IngestEvent) bool {
 	return e.Type == store.EventResourceRecover || e.Type == store.EventRecovered
 }
 
+// Events 查询服务端事件库（最新在前），按集群/服务/类型过滤。纳管对象的
+// 探测事件（invmonitor 经 HandleEvent 直写）只存在于服务端、不过 Worker，
+// 深度排查（AiNexus investigate）注入事件证据走本查询。
+func (s *Service) Events(cluster, service string, typ store.EventType, limit int) ([]*store.IngestEvent, error) {
+	return s.st.ListEvents(cluster, service, typ, limit)
+}
+
 // Notifier 告警通知出口（*notify.Service 满足；测试注入 fake）。
 type Notifier interface {
 	NotifyAlert(ctx context.Context, alert *store.Alert, subject string) error

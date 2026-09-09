@@ -18,6 +18,7 @@ import (
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	ainexusserver "gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/ainexus/server"
+	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/mlops"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/store"
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/OpsGaurdWeb/server/internal/workerproxy"
 )
@@ -160,10 +161,11 @@ func (m *investigationManager) start(ctx context.Context, in investigationStartI
 
 	inv := &store.Investigation{Messages: "[]"}
 	var turns []chatTurn
-	system := investigationSystem()
+	invType := ""
+	system := investigationSystem(invType)
 
 	if in.AlertID != "" {
-		alertTurns, cluster, title, err := h.buildAlertTurns(ctx, in.AlertID, in.Question)
+		alertTurns, cluster, title, decl, err := h.buildAlertTurns(ctx, in.AlertID, in.Question)
 		if err != nil {
 			return investigationOut{}, err
 		}
@@ -171,6 +173,10 @@ func (m *investigationManager) start(ctx context.Context, in investigationStartI
 		inv.Cluster = cluster
 		inv.Title = title
 		turns = alertTurns
+		if decl != nil {
+			invType = decl.Type
+			system = investigationSystem(invType)
+		}
 	} else {
 		if strings.TrimSpace(in.Question) == "" {
 			return investigationOut{}, fmt.Errorf("either alert_id or question is required")
@@ -240,7 +246,7 @@ func (m *investigationManager) continueSession(ctx context.Context, in investiga
 	if err := h.deps.Clusters.SaveInvestigation(inv); err != nil {
 		return investigationOut{}, err
 	}
-	if err := m.launch(inv, investigationSystem(), history); err != nil {
+	if err := m.launch(inv, investigationSystem(h.sessionInvType(inv.AlertID)), history); err != nil {
 		return investigationOut{}, err
 	}
 	return investigationOut{
@@ -344,55 +350,132 @@ func (m *investigationManager) run(inv *store.Investigation, system string, turn
 // --- prompt 与证据组装 ---
 
 // investigationSystem 委托排查的 system 提示：角色 + 集群工具守则 +
-// 协同上下文说明（提问方是带着代码上下文的另一个 agent）。
-func investigationSystem() string {
-	return "你是 OpsGaurd 平台的内嵌 AI 排查专家，运行在管理面，可通过集群 Worker 的 MCP 工具对纳管集群做实时采证（服务状态/日志/资源/事件/拨测）。\n" +
+// 协同上下文说明（提问方是带着代码上下文的另一个 agent）。invType 非空时
+// 追加纳管对象说明（非 swarm 对象的采证路径指引）。
+func investigationSystem(invType string) string {
+	s := "你是 OpsGaurd 平台的内嵌 AI 排查专家，运行在管理面，可通过集群 Worker 的 MCP 工具对纳管集群做实时采证（服务状态/日志/资源/事件/拨测）。\n" +
 		"本次提问来自另一个具备代码上下文的 AI 助手（或工程师）：它会给出代码侧假设，请你在集群侧独立取证核实或推翻，不要盲从假设。\n" +
 		"要求：\n" +
 		"1. 结论必须引用工具返回的具体证据（数值、日志行、状态）支撑；证据不足就明确说不足，不要编造；\n" +
 		"2. 采证顺序建议：get_service/list_services 确认状态 → get_service_logs 看日志 → get_resource_usage 查资源 → check_http/check_port 主动复现 → get_events 看关联事件；\n" +
 		"3. 你只做取证与分析，不要执行任何变更类操作（restart/scale/update/remove）；\n" +
 		"4. 结论用简洁的中文，给出：结论（证实/推翻/不确定）→ 证据 → 建议的下一步（可交给提问方在代码侧执行）。\n"
+	if invType != "" {
+		s += mlops.InvestigateSystemNote(invType)
+	}
+	return s
+}
+
+// sessionInvType 由会话的告警还原纳管对象类型（continue 重跑时 system 重建，
+// 声明不落库，按告警重新解析；无告警/非纳管对象返回空）。
+func (h *Handler) sessionInvType(alertID string) string {
+	if alertID == "" {
+		return ""
+	}
+	a, err := h.deps.Clusters.Alert(alertID)
+	if err != nil || a == nil {
+		return ""
+	}
+	if decl := h.inventoryDeclaration(a.Cluster, a.Service); decl != nil {
+		return decl.Type
+	}
+	return ""
+}
+
+// inventoryDeclaration 解析告警对象的纳管声明：按名称匹配集群纳管清单中的
+// standalone-container / host-service 条目；swarm 服务或读取失败返回 nil。
+func (h *Handler) inventoryDeclaration(clusterName, service string) *mlops.InvestigateInventory {
+	if service == "" {
+		return nil
+	}
+	c, err := h.deps.Clusters.GetStatic(clusterName)
+	if err != nil || c == nil || c.Inventory == nil {
+		return nil
+	}
+	for i := range c.Inventory.Items {
+		item := &c.Inventory.Items[i]
+		if item.Name != service {
+			continue
+		}
+		inv := &mlops.InvestigateInventory{
+			Name:     item.Name,
+			Type:     item.Type,
+			Ref:      item.Ref,
+			Node:     item.Node,
+			Ports:    append([]string(nil), item.Ports...),
+			Category: item.Category,
+			Desc:     item.Desc,
+		}
+		if item.Monitoring != nil {
+			if mj, err := json.MarshalIndent(item.Monitoring, "", "  "); err == nil {
+				inv.Monitoring = string(mj)
+			}
+		}
+		return inv
+	}
+	return nil
 }
 
 // buildAlertTurns 告警模式：取告警 + 证据（事件/日志），组装首轮 user 消息。
-func (h *Handler) buildAlertTurns(ctx context.Context, alertID, extraQuestion string) ([]chatTurn, string, string, error) {
+// 告警对象命中纳管清单时，事件证据改用服务端事件库（invmonitor 直写、不过
+// Worker），并注入纳管声明；返回纳管声明供 system 提示词按对象类型组装。
+func (h *Handler) buildAlertTurns(ctx context.Context, alertID, extraQuestion string) ([]chatTurn, string, string, *mlops.InvestigateInventory, error) {
 	alert, err := h.deps.Clusters.Alert(alertID)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", nil, err
 	}
 	if alert == nil {
-		return nil, "", "", fmt.Errorf("alert %q not found", alertID)
+		return nil, "", "", nil, fmt.Errorf("alert %q not found", alertID)
 	}
+	decl := h.inventoryDeclaration(alert.Cluster, alert.Service)
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "【告警】\n集群: %s\n服务: %s\n类型: %s\n级别: %s\n标题: %s\n次数: %d\n首次: %s\n最近: %s\n\n",
 		alert.Cluster, alert.Service, alert.Type, alert.Level, alert.Title, alert.Count,
 		formatTime(alert.FirstTS), formatTime(alert.LastTS))
 
-	if cli, err := h.workerClient(alert.Cluster); err == nil {
-		if raw, err := cli.Events(ctx, alert.Service, "", 0, 20); err == nil && len(raw) > 0 && string(raw) != "null" {
-			b.WriteString("【该服务近期监控事件】\n")
-			b.Write(raw)
-			b.WriteString("\n\n")
-		}
-		var logs []string
-		logBytes := 0
-		_ = cli.StreamLogs(ctx, alert.Service, false, 50, "", func(ll workerproxy.LogLine) bool {
-			logBytes += len(ll.Line) + 32
-			if logBytes > 64<<10 {
-				logs = append(logs, "…[logs truncated]")
-				return false
+	if decl != nil {
+		b.WriteString("【纳管对象声明】\n")
+		b.WriteString(mlops.FormatInventoryDeclaration(decl))
+		b.WriteString("\n\n")
+	}
+
+	switch {
+	case decl != nil && h.deps.Store != nil:
+		// 纳管对象事件只在服务端（Worker 侧事件队列没有它），改用服务端事件库
+		if evs, err := h.deps.Store.ListEvents(alert.Cluster, alert.Service, "", 20); err == nil && len(evs) > 0 {
+			if raw, err := json.Marshal(evs); err == nil {
+				b.WriteString("【该服务近期监控事件】\n")
+				b.Write(raw)
+				b.WriteString("\n\n")
 			}
-			logs = append(logs, fmt.Sprintf("[%s/%s] %s", ll.TS, ll.Stream, ll.Line))
-			return true
-		})
-		if len(logs) > 0 {
-			b.WriteString("【服务日志（最近）】\n")
-			b.WriteString(joinLines(logs))
-			b.WriteString("\n\n")
 		}
-	} else {
-		fmt.Fprintf(&b, "【注意】集群 Worker 连接失败（%v），仅能基于告警信息分析。\n\n", err)
+	case decl == nil:
+		if cli, err := h.workerClient(alert.Cluster); err == nil {
+			if raw, err := cli.Events(ctx, alert.Service, "", 0, 20); err == nil && len(raw) > 0 && string(raw) != "null" {
+				b.WriteString("【该服务近期监控事件】\n")
+				b.Write(raw)
+				b.WriteString("\n\n")
+			}
+			var logs []string
+			logBytes := 0
+			_ = cli.StreamLogs(ctx, alert.Service, false, 50, "", func(ll workerproxy.LogLine) bool {
+				logBytes += len(ll.Line) + 32
+				if logBytes > 64<<10 {
+					logs = append(logs, "…[logs truncated]")
+					return false
+				}
+				logs = append(logs, fmt.Sprintf("[%s/%s] %s", ll.TS, ll.Stream, ll.Line))
+				return true
+			})
+			if len(logs) > 0 {
+				b.WriteString("【服务日志（最近）】\n")
+				b.WriteString(joinLines(logs))
+				b.WriteString("\n\n")
+			}
+		} else {
+			fmt.Fprintf(&b, "【注意】集群 Worker 连接失败（%v），仅能基于告警信息分析。\n\n", err)
+		}
 	}
 
 	b.WriteString("请给出根因分析与处置建议（引用证据）。")
@@ -404,7 +487,7 @@ func (h *Handler) buildAlertTurns(ctx context.Context, alertID, extraQuestion st
 	if extraQuestion != "" {
 		title = alert.Title + " / " + clip(firstLine(extraQuestion), 40)
 	}
-	return []chatTurn{{Role: "user", Content: b.String()}}, alert.Cluster, clip(title, 120), nil
+	return []chatTurn{{Role: "user", Content: b.String()}}, alert.Cluster, clip(title, 120), decl, nil
 }
 
 // --- 辅助 ---

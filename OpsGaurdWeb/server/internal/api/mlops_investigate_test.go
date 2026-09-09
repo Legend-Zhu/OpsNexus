@@ -37,17 +37,27 @@ func TestInvestigateTemplateV1MatchesLegacy(t *testing.T) {
 		events, audit json.RawMessage
 		logs          []workerproxy.LogLine
 		useMCP        bool
+		inv           *mlops.InvestigateInventory
 	}{
-		{"full+mcp", events, audit, logs, true},
-		{"full", events, audit, logs, false},
-		{"no-evidence", nil, nullEvents, nil, false},
-		{"no-evidence+mcp", nil, nil, nil, true},
-		{"logs-only", nil, nil, logs, false},
+		{"full+mcp", events, audit, logs, true, nil},
+		{"full", events, audit, logs, false, nil},
+		{"no-evidence", nil, nullEvents, nil, false, nil},
+		{"no-evidence+mcp", nil, nil, nil, true, nil},
+		{"logs-only", nil, nil, logs, false, nil},
+		{"inventory", nil, nil, nil, true, &mlops.InvestigateInventory{
+			Name: "r-nacos", Type: "standalone-container", Ref: "rnacos", Node: "node-1",
+			Ports:    []string{"8848", "9848"},
+			Category: "middleware", Desc: "注册/配置中心",
+			Monitoring: "{\n  \"portChecks\": [\n    {\n      \"port\": \"8848\"\n    }\n  ]\n}",
+		}},
+		{"inventory+full", events, audit, logs, true, &mlops.InvestigateInventory{
+			Name: "AI-Chat", Type: "host-service", Ref: "10.60.171.231",
+		}},
 	}
 	for _, tc := range cases {
 		alert := mkAlert()
-		legacy := BuildInvestigateMessages(alert, tc.events, tc.audit, tc.logs, tc.useMCP)
-		data := investigatePromptData(alert, tc.events, tc.audit, tc.logs, tc.useMCP)
+		legacy := BuildInvestigateMessages(alert, tc.events, tc.audit, tc.logs, tc.useMCP, tc.inv)
+		data := investigatePromptData(alert, tc.events, tc.audit, tc.logs, tc.useMCP, tc.inv)
 
 		for i, scenario := range []string{mlops.ScenarioInvestigateSystem, mlops.ScenarioInvestigateUser} {
 			got, err := mlops.RenderBuiltinMessages(scenario, &data)
@@ -78,9 +88,9 @@ func TestInvestigateTemplateHybridCustomUser(t *testing.T) {
 	alert := mkAlert()
 	events := json.RawMessage(`[{"id":"e1"}]`)
 	logs := []workerproxy.LogLine{{TS: "t1", Stream: "stdout", Line: "x"}}
-	legacy := BuildInvestigateMessages(alert, events, nil, logs, true)
+	legacy := BuildInvestigateMessages(alert, events, nil, logs, true, nil)
 
-	msgs, ok := svc.InvestigateMessages(investigatePromptData(alert, events, nil, logs, true))
+	msgs, ok := svc.InvestigateMessages(investigatePromptData(alert, events, nil, logs, true, nil))
 	if !ok {
 		t.Fatal("expected template rendering after customization")
 	}
@@ -104,8 +114,8 @@ func TestInvestigateMessagesFallbackWithoutMlops(t *testing.T) {
 	events := json.RawMessage(`[{"id":"e1"}]`)
 	logs := []workerproxy.LogLine{{TS: "t", Stream: "stdout", Line: "l"}}
 	alert := mkAlert()
-	got := h.investigateMessages(alert, events, nil, logs, true)
-	want := BuildInvestigateMessages(alert, events, nil, logs, true)
+	got := h.investigateMessages(alert, events, nil, logs, true, nil)
+	want := BuildInvestigateMessages(alert, events, nil, logs, true, nil)
 	if len(got) != len(want) {
 		t.Fatalf("message count = %d, want %d", len(got), len(want))
 	}

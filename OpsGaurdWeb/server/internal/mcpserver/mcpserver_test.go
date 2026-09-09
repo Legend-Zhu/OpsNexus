@@ -231,10 +231,17 @@ func TestParseTurns(t *testing.T) {
 }
 
 func TestInvestigationSystemGuardrails(t *testing.T) {
-	sys := investigationSystem()
+	sys := investigationSystem("")
 	for _, want := range []string{"不要执行任何变更类操作", "证据"} {
 		if !strings.Contains(sys, want) {
 			t.Fatalf("system prompt missing guardrail %q", want)
+		}
+	}
+	// 纳管对象：追加对象说明（非 swarm + 节点侧采证指引），守则保持不变
+	managed := investigationSystem("host-service")
+	for _, want := range []string{"不要执行任何变更类操作", "纳管对象说明", "host-service", "check_port/check_http", "list_node_containers"} {
+		if !strings.Contains(managed, want) {
+			t.Fatalf("managed-object system prompt missing %q", want)
 		}
 	}
 }

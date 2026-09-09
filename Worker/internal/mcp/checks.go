@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"gitee.com/legeosoft_legendzhu/OpsGaurd/Worker/internal/orchestrator"
 
@@ -87,6 +88,35 @@ type checkFlowOut struct {
 	Results []orchestrator.FlowCheckResult `json:"results"`
 }
 
+// ---- list_node_containers ----
+
+type nodeContainersIn struct {
+	Node   string `json:"node,omitempty" description:"List containers on this node only (hostname, node id, or addr). Default: all ready nodes"`
+	Filter string `json:"filter,omitempty" description:"Case-insensitive substring matched against container name/image/swarm service, e.g. \"rnacos\". Default: no filter"`
+	Type   string `json:"type,omitempty" description:"Filter by container type: service (swarm task) | standalone (docker run). Default: all"`
+}
+
+type nodeContainerInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Image   string `json:"image,omitempty"`
+	State   string `json:"state"`
+	Type    string `json:"type,omitempty"`    // service | standalone
+	Service string `json:"service,omitempty"` // swarm service name when type=service
+	Ports   string `json:"ports,omitempty"`
+}
+
+type nodeContainersResult struct {
+	Node       string              `json:"node"`
+	Total      int                 `json:"total"`
+	Containers []nodeContainerInfo `json:"containers,omitempty"`
+	Error      string              `json:"error,omitempty"`
+}
+
+type nodeContainersOut struct {
+	Results []nodeContainersResult `json:"results"`
+}
+
 // registerToolsChecks adds the ad-hoc probe tools.
 func (h *Handler) registerToolsChecks(s *mcp.Server) {
 	// check_port (TCP connectivity to any host:port, per node)
@@ -150,6 +180,18 @@ func (h *Handler) registerToolsChecks(s *mcp.Server) {
 		out, err := h.checkFlow(ctx, in)
 		if err != nil {
 			return nil, checkFlowOut{}, err
+		}
+		return nil, out, nil
+	})
+
+	// list_node_containers (per-node container inventory, incl. standalone)
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "list_node_containers",
+		Description: "List Docker containers on swarm nodes (all ready nodes by default, or a specific one), including standalone `docker run` containers that list_services cannot see (e.g. r-nacos, grafana) plus swarm task containers. Optional substring filter on name/image/service and type filter (service|standalone). Read-only. Typical use: locate a managed standalone container and check its state/ports before deeper probes.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in nodeContainersIn) (*mcp.CallToolResult, nodeContainersOut, error) {
+		out, err := h.nodeContainers(ctx, in)
+		if err != nil {
+			return nil, nodeContainersOut{}, err
 		}
 		return nil, out, nil
 	})
@@ -257,6 +299,70 @@ func (h *Handler) hostProcesses(ctx context.Context, in hostProcsIn) (hostProcsO
 		})
 	}
 	return out, nil
+}
+
+// nodeContainers fans the container listing out to the target nodes. Unlike
+// list_services (swarm view), this surfaces standalone `docker run` containers
+// too — the swarm-invisible half of the cluster's managed objects.
+func (h *Handler) nodeContainers(ctx context.Context, in nodeContainersIn) (nodeContainersOut, error) {
+	typ := strings.ToLower(in.Type)
+	switch typ {
+	case "", "service", "standalone":
+	default:
+		return nodeContainersOut{}, fmt.Errorf("type must be \"service\" or \"standalone\"")
+	}
+	addrs, err := h.targetAddrs(ctx, in.Node)
+	if err != nil {
+		return nodeContainersOut{}, err
+	}
+
+	// nodeID → hostname（展示用；解析失败回退 addr）
+	hostname := map[string]string{}
+	if nodes, err := h.cli.ListNodes(ctx, nil); err == nil {
+		for _, n := range nodes {
+			hostname[n.ID] = n.Description.Hostname
+		}
+	}
+
+	out := nodeContainersOut{Results: make([]nodeContainersResult, 0, len(addrs))}
+	for nodeID, addr := range addrs {
+		node := hostname[nodeID]
+		if node == "" {
+			node = addr
+		}
+		cs, err := h.orch.NodeClientByAddr(addr).Containers(ctx)
+		if err != nil {
+			out.Results = append(out.Results, nodeContainersResult{
+				Node: node, Error: "node worker unreachable: " + err.Error(),
+			})
+			continue
+		}
+		res := nodeContainersResult{Node: node, Total: len(cs), Containers: filterNodeContainers(cs, in.Filter, typ)}
+		out.Results = append(out.Results, res)
+	}
+	return out, nil
+}
+
+// filterNodeContainers 按类型与名称/镜像/swarm 服务子串过滤容器列表
+// （大小写不敏感；filter/type 为空 = 不过滤）。
+func filterNodeContainers(cs []orchestrator.NodeContainerInfo, filter, typ string) []nodeContainerInfo {
+	filter = strings.ToLower(filter)
+	out := make([]nodeContainerInfo, 0, len(cs))
+	for _, c := range cs {
+		if typ != "" && c.Type != typ {
+			continue
+		}
+		if filter != "" && !strings.Contains(strings.ToLower(c.Name), filter) &&
+			!strings.Contains(strings.ToLower(c.Image), filter) &&
+			!strings.Contains(strings.ToLower(c.Service), filter) {
+			continue
+		}
+		out = append(out, nodeContainerInfo{
+			ID: c.ID, Name: c.Name, Image: c.Image, State: c.State,
+			Type: c.Type, Service: c.Service, Ports: c.Ports,
+		})
+	}
+	return out
 }
 
 // targetAddrs 把 node 过滤条件（空=全部 ready 节点；否则按 node ID / addr /

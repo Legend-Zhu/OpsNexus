@@ -220,3 +220,49 @@ func TestSaveEventSeq(t *testing.T) {
 		t.Fatalf("expected seq 1,2 got %d,%d", seq1, seq2)
 	}
 }
+
+// TestListEvents 过滤与倒序：按集群/服务/类型过滤，最新在前；纳管对象的
+// invmon 事件（直写服务端）与 Worker 事件同样可查。
+func TestListEvents(t *testing.T) {
+	s := newTestStore(t)
+	for _, e := range []*IngestEvent{
+		mkEvent("dev", "web", EventPortDown, LevelError, "e1"),
+		mkEvent("dev", "web", EventRecovered, LevelInfo, "e2"),
+		mkEvent("dev", "r-nacos", EventContainerDown, LevelError, "e3"),
+		mkEvent("prod", "web", EventPortDown, LevelError, "e4"),
+	} {
+		if _, err := s.SaveEvent(e); err != nil {
+			t.Fatalf("save %s: %v", e.ID, err)
+		}
+	}
+
+	// 全量倒序
+	all, err := s.ListEvents("", "", "", 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 4 {
+		t.Fatalf("expected 4 events, got %d", len(all))
+	}
+	if all[0].ID != "e4" || all[3].ID != "e1" {
+		t.Fatalf("expected newest-first [e4..e1], got [%s..%s]", all[0].ID, all[3].ID)
+	}
+
+	// 按服务过滤
+	bySvc, _ := s.ListEvents("dev", "web", "", 0)
+	if len(bySvc) != 2 || bySvc[0].ID != "e2" {
+		t.Fatalf("dev/web filter: got %d events, newest %s", len(bySvc), bySvc[0].ID)
+	}
+
+	// 按类型过滤
+	byType, _ := s.ListEvents("", "", EventContainerDown, 0)
+	if len(byType) != 1 || byType[0].Service != "r-nacos" {
+		t.Fatalf("container_down filter: got %d events", len(byType))
+	}
+
+	// limit 截断（取最新 N 条）
+	limited, _ := s.ListEvents("", "", "", 2)
+	if len(limited) != 2 || limited[0].ID != "e4" || limited[1].ID != "e3" {
+		t.Fatalf("limit=2: got [%s, %s]", limited[0].ID, limited[1].ID)
+	}
+}

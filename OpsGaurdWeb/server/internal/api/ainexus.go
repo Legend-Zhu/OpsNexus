@@ -78,7 +78,7 @@ func (h *Handlers) AINexusChat(c *gin.Context) {
 		if !ok {
 			return
 		}
-		events, audit, logs := gatherEvidence(c.Request.Context(), cli, alert.Service, 20, 50)
+		events, audit, logs, decl := h.gatherAlertEvidence(c.Request.Context(), cli, alert, 20, 50)
 		var mcpErr error
 		if useMCP {
 			mcpErr = connectClusterMCP(srv, h.clusters, alert.Cluster)
@@ -88,7 +88,7 @@ func (h *Handlers) AINexusChat(c *gin.Context) {
 			// 会话级集群 scoping：模型只见该集群的 MCP 工具，杜绝跨集群误调用
 			c.Request = c.Request.WithContext(agent.WithToolScope(c.Request.Context(), "cluster:"+alert.Cluster))
 		}
-		seed := h.investigateMessages(alert, events, audit, logs, mcpOK)
+		seed := h.investigateMessages(alert, events, audit, logs, mcpOK, decl)
 		// 证据前缀 + 客户端消息（首轮客户端消息可空 → 仅种子即完整提问）
 		var msgs []any
 		for _, m := range seed {

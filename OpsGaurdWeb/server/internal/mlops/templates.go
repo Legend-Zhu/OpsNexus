@@ -4,6 +4,8 @@
 // defaults that are byte-identical to the previous hardcoded prompts.
 package mlops
 
+import "strings"
+
 // 场景 key（提示词场景与计量 scenario 是两个命名空间：前者定位模板，
 // 后者归属费用口径）。
 const (
@@ -28,14 +30,19 @@ type InvestigateAlert struct {
 	LastTS  string `json:"last_ts"`
 }
 
-// InvestigateData investigate 场景渲染数据。Events/Audit/Logs 为预格式化
-// 文本，空 = 对应段落省略（与内置行为逐字节一致）。
+// InvestigateData investigate 场景渲染数据。Events/Audit/Logs/Inventory 为
+// 预格式化文本，空 = 对应段落省略（与内置行为逐字节一致）。
 type InvestigateData struct {
 	Alert  InvestigateAlert `json:"alert"`
 	Events string           `json:"events"`
 	Audit  string           `json:"audit"`
 	Logs   string           `json:"logs"`
 	UseMCP bool             `json:"use_mcp"`
+	// Inventory 告警对象为纳管清单声明的外部对象（standalone-container /
+	// host-service）时的声明文本；空 = swarm 服务，无对应段落。
+	// InventoryType 单独携带类型，供 system 侧的对象说明句使用。
+	Inventory     string `json:"inventory,omitempty"`
+	InventoryType string `json:"inventory_type,omitempty"`
 }
 
 // CompressData compress_system 场景渲染数据。
@@ -63,11 +70,69 @@ type ChatData struct {
 	ConnectErr    string        `json:"connect_err,omitempty"`
 }
 
+// InvestigateInventory 深度排查的纳管对象声明（告警对象命中集群纳管清单的
+// standalone-container / host-service 条目时由调用方组装；swarm 服务为 nil）。
+// Monitoring 为预格式化文本。
+type InvestigateInventory struct {
+	Name       string   `json:"name"`
+	Type       string   `json:"type"` // standalone-container | host-service
+	Ref        string   `json:"ref,omitempty"`
+	Node       string   `json:"node,omitempty"`
+	Ports      []string `json:"ports,omitempty"`
+	Category   string   `json:"category,omitempty"`
+	Desc       string   `json:"desc,omitempty"`
+	Monitoring string   `json:"monitoring,omitempty"`
+}
+
+// FormatInventoryDeclaration 把纳管对象声明格式化为多行文本（内置 v1 user
+// 模板 {{.Inventory}} 段的渲染内容；空字段行省略，无尾随换行）。
+func FormatInventoryDeclaration(inv *InvestigateInventory) string {
+	var b []byte
+	b = appendLine(b, "名称: "+inv.Name)
+	b = appendLine(b, "类型: "+inv.Type)
+	if inv.Ref != "" {
+		b = appendLine(b, "引用: "+inv.Ref)
+	}
+	if inv.Node != "" {
+		b = appendLine(b, "所在节点: "+inv.Node)
+	}
+	if len(inv.Ports) > 0 {
+		b = appendLine(b, "端口: "+strings.Join(inv.Ports, ", "))
+	}
+	if inv.Category != "" {
+		b = appendLine(b, "分类: "+inv.Category)
+	}
+	if inv.Desc != "" {
+		b = appendLine(b, "描述: "+inv.Desc)
+	}
+	if inv.Monitoring != "" {
+		b = appendLine(b, "监控配置:")
+		b = appendLine(b, inv.Monitoring)
+	}
+	return strings.TrimRight(string(b), "\n")
+}
+
+func appendLine(b []byte, line string) []byte {
+	return append(b, line+"\n"...)
+}
+
+// InvestigateSystemNote 纳管对象（非 swarm）排障的 system 说明句：告知对象
+// 不可用 swarm 服务工具、采证必须在集群节点侧执行。内置 v1 system 模板的
+// {{if .Inventory}} 分支与本文案逐字节一致（等价性回归测试守护）。
+func InvestigateSystemNote(invType string) string {
+	return "\n\n【纳管对象说明】本次告警对象是纳管清单声明的外部对象（类型: " + invType +
+		"），不是 swarm 服务：list_services 看不到它，get_service/get_service_logs/get_resource_usage/exec_in_container 对它不适用，" +
+		"不要因「服务不存在」误判为对象已删除；采证必须在集群节点侧执行——连通性用 check_port/check_http（目标地址按纳管声明），" +
+		"宿主机进程用 list_host_processes 并把 node 限定到声明节点，节点容器（含 standalone）用 list_node_containers。"
+}
+
 // 内置 v1 模板。逐字节对应当前代码里的硬编码提示词（api/investigate.go、
 // agent/llm_compressor.go、ainexus/server/server.go），等价性由回归测试
 // （TestInvestigateTemplateV1MatchesLegacy 等）守护——修改任何一侧都必须同步。
 
-const builtinInvestigateSystemTpl = `你是资深运维工程师，擅长 Docker Swarm 集群故障排查。请基于提供的告警与证据链，分析根因并给出可执行的处置建议（检查项、命令、预期结果），结论要具体、可操作。{{if .UseMCP}} 你已连接集群 Worker 的 MCP 工具（可查询服务状态、事件、审计、容器资源，执行受控命令采集证据）；如证据不足，请调用工具补充，并引用工具返回的结果支撑结论。{{end}}`
+const builtinInvestigateSystemTpl = `你是资深运维工程师，擅长 Docker Swarm 集群故障排查。请基于提供的告警与证据链，分析根因并给出可执行的处置建议（检查项、命令、预期结果），结论要具体、可操作。{{if .UseMCP}} 你已连接集群 Worker 的 MCP 工具（可查询服务状态、事件、审计、容器资源，执行受控命令采集证据）；如证据不足，请调用工具补充，并引用工具返回的结果支撑结论。{{end}}{{if .Inventory}}
+
+【纳管对象说明】本次告警对象是纳管清单声明的外部对象（类型: {{.InventoryType}}），不是 swarm 服务：list_services 看不到它，get_service/get_service_logs/get_resource_usage/exec_in_container 对它不适用，不要因「服务不存在」误判为对象已删除；采证必须在集群节点侧执行——连通性用 check_port/check_http（目标地址按纳管声明），宿主机进程用 list_host_processes 并把 node 限定到声明节点，节点容器（含 standalone）用 list_node_containers。{{end}}`
 
 const builtinInvestigateUserTpl = `【告警】
 集群: {{.Alert.Cluster}}
@@ -79,7 +144,10 @@ const builtinInvestigateUserTpl = `【告警】
 首次: {{.Alert.FirstTS}}
 最近: {{.Alert.LastTS}}
 
-{{if .Events}}【该服务近期监控事件】
+{{if .Inventory}}【纳管对象声明】
+{{.Inventory}}
+
+{{end}}{{if .Events}}【该服务近期监控事件】
 {{.Events}}
 
 {{end}}{{if .Audit}}【近期操作审计】

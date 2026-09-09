@@ -70,8 +70,9 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 		logTail = 50
 	}
 
-	// 2. 拉上下文（证据：近期事件 + 审计 + 服务日志；失败不阻塞排查）
-	events, audit, logs := gatherEvidence(c.Request.Context(), cli, alert.Service, maxEvents, logTail)
+	// 2. 拉上下文（证据：近期事件 + 审计 + 服务日志；失败不阻塞排查），
+	// 告警对象命中纳管清单时事件源切换为服务端事件库（见函数注释）
+	events, audit, logs, inv := h.gatherAlertEvidence(c.Request.Context(), cli, alert, maxEvents, logTail)
 
 	// 3. 可选：连接该集群 Worker MCP，供 ReAct Agent 采证（失败显性提示，
 	// 提示词模板随之省略"已连接"表述）
@@ -93,7 +94,7 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 		return
 	}
 	model := h.AINexusRT.EffectiveModel(usage.ScenarioInvestigate, req.Model)
-	messages := h.investigateMessages(alert, events, audit, logs, useMCP)
+	messages := h.investigateMessages(alert, events, audit, logs, useMCP, inv)
 	// 采证通道连接失败 → 流开始前显性提示（模板随之省略"已连接"表述）
 	if req.UseMCP && mcpErr != nil {
 		sseStreamNotice(c, fmt.Sprintf("【提示】未能连接集群「%s」的采证通道（%v），本次仅基于注入证据分析。\n\n", alert.Cluster, mcpErr))
@@ -110,6 +111,24 @@ func (h *Handlers) AINexusInvestigate(c *gin.Context) {
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	c.Request.ContentLength = int64(len(body))
 	srv.OpenAIHandler().ChatCompletions(c)
+}
+
+// gatherAlertEvidence 拉取排查证据并解析纳管声明：告警对象命中纳管清单
+// （standalone-container / host-service）时，Worker 侧没有它的任何视图
+// （非 swarm 服务：事件不过 Worker、docker service logs 拉不到、get_service
+// 落空）——事件证据改用服务端事件库（invmonitor 直写），纳管声明交由
+// 提示词组装注入，指导 Agent 用集群节点侧工具采证。
+func (h *Handlers) gatherAlertEvidence(ctx context.Context, cli *workerproxy.Client, alert *store.Alert, maxEvents, logTail int) (json.RawMessage, json.RawMessage, []workerproxy.LogLine, *mlops.InvestigateInventory) {
+	events, audit, logs := gatherEvidence(ctx, cli, alert.Service, maxEvents, logTail)
+	inv := h.inventoryDeclaration(alert.Cluster, alert.Service)
+	if inv != nil && h.ingestSvc != nil {
+		if evs, err := h.ingestSvc.Events(alert.Cluster, alert.Service, "", maxEvents); err == nil && len(evs) > 0 {
+			if raw, err := json.Marshal(evs); err == nil {
+				events = capEvidence(raw, evidenceBytes)
+			}
+		}
+	}
+	return events, audit, logs, inv
 }
 
 // alertAndClient 取告警及其集群 Worker 客户端（investigate/chat 共用）。
@@ -165,18 +184,53 @@ func connectClusterMCP(srv *ainexusserver.Server, clusters *cluster.Service, clu
 // investigateMessages 组装深度排查消息：MLOps 启用且任一 investigate 场景
 // 已自定义时走模板渲染（另一侧用内置 v1 模板，与代码默认字节等价）；
 // 未自定义/渲染失败回退代码内置组装（失败在 mlops 侧留痕，不阻断排查）。
-func (h *Handlers) investigateMessages(alert *store.Alert, events, audit json.RawMessage, logs []workerproxy.LogLine, useMCP bool) []map[string]any {
+func (h *Handlers) investigateMessages(alert *store.Alert, events, audit json.RawMessage, logs []workerproxy.LogLine, useMCP bool, inv *mlops.InvestigateInventory) []map[string]any {
 	if h.mlopsSvc != nil {
-		if msgs, ok := h.mlopsSvc.InvestigateMessages(investigatePromptData(alert, events, audit, logs, useMCP)); ok {
+		if msgs, ok := h.mlopsSvc.InvestigateMessages(investigatePromptData(alert, events, audit, logs, useMCP, inv)); ok {
 			return msgs
 		}
 	}
-	return BuildInvestigateMessages(alert, events, audit, logs, useMCP)
+	return BuildInvestigateMessages(alert, events, audit, logs, useMCP, inv)
+}
+
+// inventoryDeclaration 解析告警对象的纳管声明：按名称匹配集群纳管清单中的
+// standalone-container / host-service 条目；swarm 服务或集群不存在清单时
+// 返回 nil。GetStatic 只读库不探测，失败静默降级（不影响既有排查路径）。
+func (h *Handlers) inventoryDeclaration(clusterName, service string) *mlops.InvestigateInventory {
+	if h.clusters == nil || service == "" {
+		return nil
+	}
+	c, err := h.clusters.GetStatic(clusterName)
+	if err != nil || c == nil || c.Inventory == nil {
+		return nil
+	}
+	for i := range c.Inventory.Items {
+		item := &c.Inventory.Items[i]
+		if item.Name != service {
+			continue
+		}
+		inv := &mlops.InvestigateInventory{
+			Name:     item.Name,
+			Type:     item.Type,
+			Ref:      item.Ref,
+			Node:     item.Node,
+			Ports:    append([]string(nil), item.Ports...),
+			Category: item.Category,
+			Desc:     item.Desc,
+		}
+		if item.Monitoring != nil {
+			if mj, err := json.Marshal(item.Monitoring); err == nil {
+				inv.Monitoring = prettyJSON(mj)
+			}
+		}
+		return inv
+	}
+	return nil
 }
 
 // investigatePromptData 把排查输入组装为模板渲染数据（格式化逻辑与
 // BuildInvestigateMessages 一致：prettyJSON、[ts/stream] 行、空段落省略）。
-func investigatePromptData(alert *store.Alert, events, audit json.RawMessage, logs []workerproxy.LogLine, useMCP bool) mlops.InvestigateData {
+func investigatePromptData(alert *store.Alert, events, audit json.RawMessage, logs []workerproxy.LogLine, useMCP bool, inv *mlops.InvestigateInventory) mlops.InvestigateData {
 	d := mlops.InvestigateData{
 		UseMCP: useMCP,
 		Alert: mlops.InvestigateAlert{
@@ -189,6 +243,10 @@ func investigatePromptData(alert *store.Alert, events, audit json.RawMessage, lo
 			FirstTS: formatRFC3339(alert.FirstTS),
 			LastTS:  formatRFC3339(alert.LastTS),
 		},
+	}
+	if inv != nil {
+		d.InventoryType = inv.Type
+		d.Inventory = mlops.FormatInventoryDeclaration(inv)
 	}
 	if len(events) > 0 && string(events) != "null" {
 		d.Events = prettyJSON(events)
@@ -208,13 +266,15 @@ func investigatePromptData(alert *store.Alert, events, audit json.RawMessage, lo
 
 // BuildInvestigateMessages 组装深度排查 prompt（纯函数，可测）。
 // 系统消息给出角色与方法论；用户消息携带告警详情与证据链（事件/审计/日志），
-// 并在启用 MCP 时提示 Agent 可调用集群 Worker 工具采集更多证据。
+// 并在启用 MCP 时提示 Agent 可调用集群 Worker 工具采集更多证据。inv 非 nil
+// 时（纳管清单声明的外部对象）追加纳管声明与节点侧采证指引。
 func BuildInvestigateMessages(
 	alert *store.Alert,
 	events json.RawMessage,
 	audit json.RawMessage,
 	logs []workerproxy.LogLine,
 	useMCP bool,
+	inv *mlops.InvestigateInventory,
 ) []map[string]any {
 	system := "你是资深运维工程师，擅长 Docker Swarm 集群故障排查。请基于提供的告警与证据链，" +
 		"分析根因并给出可执行的处置建议（检查项、命令、预期结果），结论要具体、可操作。"
@@ -222,11 +282,17 @@ func BuildInvestigateMessages(
 		system += " 你已连接集群 Worker 的 MCP 工具（可查询服务状态、事件、审计、容器资源，执行受控命令采集证据）；" +
 			"如证据不足，请调用工具补充，并引用工具返回的结果支撑结论。"
 	}
+	if inv != nil {
+		system += mlops.InvestigateSystemNote(inv.Type)
+	}
 
 	user := fmt.Sprintf("【告警】\n集群: %s\n服务: %s\n类型: %s\n级别: %s\n标题: %s\n次数: %d\n首次: %s\n最近: %s\n\n",
 		alert.Cluster, alert.Service, alert.Type, alert.Level, alert.Title, alert.Count,
 		formatRFC3339(alert.FirstTS), formatRFC3339(alert.LastTS))
 
+	if inv != nil {
+		user += "【纳管对象声明】\n" + mlops.FormatInventoryDeclaration(inv) + "\n\n"
+	}
 	if len(events) > 0 && string(events) != "null" {
 		user += fmt.Sprintf("【该服务近期监控事件】\n%s\n\n", prettyJSON(events))
 	}

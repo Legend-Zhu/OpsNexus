@@ -144,6 +144,42 @@ func (s *Store) SaveEvent(e *IngestEvent) (uint64, error) {
 	return seq, nil
 }
 
+// ListEvents 按事件序倒序（最新在前）读取服务端事件库，可按集群/服务/类型
+// 过滤（空 = 不过滤）；limit <= 0 取默认 50。纳管对象的探测事件（invmonitor
+// 生成）只落在这里、不过 Worker，深度排查注入事件用本查询。
+func (s *Store) ListEvents(cluster, service string, typ EventType, limit int) ([]*IngestEvent, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]*IngestEvent, 0, limit)
+	iter := s.db.NewIterator(util.BytesPrefix([]byte(BucketEvent+"/")), nil)
+	defer iter.Release()
+	for iter.Last(); iter.Valid(); iter.Prev() {
+		var e IngestEvent
+		if err := json.Unmarshal(iter.Value(), &e); err != nil {
+			continue
+		}
+		if cluster != "" && e.Cluster != cluster {
+			continue
+		}
+		if service != "" && e.Service != service {
+			continue
+		}
+		if typ != "" && e.Type != typ {
+			continue
+		}
+		ec := e
+		out = append(out, &ec)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 // nextSeqLocked 递增序列（调用方持锁）。
 func (s *Store) nextSeqLocked(kind string) (uint64, error) {
 	key := BucketSeq + "/" + kind
