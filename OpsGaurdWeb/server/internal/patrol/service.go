@@ -59,7 +59,9 @@ type Check struct {
 	// port/http/flow 探测超时（如 3s，默认 3s）
 	Timeout string `yaml:"timeout,omitempty"`
 	// flow 检查（多步 HTTP 事务，如 登录→验证会话）
-	Name  string            `yaml:"name,omitempty"`  // 事务名（告警标识用）
+	// Name 检查项对象名：flow 必填（事务名）；port/http 可选（对象/业务名，
+	// 报告与告警里随地址展示，如 核心数据库(10.0.0.11:3306)）
+	Name  string            `yaml:"name,omitempty"`
 	Vars  map[string]string `yaml:"vars,omitempty"`  // 初始变量；值支持 ${secret:name} 引用管理端密钥
 	Steps []FlowStepDef     `yaml:"steps,omitempty"` // 有序步骤，失败即终止
 }
@@ -501,9 +503,18 @@ func (s *Service) checkHealth(ctx context.Context, cli *workerproxy.Client, base
 // --- 节点级检查（port/http/process）：node 空 = 全部 ready 节点，
 // 每个失败节点一条异常；全部通过时聚合为一条正常。 ---
 
+// checkTarget 探测类检查项（port/http）的展示标识：name 为对象/业务名
+//（如 核心数据库），拼成 name(地址)；未填 name 退化为裸地址，标识不变。
+func checkTarget(name, addr string) string {
+	if name == "" {
+		return addr
+	}
+	return name + "(" + addr + ")"
+}
+
 // checkPort 从各节点探测任意 host:port（宿主机中间件端口，如 MySQL 3306）。
 func (s *Service) checkPort(ctx context.Context, cli *workerproxy.Client, c Check) []store.Anomaly {
-	base := store.Anomaly{Check: fmt.Sprintf("port/%s:%d", c.Host, c.Port), Cluster: c.Cluster}
+	base := store.Anomaly{Check: "port/" + checkTarget(c.Name, fmt.Sprintf("%s:%d", c.Host, c.Port)), Cluster: c.Cluster}
 	targets, err := patrolTargetNodes(ctx, cli, c.Node)
 	if err != nil {
 		base.Message = err.Error()
@@ -533,7 +544,7 @@ func (s *Service) checkPort(ctx context.Context, cli *workerproxy.Client, c Chec
 
 // checkHTTP 从各节点探测任意 URL（状态码 + body 正则）。
 func (s *Service) checkHTTP(ctx context.Context, cli *workerproxy.Client, c Check) []store.Anomaly {
-	base := store.Anomaly{Check: "http/" + c.URL, Cluster: c.Cluster}
+	base := store.Anomaly{Check: "http/" + checkTarget(c.Name, c.URL), Cluster: c.Cluster}
 	targets, err := patrolTargetNodes(ctx, cli, c.Node)
 	if err != nil {
 		base.Message = err.Error()

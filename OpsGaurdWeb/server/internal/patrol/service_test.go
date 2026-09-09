@@ -360,6 +360,56 @@ checks:
 	}
 }
 
+// TestPortCheckWithObject port/http 检查填 name（对象名）后，检查项标识带上
+// 对象（报告/告警里随地址展示）；未填 name 的检查项保持裸地址不变。
+func TestPortCheckWithObject(t *testing.T) {
+	svc, _ := newTestPatrol(t)
+
+	p, err := svc.Create("named", "", "0 2 * * *", `
+name: named
+checks:
+  - type: port
+    cluster: dev
+    name: 核心数据库
+    host: 10.0.0.1
+    port: 3306
+  - type: http
+    cluster: dev
+    name: 门户健康
+    url: http://10.0.0.1:8080/healthz
+  - type: port
+    cluster: dev
+    node: h1
+    host: 10.0.0.1
+    port: 6379
+`, true)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	run, err := svc.Run(context.Background(), p.ID)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// 带 name 的 port/http 在 n2 上失败（各 1 条）；不带 name 的 port(h1) 通过
+	if len(run.Anomalies) != 3 {
+		t.Fatalf("anomalies len=%d, want 3: %+v", len(run.Anomalies), run.Anomalies)
+	}
+	wantChecks := []string{
+		"port/核心数据库(10.0.0.1:3306)",
+		"http/门户健康(http://10.0.0.1:8080/healthz)",
+		"port/10.0.0.1:6379",
+	}
+	for i, a := range run.Anomalies {
+		if a.Check != wantChecks[i] {
+			t.Fatalf("anomalies[%d].Check=%q, want %q", i, a.Check, wantChecks[i])
+		}
+	}
+	// 前两条为 n2 失败，末条通过
+	if run.Anomalies[0].OK || run.Anomalies[1].OK || !run.Anomalies[2].OK {
+		t.Fatalf("unexpected ok flags: %+v", run.Anomalies)
+	}
+}
+
 // TestParseFlowNodeChecks 新检查类型的字段校验。
 func TestParseFlowNodeChecks(t *testing.T) {
 	valid := `

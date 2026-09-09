@@ -258,8 +258,8 @@ monitoring:                        # 部署后探针立即自动注册
 | --- | --- | --- |
 | `resource` 服务容器资源 | `service` | `cpu_threshold` / `mem_threshold`（百分比；未找到容器也算异常） |
 | `health` 服务副本健康 | `service` | `min_replicas`（默认 1；running≠desired 也异常） |
-| `port` TCP 探测 | `host`、`port` | `node`（**空 = 全部 ready 节点逐个探测**）、`timeout`（默认 3s，上限 10s） |
-| `http` HTTP 探测 | `url` | `expected_status[]`（空=任意 2xx）、`expected_body`（正则）、`node` |
+| `port` TCP 探测 | `host`、`port` | `name`（对象名，报告/告警里随地址展示，如 `核心数据库(10.0.0.11:3306)`）、`node`（**空 = 全部 ready 节点逐个探测**）、`timeout`（默认 3s，上限 10s） |
+| `http` HTTP 探测 | `url` | `name`（对象名，报告/告警里随 URL 展示）、`expected_status[]`（空=任意 2xx）、`expected_body`（正则）、`node` |
 | `process` 宿主机进程 | `filter`（名称/命令行子串） | `min_count`（默认 1）、`node` |
 | `flow` 多步 HTTP 事务 | `name`、`steps[]` | `vars`（支持 `${secret:名称}` 引用密钥）、每步 `extract`（`$.json.path` 或 `re:正则`） |
 

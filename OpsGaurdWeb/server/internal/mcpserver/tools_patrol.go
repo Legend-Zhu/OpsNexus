@@ -20,8 +20,12 @@ checks:
     type: resource            # resource|health|port|http|process|flow
     cluster: prod
     service: ${svc}
-    metric: cpu
-    threshold: 85
+    cpu_threshold: 85         # mem_threshold: 90
+  - name: mysql-port          # name = object label shown in reports/alerts
+    type: port
+    cluster: prod
+    host: 10.60.1.10
+    port: 3306
   - name: portal
     type: http
     cluster: prod

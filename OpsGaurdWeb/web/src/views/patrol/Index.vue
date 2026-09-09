@@ -80,8 +80,8 @@
               <ul>
                 <li><code>resource</code>：服务容器资源阈值——<code>service</code> + <code>cpu_threshold</code> / <code>mem_threshold</code>（百分比）</li>
                 <li><code>health</code>：服务副本健康——<code>service</code> + <code>min_replicas</code>（最少运行副本数）</li>
-                <li><code>port</code>：TCP 端口探测——<code>host:port</code>；<code>node</code> 可选（空 = 全部 ready 节点）；探宿主机中间件用节点 IP，勿用 127.0.0.1</li>
-                <li><code>http</code>：HTTP 探测——<code>url</code>、<code>method</code>、<code>expected_status</code>（空 = 任意 2xx）、<code>expected_body</code>（正则）、<code>timeout</code>（默认 3s，上限 10s）</li>
+                <li><code>port</code>：TCP 端口探测——<code>host:port</code>；<code>name</code> 填对象名（可选，报告/告警里随地址展示，如 <code>核心数据库(10.0.0.11:3306)</code>）；<code>node</code> 可选（空 = 全部 ready 节点）；探宿主机中间件用节点 IP，勿用 127.0.0.1</li>
+                <li><code>http</code>：HTTP 探测——<code>url</code>、<code>name</code> 填对象名（可选，报告/告警里随 URL 展示）、<code>method</code>、<code>expected_status</code>（空 = 任意 2xx）、<code>expected_body</code>（正则）、<code>timeout</code>（默认 3s，上限 10s）</li>
                 <li><code>process</code>：宿主机进程发现——<code>filter</code>（名称/命令行子串，大小写不敏感）、<code>min_count</code>（每节点最少匹配数，少于即异常）</li>
                 <li><code>flow</code>：多步 HTTP 事务——<code>vars</code> 初始变量、<code>steps</code> 有序执行（失败即终止并定位步骤）；<code>extract</code> 提取变量供后续步骤 <code>&#123;&#123;var&#125;&#125;</code> 引用</li>
               </ul>
@@ -212,6 +212,7 @@ checks:
 
   - type: port                   # 从节点发起 TCP 端口探测
     cluster: dev
+    name: 核心数据库              # 对象名（可选）：报告/告警里随地址展示
     # node: node1                # 可选：只在该节点探测（ID/hostname；空=全部 ready 节点）
     host: 10.0.0.11              # 探宿主机中间件用节点 IP，勿用 127.0.0.1
     port: 3306
@@ -219,6 +220,7 @@ checks:
 
   - type: http                   # 从节点发起 HTTP 探测
     cluster: dev
+    name: 门户健康                # 对象名（可选）：报告/告警里随 URL 展示
     url: http://10.0.0.11:8080/healthz
     method: GET                  # 可选，默认 GET
     expected_status: [200, 204]  # 可选，空 = 任意 2xx
