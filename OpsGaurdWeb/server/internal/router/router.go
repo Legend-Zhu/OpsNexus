@@ -132,9 +132,13 @@ func New(h *api.Handlers) *gin.Engine {
 		clusters.GET("/:name/nodes/:id/containers", h.NodeContainers)
 		clusters.POST("/:name/nodes/:id/containers/restart", h.NodeContainerRestart)
 
-		// 纳管清单（集群纳管的外部对象：standalone 容器 / 宿主机服务）
+		// 纳管清单（集群纳管的外部对象：standalone 容器 / 宿主机服务）。
+		// 单条增/改/删供列表行内管理使用；PUT 整清单保留给批量导入。
 		clusters.GET("/:name/inventory", h.GetInventory)
 		clusters.PUT("/:name/inventory", h.UpsertInventory)
+		clusters.POST("/:name/inventory/items", h.AddInventoryItem)
+		clusters.PUT("/:name/inventory/items/:item", h.UpdateInventoryItem)
+		clusters.DELETE("/:name/inventory/items/:item", h.DeleteInventoryItem)
 
 		// 告警中心
 		alerts := v1.Group("/alerts")

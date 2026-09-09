@@ -15,6 +15,7 @@ import type {
   EventItem,
   IdpClient,
   InventoryConfig,
+  InventoryItem,
   InventoryView,
   Investigation,
   MCPAuditItem,
@@ -100,6 +101,15 @@ export const inventoryApi = {
   get: (cluster: string) => get<{ items: InventoryView[] }>(`/v1/clusters/${cluster}/inventory`),
   update: (cluster: string, body: InventoryConfig) =>
     put<InventoryConfig>(`/v1/clusters/${cluster}/inventory`, body),
+  /** 新增单条纳管对象 */
+  addItem: (cluster: string, item: InventoryItem) =>
+    post<InventoryConfig>(`/v1/clusters/${cluster}/inventory/items`, item),
+  /** 更新单条纳管对象（name 标识原条目，body.name 可不同以改名） */
+  updateItem: (cluster: string, name: string, item: InventoryItem) =>
+    put<InventoryConfig>(`/v1/clusters/${cluster}/inventory/items/${encodeURIComponent(name)}`, item),
+  /** 删除单条纳管对象（关联的告警规则由服务端同步清理） */
+  deleteItem: (cluster: string, name: string) =>
+    del<InventoryConfig>(`/v1/clusters/${cluster}/inventory/items/${encodeURIComponent(name)}`),
 }
 
 // ---- 工作负载（经 Worker） ----

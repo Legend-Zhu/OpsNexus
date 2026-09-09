@@ -26,6 +26,13 @@ type ErrNotFound struct{ Name string }
 
 func (e ErrNotFound) Error() string { return fmt.Sprintf("cluster %q not found", e.Name) }
 
+// ErrItemNotFound 纳管清单中不存在指定条目。
+type ErrItemNotFound struct{ Item string }
+
+func (e ErrItemNotFound) Error() string {
+	return fmt.Sprintf("inventory item %q not found", e.Item)
+}
+
 // ErrProbeFailed Worker 探测失败（不可达或非 swarm manager）。
 type ErrProbeFailed struct {
 	Name string
@@ -127,6 +134,102 @@ func (s *Service) UpdateInventory(ctx context.Context, name string, inv *store.I
 		return nil, err
 	}
 	return existing, nil
+}
+
+// ErrDuplicate 纳管条目名称与已有条目重复。
+type ErrDuplicate struct{ Name string }
+
+func (e ErrDuplicate) Error() string { return fmt.Sprintf("inventory item %q already exists", e.Name) }
+
+// findItemIdx 返回清单中名为 name 的条目下标，不存在返回 -1。
+func findItemIdx(items []store.InventoryItem, name string) int {
+	for i := range items {
+		if items[i].Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// saveInventory 校验并保存集群的纳管清单（仅动 Inventory 字段）。
+func (s *Service) saveInventory(c *store.Cluster) (*store.Cluster, error) {
+	if err := c.Inventory.Validate(); err != nil {
+		return nil, fmt.Errorf("inventory: %w", err)
+	}
+	if err := s.store.PutCluster(c); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// AddInventoryItem 追加一条纳管对象声明，名称重复时返回 ErrDuplicate。
+func (s *Service) AddInventoryItem(_ context.Context, name string, item *store.InventoryItem) (*store.Cluster, error) {
+	if err := item.Validate(); err != nil {
+		return nil, fmt.Errorf("inventory: %w", err)
+	}
+	c, err := s.store.GetCluster(name)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, ErrNotFound{Name: name}
+	}
+	if c.Inventory == nil {
+		c.Inventory = &store.InventoryConfig{}
+	}
+	if findItemIdx(c.Inventory.Items, item.Name) >= 0 {
+		return nil, ErrDuplicate{Name: item.Name}
+	}
+	c.Inventory.Items = append(c.Inventory.Items, *item)
+	return s.saveInventory(c)
+}
+
+// UpdateInventoryItem 按 itemName 定位条目并整体替换（item.Name 允许与
+// itemName 不同以支持改名，但不得与其他条目重名）。条目不存在时报错。
+func (s *Service) UpdateInventoryItem(_ context.Context, name, itemName string, item *store.InventoryItem) (*store.Cluster, error) {
+	if err := item.Validate(); err != nil {
+		return nil, fmt.Errorf("inventory: %w", err)
+	}
+	c, err := s.store.GetCluster(name)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, ErrNotFound{Name: name}
+	}
+	if c.Inventory == nil {
+		return nil, ErrItemNotFound{Item: itemName}
+	}
+	idx := findItemIdx(c.Inventory.Items, itemName)
+	if idx < 0 {
+		return nil, ErrItemNotFound{Item: itemName}
+	}
+	if other := findItemIdx(c.Inventory.Items, item.Name); item.Name != itemName && other >= 0 && other != idx {
+		return nil, ErrDuplicate{Name: item.Name}
+	}
+	c.Inventory.Items[idx] = *item
+	return s.saveInventory(c)
+}
+
+// DeleteInventoryItem 按名称删除一条纳管对象声明。集群或条目不存在时返回
+// ErrNotFound。
+func (s *Service) DeleteInventoryItem(_ context.Context, name, itemName string) (*store.Cluster, error) {
+	c, err := s.store.GetCluster(name)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, ErrNotFound{Name: name}
+	}
+	if c.Inventory == nil {
+		return nil, ErrItemNotFound{Item: itemName}
+	}
+	idx := findItemIdx(c.Inventory.Items, itemName)
+	if idx < 0 {
+		return nil, ErrItemNotFound{Item: itemName}
+	}
+	c.Inventory.Items = append(c.Inventory.Items[:idx], c.Inventory.Items[idx+1:]...)
+	return s.saveInventory(c)
 }
 
 // Add 接入一个新集群：先探测 Worker（可达 + swarm manager），通过后落库。

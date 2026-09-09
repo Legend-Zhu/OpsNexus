@@ -98,7 +98,7 @@
         <el-form-item label="描述">
           <el-input v-model="form.desc" placeholder="可选" />
         </el-form-item>
-        <div class="form-tip">接入后可到集群详情页「纳管配置」声明外部纳管对象（standalone 容器 / 宿主机服务）</div>
+        <div class="form-tip">接入后可到集群详情页点「+纳管」接入外部对象（standalone 容器 / 宿主机服务），并在服务列表中逐条管理</div>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>

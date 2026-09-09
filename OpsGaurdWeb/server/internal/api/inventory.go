@@ -153,6 +153,109 @@ func (h *Handlers) UpsertInventory(c *gin.Context) {
 	ok(c, http.StatusOK, clusterRec.Public().Inventory)
 }
 
+// AddInventoryItem POST /api/v1/clusters/:name/inventory/items
+//
+// 追加一条纳管对象声明（单条管理入口，替代整清单替换）。名称与已有条目
+// 重复返回 400；保存后同步告警规则（diff 基准 = 旧清单）。
+func (h *Handlers) AddInventoryItem(c *gin.Context) {
+	h.mutateInventoryItem(c, false, http.StatusCreated)
+}
+
+// UpdateInventoryItem PUT /api/v1/clusters/:name/inventory/items/:item
+//
+// 按 :item 定位并整体替换一条声明（body 里 name 可不同以支持改名）。
+func (h *Handlers) UpdateInventoryItem(c *gin.Context) {
+	h.mutateInventoryItem(c, true, http.StatusOK)
+}
+
+// DeleteInventoryItem DELETE /api/v1/clusters/:name/inventory/items/:item
+//
+// 删除一条纳管对象声明；关联的告警规则由 SyncFromInventory 清理。
+func (h *Handlers) DeleteInventoryItem(c *gin.Context) {
+	if h.clusters == nil {
+		fail(c, http.StatusServiceUnavailable, "cluster service not initialized")
+		return
+	}
+	name, itemName := c.Param("name"), c.Param("item")
+	oldInv := h.staticInventory(name)
+	clusterRec, err := h.clusters.DeleteInventoryItem(c.Request.Context(), name, itemName)
+	if err != nil {
+		h.inventoryMutateErr(c, err)
+		return
+	}
+	h.syncRulesAfterInventory(c, name, oldInv, clusterRec.Inventory)
+	ok(c, http.StatusOK, clusterRec.Public().Inventory)
+}
+
+// mutateInventoryItem add/update 共用：解析 body 条目 → 落库 → 同步规则。
+// isUpdate=false 为新增（按 body.name 追加）；true 时按 URL 的 :item 定位
+// 条目（body.name 与其不同即为改名）。
+func (h *Handlers) mutateInventoryItem(c *gin.Context, isUpdate bool, code int) {
+	if h.clusters == nil {
+		fail(c, http.StatusServiceUnavailable, "cluster service not initialized")
+		return
+	}
+	var item store.InventoryItem
+	if err := c.ShouldBindJSON(&item); err != nil {
+		fail(c, http.StatusBadRequest, "invalid inventory item: "+err.Error())
+		return
+	}
+	name := c.Param("name")
+	oldInv := h.staticInventory(name)
+	var (
+		clusterRec *store.Cluster
+		err        error
+	)
+	if isUpdate {
+		clusterRec, err = h.clusters.UpdateInventoryItem(c.Request.Context(), name, c.Param("item"), &item)
+	} else {
+		clusterRec, err = h.clusters.AddInventoryItem(c.Request.Context(), name, &item)
+	}
+	if err != nil {
+		h.inventoryMutateErr(c, err)
+		return
+	}
+	h.syncRulesAfterInventory(c, name, oldInv, clusterRec.Inventory)
+	ok(c, code, clusterRec.Public().Inventory)
+}
+
+// staticInventory 读当前清单作为规则同步的 diff 基准；读失败不阻断保存。
+func (h *Handlers) staticInventory(name string) *store.InventoryConfig {
+	if rec, err := h.clusters.GetStatic(name); err == nil && rec != nil {
+		return rec.Inventory
+	}
+	return nil
+}
+
+// syncRulesAfterInventory 清单变更后同步告警规则；失败仅记录不回滚清单
+//（下次保存会再同步）。
+func (h *Handlers) syncRulesAfterInventory(c *gin.Context, cluster string, oldInv, newInv *store.InventoryConfig) {
+	if h.ruleSvc == nil {
+		return
+	}
+	if err := h.ruleSvc.SyncFromInventory(cluster, oldInv, newInv); err != nil {
+		_ = c.Error(fmt.Errorf("rule sync from inventory: %w", err))
+	}
+}
+
+// inventoryMutateErr 单条纳管操作的错误映射：集群不存在 → 404，条目不存在
+// → 404，名称重复/校验失败 → 400。
+func (h *Handlers) inventoryMutateErr(c *gin.Context, err error) {
+	var nf cluster.ErrNotFound
+	var inf cluster.ErrItemNotFound
+	var dup cluster.ErrDuplicate
+	switch {
+	case errors.As(err, &nf):
+		fail(c, http.StatusNotFound, nf.Error())
+	case errors.As(err, &inf):
+		fail(c, http.StatusNotFound, inf.Error())
+	case errors.As(err, &dup):
+		fail(c, http.StatusBadRequest, dup.Error())
+	default:
+		fail(c, http.StatusBadRequest, err.Error())
+	}
+}
+
 // probeInventoryItem 按 item.Type 分发查询，返回带实时状态的 InventoryView。
 //   - standalone-container: 在 item.Node（hostname）上查 NodeContainers，按 ref 匹配容器名；
 //     声明了 Ports 时用声明端口展示，未声明取容器实况端口

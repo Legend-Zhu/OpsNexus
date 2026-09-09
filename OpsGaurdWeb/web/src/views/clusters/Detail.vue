@@ -21,7 +21,7 @@
             部署
           </el-button>
         </el-tooltip>
-        <el-button size="small" :icon="Setting" @click="openInvConfig">纳管配置</el-button>
+        <el-button size="small" :icon="Plus" @click="openInvAdd">+纳管</el-button>
       </div>
     </div>
 
@@ -154,7 +154,7 @@
         <div class="tab-toolbar">
           <el-button size="small" :icon="Refresh" @click="loadInventory">刷新</el-button>
         </div>
-        <el-table v-loading="invLoading" :data="inventoryViews" :empty-text="clusterOffline ? '集群离线（' + (cluster?.err ?? 'Worker 不可达') + '），无法读取服务' : '该集群暂无纳管对象'">
+        <el-table v-loading="invLoading" :data="inventoryViews" :empty-text="clusterOffline ? '集群离线（' + (cluster?.err ?? 'Worker 不可达') + '），无法读取服务' : '该集群暂无纳管对象，点右上角「+纳管」接入外部对象'">
           <el-table-column label="名称" min-width="130">
             <template #default="{ row }">
               <el-link v-if="row.source === 'swarm'" type="primary" @click="openDetailByName(row.name)">{{ row.name }}</el-link>
@@ -194,8 +194,11 @@
                 <el-button link type="warning" @click="swarmAction(row.name, restart)">重启</el-button>
                 <el-button link type="danger" @click="swarmAction(row.name, remove)">移除</el-button>
               </template>
-              <template v-else-if="row.source === 'inventory' && row.type === 'standalone-container'">
-                <el-button link type="primary" @click="restartStandalone(row)">重启</el-button>
+              <template v-else-if="row.source === 'inventory'">
+                <el-button link type="primary" @click="openInvDetail(row)">详情</el-button>
+                <el-button link type="primary" @click="openInvEdit(row)">编辑</el-button>
+                <el-button v-if="row.type === 'standalone-container'" link type="warning" @click="restartStandalone(row)">重启</el-button>
+                <el-button link type="danger" @click="removeInvItem(row)">删除</el-button>
               </template>
             </template>
           </el-table-column>
@@ -207,7 +210,7 @@
         <div class="tab-toolbar">
           <el-button size="small" :icon="Refresh" @click="loadInventory">刷新</el-button>
         </div>
-        <el-table v-loading="invLoading" :data="middlewareViews" empty-text="暂无中间件（swarm 部署加 labels.category=middleware，或在纳管配置里声明 standalone/host-service）">
+        <el-table v-loading="invLoading" :data="middlewareViews" empty-text="暂无中间件（swarm 部署加 labels.category=middleware，或点「+纳管」声明 category=middleware 的外部对象）">
           <el-table-column label="名称" prop="name" min-width="120" />
           <el-table-column label="来源" width="80">
             <template #default="{ row }">
@@ -222,9 +225,17 @@
           </el-table-column>
           <el-table-column label="节点" prop="node" width="140" />
           <el-table-column label="端口" prop="ports" min-width="120" show-overflow-tooltip />
-          <el-table-column label="操作" width="80">
+          <el-table-column label="操作" width="210">
             <template #default="{ row }">
-              <el-button v-if="row.source === 'swarm'" link type="primary" @click="openDetailByName(row.name)">详情</el-button>
+              <template v-if="row.source === 'swarm'">
+                <el-button link type="primary" @click="openDetailByName(row.name)">详情</el-button>
+              </template>
+              <template v-else-if="row.source === 'inventory'">
+                <el-button link type="primary" @click="openInvDetail(row)">详情</el-button>
+                <el-button link type="primary" @click="openInvEdit(row)">编辑</el-button>
+                <el-button v-if="row.type === 'standalone-container'" link type="warning" @click="restartStandalone(row)">重启</el-button>
+                <el-button link type="danger" @click="removeInvItem(row)">删除</el-button>
+              </template>
             </template>
           </el-table-column>
         </el-table>
@@ -521,33 +532,67 @@
       </template>
     </el-drawer>
 
-    <!-- 纳管配置编辑器（表单 + YAML 双模式） -->
-    <el-dialog v-model="invConfigVisible" title="纳管配置" width="720px" :close-on-click-modal="false">
+    <!-- 单条纳管对象 新增/编辑（表单） -->
+    <el-dialog
+      v-model="invItemVisible"
+      :title="invItemMode === 'add' ? '+纳管：接入外部对象' : `编辑纳管对象 ${invItemOriginal ?? ''}`"
+      width="640px"
+      :close-on-click-modal="false"
+    >
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
-        声明集群纳管的外部对象（非 OpsGaurd 部署的 swarm service）：standalone-container
-        （docker run 容器，容器名 + 所在节点 hostname + 端口）或 host-service
-        （宿主机服务，IP 地址 + 端口探活）。保存会整体替换当前清单。
+        声明集群纳管的外部对象（非 OpsGaurd 部署）：standalone 容器（docker run，容器名 + 所在节点）
+        或宿主机服务（IP + 端口探活）。保存后立即出现在服务列表并纳入监控。
       </el-alert>
-      <!-- key 每次打开递增 → 组件重建，表单始终反映当前已保存的清单（杜绝草稿残留/引用不变不刷新的问题） -->
-      <InventoryEditor ref="invEditorRef" :key="invEditorKey" :config="invConfigSnapshot" @save="saveInvConfig" />
+      <!-- key 每次打开递增 → 组件重建，表单始终反映目标条目快照 -->
+      <InventoryItemEditor
+        ref="invItemRef"
+        :key="invItemKey"
+        :mode="invItemMode"
+        :item="invItemSnapshot"
+        :existing-names="inventoryItemNames"
+        :node-options="nodeOptions"
+        @save="saveInvItem"
+      />
       <template #footer>
-        <el-button @click="invConfigVisible = false">取消</el-button>
-        <el-button type="primary" :loading="invSaving" @click="submitInvConfig">保存</el-button>
+        <el-button @click="invItemVisible = false">取消</el-button>
+        <el-button type="primary" :loading="invItemSaving" @click="submitInvItem">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 纳管对象详情抽屉：清单声明 + 实时状态 -->
+    <el-drawer v-model="invDetailVisible" :title="`${invDetailRow?.name ?? ''} · 纳管对象详情`" size="480px">
+      <template v-if="invDetailRow">
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="类型">{{ invDetailRow.type }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag size="small" :type="statusTagType(invDetailRow.status)">{{ invDetailRow.status }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="分类">{{ invDetailRow.category || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="引用（ref）">{{ invDetailRow.ref || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="所在节点">{{ invDetailRow.node || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="端口">{{ invDetailRow.ports || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="描述">{{ invDetailRow.desc || '—' }}</el-descriptions-item>
+        </el-descriptions>
+        <div class="og-inv-detail-sec">监控配置</div>
+        <template v-if="invDetailRow.monitoring">
+          <pre class="og-inv-yaml mono">{{ yamlText(invDetailRow.monitoring) }}</pre>
+        </template>
+        <div v-else class="og-dim">未配置（在列表点「编辑」可添加端口/HTTP 探测）</div>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Back, Download, MagicStick, Plus, Refresh, Setting } from '@element-plus/icons-vue'
+import { Back, Download, MagicStick, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import InventoryEditor from '@/components/InventoryEditor.vue'
+import InventoryItemEditor from '@/components/InventoryItemDialog.vue'
 import { alertRuleApi, clusterApi, eventApi, inventoryApi, nodeApi, workloadApi } from '@/api'
 import { downloadTextFile } from '@/utils/download'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
-import type { AlertRule, AddClusterPayload, ClusterNode, ClusterSummary, ContainerInfo, EventItem, InventoryConfig, InventoryView, LogLine, Monitoring, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
+import type { AlertRule, AddClusterPayload, ClusterNode, ClusterSummary, ContainerInfo, EventItem, InventoryItem, InventoryView, LogLine, Monitoring, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
 
 const route = useRoute()
 const clusterName = computed(() => route.params.name as string)
@@ -624,13 +669,23 @@ const inventoryViews = ref<InventoryView[]>([])
 // 中间件 tab = 纳管清单里 category=middleware 的条目（swarm + standalone + host-service）
 const middlewareViews = computed(() => inventoryViews.value.filter((v) => v.category === 'middleware'))
 
-// 纳管配置编辑器（InventoryEditor 组件，表单 + YAML 双模式）
-const invConfigVisible = ref(false)
-const invConfigSnapshot = ref<InventoryConfig | null>(null)
-const invEditorRef = ref<InstanceType<typeof InventoryEditor>>()
-const invSaving = ref(false)
-/** 每次打开对话框递增，强制重建编辑器组件（表单始终反映当前已保存清单） */
-const invEditorKey = ref(0)
+// 纳管对象单条管理（新增/编辑对话框 + 详情抽屉）
+const invItemVisible = ref(false)
+const invItemMode = ref<'add' | 'edit'>('add')
+/** 编辑时的原始条目名（定位 PUT 目标；add 时为 null） */
+const invItemOriginal = ref<string | null>(null)
+const invItemSnapshot = ref<InventoryItem | null>(null)
+const invItemRef = ref<InstanceType<typeof InventoryItemEditor>>()
+const invItemSaving = ref(false)
+/** 每次打开对话框递增，强制重建编辑器组件（表单始终反映目标条目快照） */
+const invItemKey = ref(0)
+const invDetailVisible = ref(false)
+const invDetailRow = ref<InventoryView | null>(null)
+
+/** 当前清单已占用的条目名（重名校验用） */
+const inventoryItemNames = computed(() => inventoryViews.value.filter((v) => v.source === 'inventory').map((v) => v.name))
+/** 节点 hostname 下拉选项 */
+const nodeOptions = computed(() => nodes.value.map((n) => n.hostname).filter(Boolean))
 
 // 事件
 const events = ref<EventItem[]>([])
@@ -990,32 +1045,96 @@ function statusTagType(status: string) {
   return 'info'
 }
 
-// 纳管配置编辑器：快照当前清单交给组件（组件内表单/YAML 编辑与校验）；
-// key 递增强制重建，避免组件复用旧状态
-function openInvConfig() {
-  invConfigSnapshot.value = cluster.value?.inventory ?? null
-  invEditorKey.value++
-  invConfigVisible.value = true
+// ---- 纳管对象单条管理 ----
+/** +纳管：新增一条声明 */
+function openInvAdd() {
+  invItemMode.value = 'add'
+  invItemOriginal.value = null
+  invItemSnapshot.value = null
+  invItemKey.value++
+  invItemVisible.value = true
 }
 
-// 组件校验通过后回调（含空清单二次确认）
-async function saveInvConfig(config: InventoryConfig) {
-  invSaving.value = true
+/** 列表行「编辑」：优先取集群记录里的原始声明（视图行的 ports 是展示串，
+ *  可能被容器实况/探活端口合并过，不能作为编辑底稿）；找不到时退回行数据 */
+function openInvEdit(row: InventoryView) {
+  const declared = cluster.value?.inventory?.items.find((it) => it.name === row.name)
+  const snapshot: InventoryItem = declared
+    ? { ...declared, monitoring: declared.monitoring ? { ...declared.monitoring } : undefined }
+    : {
+        name: row.name,
+        type: row.type === 'host-service' ? 'host-service' : 'standalone-container',
+        ref: row.ref ?? '',
+        node: row.node ?? '',
+        category: row.category ?? '',
+        desc: row.desc ?? '',
+      }
+  invItemMode.value = 'edit'
+  invItemOriginal.value = row.name
+  invItemSnapshot.value = snapshot
+  invItemKey.value++
+  invItemVisible.value = true
+}
+
+/** 列表行「详情」：展示声明与实时状态 */
+function openInvDetail(row: InventoryView) {
+  invDetailRow.value = row
+  invDetailVisible.value = true
+}
+
+/** 对话框「保存」→ 触发组件内部校验（通过后 emit save） */
+function submitInvItem() {
+  invItemRef.value?.doSave()
+}
+
+/** 组件校验通过后提交：add → POST；edit → PUT（按原始名定位，支持改名） */
+async function saveInvItem(item: InventoryItem) {
+  invItemSaving.value = true
   try {
-    await inventoryApi.update(clusterName.value, config)
-    ElMessage.success('纳管清单已保存')
-    invConfigVisible.value = false
-    await Promise.all([loadInventory(), fetchCluster()])
+    if (invItemMode.value === 'edit' && invItemOriginal.value) {
+      await inventoryApi.updateItem(clusterName.value, invItemOriginal.value, item)
+      ElMessage.success('纳管对象已更新')
+    } else {
+      await inventoryApi.addItem(clusterName.value, item)
+      ElMessage.success('纳管对象已接入')
+    }
+    invItemVisible.value = false
+    await refreshAfterInvChange()
   } catch {
     // 校验/保存错误已由组件与 http.ts 提示，不再重复弹
   } finally {
-    invSaving.value = false
+    invItemSaving.value = false
   }
 }
 
-// 对话框「保存」→ 触发组件内部校验（通过后 emit save）
-function submitInvConfig() {
-  invEditorRef.value?.doSave()
+/** 列表行「删除」：确认后删声明；关联告警规则由服务端同步清理 */
+async function removeInvItem(row: InventoryView) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除纳管对象「${row.name}」？其监控配置（告警规则）将一并移除，此操作不可恢复。`,
+      '删除纳管对象',
+      { type: 'error' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await inventoryApi.deleteItem(clusterName.value, row.name)
+    ElMessage.success('已删除')
+    await refreshAfterInvChange()
+  } catch {
+    // 错误已由 http.ts 提示
+  }
+}
+
+/** 单条变更后的统一刷新：清单视图、集群记录（含 inventory）、告警规则 */
+async function refreshAfterInvChange() {
+  await Promise.all([loadInventory(), fetchCluster(), loadRules()])
+}
+
+/** monitoring 对象转 YAML 文本（详情抽屉展示用） */
+function yamlText(m: Monitoring): string {
+  return yamlDump(m, { indent: 2, lineWidth: 120 }).trimEnd()
 }
 
 // ---- 集群 ----
@@ -1499,6 +1618,21 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 纳管对象详情抽屉 */
+.og-inv-detail-sec {
+  margin: 16px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.og-inv-yaml {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--og-bg-surface, var(--el-fill-color-light));
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow: auto;
+}
 .page-head {
   display: flex;
   align-items: center;
