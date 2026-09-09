@@ -163,7 +163,7 @@ func New(h *api.Handlers) *gin.Engine {
 		v1.PUT("/secrets/:name", h.PutSecret)
 		v1.DELETE("/secrets/:name", h.DeleteSecret)
 
-		// 内嵌镜像仓库（管理 API：构建提交/轮询、镜像列表、删除 tag）
+		// 内嵌镜像仓库（管理 API：构建提交/轮询、镜像列表、删除 tag/仓库）
 		registry := v1.Group("/registry")
 		{
 			registry.GET("/info", h.RegistryInfo)
@@ -171,7 +171,7 @@ func New(h *api.Handlers) *gin.Engine {
 			registry.GET("/builds", h.ListRegistryBuilds)
 			registry.GET("/builds/:id", h.GetRegistryBuild)
 			registry.GET("/images", h.ListRegistryImages)
-			registry.DELETE("/images/*ref", h.DeleteRegistryTag)
+			registry.DELETE("/images/*ref", h.DeleteRegistryImage)
 		}
 
 		// 智能巡检（YAML 流程 + 内置调度 + AI 报告）

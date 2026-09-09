@@ -259,6 +259,7 @@ export const registryApi = {
   images: () => get<{ items: RegistryRepo[] }>('/v1/registry/images'),
   deleteTag: (name: string, tag: string) =>
     del<{ deleted: string }>(`/v1/registry/images/${name}/tags/${tag}`),
+  deleteRepo: (name: string) => del<{ deleted: string }>(`/v1/registry/images/${name}`),
   builds: () => get<{ items: BuildTask[] }>('/v1/registry/builds'),
   build: (id: string) => get<BuildTask>(`/v1/registry/builds/${id}`),
   // 上传构建包（multipart，大文件放宽超时到 10 分钟）

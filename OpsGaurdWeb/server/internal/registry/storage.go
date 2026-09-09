@@ -375,6 +375,19 @@ func (s *Store) DeleteTag(name, tag string) bool {
 	return true
 }
 
+// DeleteRepo 删除整个仓库（全部 tag 与 manifest revision；blob 由 GC 清理）。
+func (s *Store) DeleteRepo(name string) bool {
+	if !validName(name) {
+		return false
+	}
+	dir := s.repoDir(name)
+	if _, err := os.Stat(dir); err != nil {
+		return false
+	}
+	os.RemoveAll(dir)
+	return true
+}
+
 // ---- catalog / tags ----
 
 // TagInfo 一个 tag 的视图。

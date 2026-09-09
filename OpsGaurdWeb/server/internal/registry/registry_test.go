@@ -124,6 +124,49 @@ func TestManifestLifecycle(t *testing.T) {
 	}
 }
 
+func TestDeleteRepo(t *testing.T) {
+	st := tempStore(t)
+	cfgDigest := sha256Digest([]byte("{}"))
+	_ = st.putBlob(cfgDigest, []byte("{}"))
+	mt := "application/vnd.docker.distribution.manifest.v2+json"
+	put := func(name, tag string, layer []byte) {
+		ld := sha256Digest(layer)
+		_ = st.putBlob(ld, layer)
+		m := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"%s","config":{"digest":"%s"},"layers":[{"digest":"%s"}]}`, mt, cfgDigest, ld)
+		if _, err := st.PutManifest(name, tag, mt, []byte(m)); err != nil {
+			t.Fatalf("put %s:%s: %v", name, tag, err)
+		}
+	}
+	put("ops/myapp", "v1", []byte("layer-a"))
+	put("other", "v1", []byte("layer-b"))
+
+	if !st.DeleteRepo("ops/myapp") {
+		t.Fatal("delete repo should succeed")
+	}
+	if st.DeleteRepo("ops/myapp") {
+		t.Fatal("re-delete should report not found")
+	}
+	if st.DeleteRepo("../evil") {
+		t.Fatal("invalid name should be rejected")
+	}
+	if _, err := st.Tags("ops/myapp"); err != ErrNameUnknown {
+		t.Fatalf("tags after delete: %v", err)
+	}
+	if cats := st.Catalog(); len(cats) != 1 || cats[0] != "other" {
+		t.Fatalf("catalog: %v", cats)
+	}
+	// ops/myapp 独占的 layer-a 被清理;共享 config 与 other 的 layer-b 保留
+	if n := st.SweepBlobs(); n != 1 {
+		t.Fatalf("swept %d blobs, want 1", n)
+	}
+	if st.HasBlob(sha256Digest([]byte("layer-a"))) {
+		t.Fatal("orphan layer should be swept")
+	}
+	if !st.HasBlob(cfgDigest) || !st.HasBlob(sha256Digest([]byte("layer-b"))) {
+		t.Fatal("blobs still referenced by other repo should remain")
+	}
+}
+
 func TestRetention(t *testing.T) {
 	st := tempStore(t)
 	cfgDigest := sha256Digest([]byte("{}"))

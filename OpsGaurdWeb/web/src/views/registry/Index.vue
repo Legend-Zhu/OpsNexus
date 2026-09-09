@@ -136,7 +136,7 @@ docker push {{ registryAddr }}/myapp:v1</pre>
         <el-table :data="images" size="small" v-loading="imagesLoading" empty-text="暂无镜像">
           <el-table-column type="expand">
             <template #default="{ row }">
-              <el-table :data="row.tags" size="small" class="tag-table">
+              <el-table :data="row.tags || []" size="small" class="tag-table">
                 <el-table-column label="Tag" prop="tag" width="140" />
                 <el-table-column label="大小" width="110">
                   <template #default="{ row: t }">{{ fmtSize(t.size) }}</template>
@@ -160,7 +160,12 @@ docker push {{ registryAddr }}/myapp:v1</pre>
             <template #default="{ row }"><span class="mono">{{ row.name }}</span></template>
           </el-table-column>
           <el-table-column label="Tag 数" width="90" align="center">
-            <template #default="{ row }">{{ row.tags.length }}</template>
+            <template #default="{ row }">{{ row.tags?.length ?? 0 }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="110" align="center">
+            <template #default="{ row }">
+              <el-button link type="danger" @click="removeRepo(row)">删除仓库</el-button>
+            </template>
           </el-table-column>
         </el-table>
       </el-card>
@@ -338,8 +343,27 @@ async function copyPull(name: string, tag: string) {
 }
 
 async function removeTag(name: string, tag: string) {
-  await ElMessageBox.confirm(`删除镜像 ${name}:${tag}？（manifest 本体由 GC 清理）`, '删除镜像', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm(`删除镜像 ${name}:${tag}？（manifest 本体由 GC 清理）`, '删除镜像', { type: 'warning' })
+  } catch {
+    return // 用户取消
+  }
   await registryApi.deleteTag(name, tag)
+  ElMessage.success('已删除')
+  await loadImages()
+}
+
+async function removeRepo(row: RegistryRepo) {
+  try {
+    await ElMessageBox.confirm(
+      `删除仓库「${row.name}」及其全部 ${row.tags?.length ?? 0} 个 tag？此操作不可恢复（blob 由 GC 清理）。`,
+      '删除仓库',
+      { type: 'error' },
+    )
+  } catch {
+    return // 用户取消
+  }
+  await registryApi.deleteRepo(row.name)
   ElMessage.success('已删除')
   await loadImages()
 }

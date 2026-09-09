@@ -1,5 +1,5 @@
 // 内嵌镜像仓库的管理 API（页面用，会话认证）：构建提交/轮询、镜像列表、
-// 删除 tag、服务信息。/v2 协议端点由 registry.Service.V2 直接挂载（basic auth）。
+// 删除 tag/仓库、服务信息。/v2 协议端点由 registry.Service.V2 直接挂载（basic auth）。
 package api
 
 import (
@@ -132,6 +132,10 @@ func (h *Handlers) ListRegistryImages(c *gin.Context) {
 		if err != nil {
 			continue
 		}
+		// nil 切片会序列化成 null,前端按数组处理会报错,统一回退空数组
+		if tags == nil {
+			tags = []registry.TagInfo{}
+		}
 		items = append(items, registry.RepoView{Name: repo, Tags: tags})
 	}
 	if items == nil {
@@ -140,24 +144,30 @@ func (h *Handlers) ListRegistryImages(c *gin.Context) {
 	ok(c, http.StatusOK, gin.H{"items": items})
 }
 
-// DeleteRegistryTag godoc: DELETE /api/v1/registry/images/*ref
-// ref 形如 /ops/myapp/tags/v1(删除 tag;manifest 本体由 GC 清理)。
-func (h *Handlers) DeleteRegistryTag(c *gin.Context) {
+// DeleteRegistryImage godoc: DELETE /api/v1/registry/images/*ref
+// ref 形如 /<name>/tags/<tag>(删除单个 tag)或 /<name>(删除整个仓库,
+// 含全部 tag 与 manifest;blob 均由 GC 清理)。
+func (h *Handlers) DeleteRegistryImage(c *gin.Context) {
 	if h.registrySvc == nil {
 		fail(c, http.StatusServiceUnavailable, "registry is not enabled in config")
 		return
 	}
 	ref := strings.TrimPrefix(c.Param("ref"), "/")
-	idx := strings.LastIndex(ref, "/tags/")
-	if idx <= 0 {
-		fail(c, http.StatusBadRequest, "ref 应为 <name>/tags/<tag>")
+	if idx := strings.LastIndex(ref, "/tags/"); idx > 0 {
+		name, tag := ref[:idx], filepath.Base(ref[idx+6:])
+		if !h.registrySvc.Store().DeleteTag(name, tag) {
+			fail(c, http.StatusNotFound, "tag not found")
+			return
+		}
+		h.registrySvc.Store().SweepBlobs()
+		ok(c, http.StatusOK, gin.H{"deleted": name + ":" + tag})
 		return
 	}
-	name, tag := ref[:idx], filepath.Base(ref[idx+6:])
-	if !h.registrySvc.Store().DeleteTag(name, tag) {
-		fail(c, http.StatusNotFound, "tag not found")
+	name := strings.TrimSuffix(ref, "/")
+	if name == "" || !h.registrySvc.Store().DeleteRepo(name) {
+		fail(c, http.StatusNotFound, "repo not found")
 		return
 	}
 	h.registrySvc.Store().SweepBlobs()
-	ok(c, http.StatusOK, gin.H{"deleted": name + ":" + tag})
+	ok(c, http.StatusOK, gin.H{"deleted": name})
 }
