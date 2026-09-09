@@ -94,8 +94,11 @@
               type="textarea"
               :rows="5"
               class="mono"
-              :placeholder="MON_PLACEHOLDER"
+              placeholder="monitoring YAML（enabled 须为 true 才会执行）；可点「插入示例」填入示例后修改"
             />
+            <div class="cfg-actions">
+              <el-button link type="primary" size="small" :icon="MagicStick" @click="fillMonSample(it)">插入示例</el-button>
+            </div>
             <div class="inv-tip">
               monitoring YAML（enabled 须为 true 才会执行）；纳管对象支持 portChecks / httpChecks / 容器存活，
               资源阈值与日志检查仅 swarm 服务由 Worker 执行
@@ -114,7 +117,7 @@
         type="textarea"
         :rows="14"
         class="mono"
-        placeholder="items:&#10;  - name: r-nacos&#10;    type: standalone-container&#10;    ref: r-nacos&#10;    node: node-01&#10;    ports: [8848, 9848, 9849]&#10;    category: middleware&#10;    monitoring:&#10;      enabled: true&#10;      portChecks:&#10;        - { port: &quot;8848&quot;, interval: 30s }&#10;      httpChecks:&#10;        - { url: &quot;http://10.0.0.1:8848/nacos/v1/console/health/readiness&quot;, expectedStatus: [200], interval: 60s }&#10;  - name: grafana&#10;    type: host-service&#10;    ref: 10.0.0.10&#10;    ports: [3000]&#10;    category: middleware&#10;    monitoring:&#10;      enabled: true&#10;      portChecks:&#10;        - { port: &quot;3000&quot;, interval: 30s }"
+        placeholder="items 数组 YAML——切换到 YAML 时会自动带出当前清单，可直接修改后保存"
         @blur="syncYamlToForm"
       />
       <div class="inv-tip">YAML 结构：items 数组，每项含 name / type / ref / node（standalone 必填）/ ports / category / desc / monitoring（可选，schema 同告警规则）；切换回表单时会解析并校验</div>
@@ -133,12 +136,18 @@ import type { InventoryConfig, InventoryItem, Monitoring } from '@/types'
  * 保存时解析回 monitoring 字段，提交前剥离） */
 type FormItem = InventoryItem & { __monDraft?: string }
 
-/** 监控草稿 placeholder（与告警规则同 schema） */
-const MON_PLACEHOLDER = `enabled: true
-portChecks:
+/** 监控草稿示例（「插入示例」填入，可编辑/复制；schema 同告警规则。
+ *  不默认预填——插入即启用监控，需用户主动触发） */
+const MON_SAMPLE = `enabled: true                     # 须为 true 才会执行探测
+portChecks:                       # TCP 端口探测，连续失败发 port_down
   - { port: "8848", interval: 30s }
-httpChecks:
+httpChecks:                       # HTTP 健康检查，异常发 http_unhealthy
   - { url: "http://10.0.0.1:8848/nacos/v1/console/health/readiness", expectedStatus: [200], interval: 60s }`
+
+/** 填入监控示例（覆盖当前草稿；不保存可通过清空草稿丢弃） */
+function fillMonSample(it: FormItem) {
+  it.__monDraft = MON_SAMPLE
+}
 
 const props = defineProps<{
   /** 当前清单（打开编辑器时的快照；null = 空清单） */
@@ -467,6 +476,12 @@ defineExpose({ doSave })
 }
 .inv-mon {
   margin-bottom: 12px;
+}
+.cfg-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 6px;
 }
 .inv-mon-title {
   font-size: 13px;

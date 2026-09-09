@@ -348,25 +348,11 @@
           </el-select>
         </el-form-item>
         <el-form-item label="配置" required>
-          <el-input
-            v-model="deployConfig"
-            type="textarea"
-            :rows="14"
-            class="mono"
-            placeholder="Worker 服务配置（YAML/JSON），示例：
-service:
-  name: web
-  image: nginx:alpine
-  replicas: 2
-  labels:
-    category: service
-  ports:
-    - { target: 80, published: 8080 }
-monitoring:
-  enabled: true
-  portChecks:
-    - { port: &quot;8080&quot; }"
-          />
+          <el-input v-model="deployConfig" type="textarea" :rows="14" class="mono" placeholder="Worker 服务配置（YAML/JSON）；部署时已预填示例模板，可直接修改" />
+          <div class="cfg-actions">
+            <el-button link type="primary" size="small" :icon="Download" @click="downloadServiceTemplate">下载配置模板</el-button>
+            <span class="og-dim cfg-hint">含 service / monitoring 全字段注释</span>
+          </div>
           <div v-if="deployMode === 'edit' && !deployHasSnapshot" class="edit-no-snapshot">
             无历史配置快照（服务可能由外部创建）——保存将以当前输入整体替换服务配置，请谨慎填写{{
               deployMonitoringRestored ? '；监控配置已从告警规则自动恢复，请确认后保存' : ''
@@ -397,7 +383,7 @@ monitoring:
                 <li><code>logChecks</code>：<code>{ pattern(Go 正则), level, ignore: [...], action: alert|restart }</code>——日志匹配告警或自动重启</li>
                 <li><code>resourceThresholds</code>：<code>{ metric: cpu|memory, threshold: 百分比, action: alert|restart }</code></li>
               </ul>
-              <div class="muted">完整契约见仓库 docs/Worker-设计方案.md §4.2；部署为异步操作，提交后自动轮询收敛结果。</div>
+              <div class="muted">部署为异步操作，提交后系统自动跟踪进度，完成或异常时会通知结果。</div>
             </el-collapse-item>
           </el-collapse>
         </el-form-item>
@@ -449,23 +435,23 @@ monitoring:
           </el-form-item>
         </template>
         <el-form-item v-else label="monitoring" required>
-          <el-input
-            v-model="ruleYaml"
-            type="textarea"
-            :rows="12"
-            class="mono"
-            placeholder="完整 monitoring 块（YAML），示例：
-enabled: true
-portChecks:
-  - { port: &quot;8848&quot;, interval: 30s }
-httpChecks:
-  - { url: &quot;http://10.0.0.1:8848/nacos/v1/console/health/readiness&quot;, expectedStatus: [200], interval: 60s }
-logChecks:
-  - { pattern: &quot;ERROR|Exception&quot;, level: error, action: alert }
-resourceThresholds:
-  - { metric: memory, threshold: 85, action: alert }"
-          />
-          <div class="og-dim rule-hint">字段契约见部署对话框「配置字段说明」；logChecks 仅 swarm 服务由 Worker 执行</div>
+          <el-input v-model="ruleYaml" type="textarea" :rows="12" class="mono" placeholder="monitoring 块（YAML）；可点「插入示例」填入完整示例后修改" />
+          <div class="cfg-actions">
+            <el-button link type="primary" size="small" :icon="MagicStick" @click="insertRuleSample">插入示例</el-button>
+            <el-button link type="primary" size="small" :icon="Download" @click="downloadMonitoringTemplate">下载配置模板</el-button>
+          </div>
+          <el-collapse class="cfg-doc">
+            <el-collapse-item title="monitoring 字段说明" name="doc">
+              <ul>
+                <li><code>enabled</code>：须为 <code>true</code> 才生效</li>
+                <li><code>portChecks</code>：<code>{ port, protocol, interval, timeout, retries }</code>——TCP 探测，连续失败发 port_down</li>
+                <li><code>httpChecks</code>：<code>{ url, method, headers, expectedStatus, expectedBody(正则), interval, timeout }</code>——发 http_unhealthy；url 用 localhost 会自动重写为任务节点 IP</li>
+                <li><code>logChecks</code>：<code>{ pattern(Go 正则), level, ignore: [...], action: alert|restart }</code>——日志匹配告警或自动重启（仅 swarm 服务由 Worker 执行）</li>
+                <li><code>resourceThresholds</code>：<code>{ metric: cpu|memory, threshold: 百分比, action: alert|restart }</code>（仅 swarm 服务由 Worker 执行）</li>
+              </ul>
+            </el-collapse-item>
+          </el-collapse>
+          <div class="og-dim rule-hint">logChecks / resourceThresholds 纳管对象暂不执行</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -555,10 +541,11 @@ resourceThresholds:
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Back, Plus, Refresh, Setting } from '@element-plus/icons-vue'
+import { Back, Download, MagicStick, Plus, Refresh, Setting } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import InventoryEditor from '@/components/InventoryEditor.vue'
 import { alertRuleApi, clusterApi, eventApi, inventoryApi, nodeApi, workloadApi } from '@/api'
+import { downloadTextFile } from '@/utils/download'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import type { AlertRule, AddClusterPayload, ClusterNode, ClusterSummary, ContainerInfo, EventItem, InventoryConfig, InventoryView, LogLine, Monitoring, Operation, ProcessInfo, Workload, WorkloadDetail } from '@/types'
 
@@ -715,6 +702,63 @@ function openRule(row?: AlertRule) {
   ruleYaml.value = yamlDump(row?.monitoring ?? { enabled: true })
   ruleMode.value = 'form'
   ruleVisible.value = true
+}
+
+// monitoring 示例（插入用，可编辑/复制；直接预填会误建对示例 URL 的探测，故按钮触发）
+const RULE_SAMPLE = `enabled: true                     # 须为 true 才生效
+portChecks:                       # TCP 探测已发布端口，连续失败发 port_down
+  - { port: "8080", interval: 30s, timeout: 3s, retries: 2 }
+httpChecks:                       # 发 http_unhealthy；url 用 localhost 自动重写为任务节点 IP
+  - { url: "http://localhost:8080/health", expectedStatus: [200], interval: 60s }
+logChecks:                        # 日志匹配告警或自动重启（仅 swarm 服务由 Worker 执行）
+  - { pattern: "ERROR|Exception", level: error, action: alert }
+resourceThresholds:               # 容器资源阈值（仅 swarm 服务由 Worker 执行）
+  - { metric: cpu, threshold: 80, action: alert }
+  - { metric: memory, threshold: 85, action: alert }`
+
+function insertRuleSample() {
+  ruleYaml.value = RULE_SAMPLE
+}
+
+function downloadMonitoringTemplate() {
+  downloadTextFile('monitoring-template.yaml', RULE_SAMPLE + '\n')
+}
+
+// 部署/编辑服务配置模板（含全字段注释，供下载后离线编辑再粘贴）
+const SERVICE_TEMPLATE = `# Worker 服务配置（YAML/JSON）：service 必填 name/image；monitoring 可选
+service:
+  name: web                      # 服务名（唯一标识）
+  image: nginx:alpine            # 镜像
+  replicas: 2                    # 副本数（mode: global 时勿配）
+  labels:
+    category: service            # service=服务 / middleware=中间件（决定归入哪个页签）
+  ports:
+    - { target: 80, published: 8080 }   # 容器端口 → 主机端口（ingress 模式任意节点可访问）
+  # mode: replicated             # replicated（默认）/ global（每节点一个）
+  # env / command / args / workdir / user：容器运行参数
+  # mounts: [{ type: volume|bind|tmpfs, source, target, readonly }]
+  # resources: { limits: { cpu: "1.0", memory: "512Mi" }, reservations: {...} }
+  # registryAuth: { secretRef | inline }   私有仓库凭据
+  # healthcheck: { test: ["CMD-SHELL","curl -f http://localhost/"], interval, timeout, retries, startPeriod }
+  # placement: { constraints: ["node.role==worker"], preferences: [{spread}] }
+  # update / rollback: { parallelism, delay, failureAction: pause|continue|rollback, ... }
+  # restart: { condition: any|on-failure|none, delay, maxAttempts, window }
+  # networks / secrets / configs / labels / logDriver / imagePullPolicy
+monitoring:                      # 可选：监控（异常进告警中心并按级别策略通知）
+  enabled: true
+  portChecks:                    # TCP 探测已发布端口，连续失败发 port_down
+    - { port: "8080", interval: 10s, timeout: 3s, retries: 2 }
+  httpChecks:                    # 发 http_unhealthy；url 用 localhost 自动重写为任务节点 IP
+    - { url: "http://localhost:8080/health", expectedStatus: [200], interval: 15s, timeout: 5s }
+  logChecks:                     # 日志匹配告警或自动重启
+    - { pattern: "ERROR|Exception|panic", level: error, action: alert }
+  resourceThresholds:            # 资源超限告警或自动重启
+    - { metric: cpu, threshold: 80, action: alert }
+    - { metric: memory, threshold: 85, action: alert }
+`
+
+function downloadServiceTemplate() {
+  downloadTextFile('service-template.yaml', SERVICE_TEMPLATE)
 }
 
 function buildRuleMonitoring(): Monitoring {
@@ -1637,8 +1681,18 @@ onBeforeUnmount(() => {
   color: var(--og-text-dim);
   margin-right: 8px;
 }
+.cfg-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.cfg-hint {
+  font-size: 12px;
+}
 .cfg-doc {
   width: 100%;
+  margin-top: 4px;
 }
 .cfg-doc h5 {
   margin: 8px 0 4px;

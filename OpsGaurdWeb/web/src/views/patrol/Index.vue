@@ -69,39 +69,30 @@
         </el-form-item>
         <el-form-item label="流程 YAML" prop="yaml">
           <el-input v-model="form.yaml" type="textarea" :rows="14" class="mono"
-            placeholder="name: nightly
-checks:
-  - type: resource      # 服务容器资源阈值
-    cluster: dev
-    service: web
-    cpu_threshold: 85
-    mem_threshold: 90
-  - type: health        # 服务副本健康
-    cluster: dev
-    service: api
-    min_replicas: 2
-  - type: port          # 从节点探测任意 host:port（node 空=全部 ready 节点）
-    cluster: dev
-    host: 10.0.0.11     # 探宿主机中间件用节点 IP，勿用 127.0.0.1
-    port: 3306
-  - type: http          # 从节点探测任意 URL（expected_status 空=2xx）
-    cluster: dev
-    url: http://10.0.0.11:8080/healthz
-  - type: process       # 宿主机进程（filter 匹配名称/命令行，少于 min_count=1 即异常）
-    cluster: dev
-    filter: java
-  - type: flow          # 多步 HTTP 事务（如 登录→验证会话；extract 提取变量供后续 {{var}} 引用）
-    cluster: dev
-    name: 登录可用性
-    vars: { user: bot, pass: '${secret:patrol-login}' }   # 密钥在 系统设置→密钥 维护
-    steps:
-      - { name: login, method: POST, url: 'http://10.0.0.11/api/login', body: '{&quot;username&quot;:&quot;{{user}}&quot;,&quot;password&quot;:&quot;{{pass}}&quot;}', extract: { token: '$.data.token' } }
-      - { name: verify, url: 'http://10.0.0.11/api/me', headers: { Authorization: 'Bearer {{token}}' } }
-# report.model 由上方「报告模型」下拉自动写入（也可手写覆盖）" />
+            placeholder="流程 YAML（新建时已预填示例模板，可直接修改）" />
           <div class="yaml-actions">
             <el-button link type="primary" size="small" :icon="Download" @click="downloadTemplate">下载完整模板</el-button>
-            <span class="muted">含全部 5 种检查类型与字段注释</span>
+            <span class="muted">含全部检查类型与字段注释</span>
           </div>
+          <el-collapse class="yaml-doc">
+            <el-collapse-item title="配置字段说明（checks / report）" name="doc">
+              <h5>checks（type 决定检查方式；cluster 必填）</h5>
+              <ul>
+                <li><code>resource</code>：服务容器资源阈值——<code>service</code> + <code>cpu_threshold</code> / <code>mem_threshold</code>（百分比）</li>
+                <li><code>health</code>：服务副本健康——<code>service</code> + <code>min_replicas</code>（最少运行副本数）</li>
+                <li><code>port</code>：TCP 端口探测——<code>host:port</code>；<code>node</code> 可选（空 = 全部 ready 节点）；探宿主机中间件用节点 IP，勿用 127.0.0.1</li>
+                <li><code>http</code>：HTTP 探测——<code>url</code>、<code>method</code>、<code>expected_status</code>（空 = 任意 2xx）、<code>expected_body</code>（正则）、<code>timeout</code>（默认 3s，上限 10s）</li>
+                <li><code>process</code>：宿主机进程发现——<code>filter</code>（名称/命令行子串，大小写不敏感）、<code>min_count</code>（每节点最少匹配数，少于即异常）</li>
+                <li><code>flow</code>：多步 HTTP 事务——<code>vars</code> 初始变量、<code>steps</code> 有序执行（失败即终止并定位步骤）；<code>extract</code> 提取变量供后续步骤 <code>&#123;&#123;var&#125;&#125;</code> 引用</li>
+              </ul>
+              <h5>其他</h5>
+              <ul>
+                <li><code>vars</code> 值支持 <code>${secret:名称}</code> 引用 系统设置→密钥（不落明文）</li>
+                <li><code>report.model</code> 由上方「报告模型」下拉自动写入（可手写覆盖）；<code>report.prompt</code> 可附加报告要求</li>
+                <li>报告投递渠道在本页「报告投递」按钮配置（每次生成 / 仅有异常 / 不发送）</li>
+              </ul>
+            </el-collapse-item>
+          </el-collapse>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -167,6 +158,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, Download, Promotion } from '@element-plus/icons-vue'
 import { ainexusApi, patrolApi } from '@/api'
+import { downloadTextFile } from '@/utils/download'
 import type { AINexusModelInfo, Patrol, PatrolReport, PatrolRun } from '@/types'
 import ReportDelivery from './ReportDelivery.vue'
 
@@ -265,13 +257,7 @@ report:
 `
 
 function downloadTemplate() {
-  const blob = new Blob([FLOW_TEMPLATE], { type: 'text/yaml;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'patrol-template.yaml'
-  a.click()
-  URL.revokeObjectURL(url)
+  downloadTextFile('patrol-template.yaml', FLOW_TEMPLATE)
 }
 
 function anomalyCount(run: PatrolRun) {
@@ -290,7 +276,8 @@ async function fetchPatrols() {
 
 function openCreate() {
   editing.value = false
-  Object.assign(form, { id: '', name: '', description: '', cron: '0 2 * * *', enabled: true, yaml: '', model: '' })
+  // 预填完整模板：示例可直接编辑/复制（不再藏placeholder），清空即可从零写
+  Object.assign(form, { id: '', name: '', description: '', cron: '0 2 * * *', enabled: true, yaml: FLOW_TEMPLATE, model: '' })
   formVisible.value = true
 }
 
@@ -473,6 +460,30 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   margin-top: 4px;
+}
+.yaml-doc {
+  width: 100%;
+  margin-top: 4px;
+}
+.yaml-doc h5 {
+  margin: 8px 0 4px;
+  font-size: 13px;
+}
+.yaml-doc ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.yaml-doc li {
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--el-text-color-regular);
+}
+.yaml-doc code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  padding: 1px 4px;
+  background: var(--el-fill-color-light);
+  border-radius: 3px;
 }
 .yaml-box {
   background: var(--og-bg-code);
